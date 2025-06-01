@@ -192,3 +192,11 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+
+# ignore temporary image files 
+images/test1.png
+images/test2.png
+images/test3.jpg
+images/test1_detected.jpg
+images/test2_detected.jpg
+images/test3_detected.jpg

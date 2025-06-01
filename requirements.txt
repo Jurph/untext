@@ -1,4 +1,4 @@
-doctr-python  # This includes all necessary dependencies for PyTorch backend
+python-doctr>=0.7.0  # This includes all necessary dependencies for PyTorch backend
 opencv-python>=4.8.0
 numpy>=1.24.0
 torch>=2.0.0
