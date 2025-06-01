@@ -28,15 +28,19 @@ setup(
     ],
     python_requires=">=3.8",
     install_requires=[
-        "python-doctr>=0.7.0",
+        "python-doctr>=0.6.0",
         "opencv-python>=4.8.0",
         "numpy>=1.24.0",
         "torch>=2.0.0",
         "torchvision>=0.15.0",
-        "Pillow>=10.0.0",
+        "Pillow>=9.5.0,<10.0",
         "scikit-image>=0.21.0",  # For image processing
         "tqdm>=4.65.0",  # For progress bars
         "matplotlib>=3.7.0",  # For visualization
+        "kornia>=0.6.0",
+        "albumentations>=1.3.0",
+        "omegaconf>=2.3.0",
+        "simple-lama-inpainting==0.1.2",
     ],
     extras_require={
         "dev": [

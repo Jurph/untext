@@ -16,6 +16,12 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional, Union, Literal
 from .dip_model import DeepImagePrior
+from typing import TYPE_CHECKING
+
+try:
+    from .lama_inpainter import LamaInpainter
+except Exception:  # pragma: no cover
+    LamaInpainter = None  # type: ignore
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -46,6 +52,9 @@ class ImagePatcher:
             known_region_weight=known_region_weight
         )
         logger.info("Initialized ImagePatcher with Deep Image Prior")
+        
+        # LaMa will be loaded lazily when first requested
+        self._lama: Optional["LamaInpainter"] = None  # type: ignore[misc]
     
     def patch_image(
         self,
@@ -56,7 +65,7 @@ class ImagePatcher:
         blend: bool = True,
         dilate_percent: float = 0.05,
         feather_radius: int = 20,
-        method: str = "dip"
+        method: str = "lama"
     ) -> np.ndarray:
         """Patch an image using its mask.
         
@@ -116,6 +125,14 @@ class ImagePatcher:
                 # blur inside mask area slightly
                 blur = cv2.GaussianBlur(result, (5,5), 0)
                 result[ys_m, xs_m] = blur[ys_m, xs_m]
+        elif method == "lama":
+            if LamaInpainter is None:
+                raise RuntimeError("LaMa dependencies not installed. See lama_inpainter.py for instructions.")
+            if self._lama is None:
+                # Reuse same device assumption as DIP
+                lama_device = 'cuda' if str(self.dip.device).startswith('cuda') else 'cpu'
+                self._lama = LamaInpainter(device=lama_device)
+            result = self._lama.inpaint(image, mask)
         else:
             # Inpaint using Deep Image Prior
             result = self.dip.inpaint(image, mask, progress_callback)
@@ -129,7 +146,21 @@ class ImagePatcher:
             dist = cv2.distanceTransform(mask_bin, cv2.DIST_L2, 5)
             alpha = np.clip(dist / float(ramp), 0.0, 1.0)
             alpha = alpha[..., None]
-            result = (result.astype(np.float32) * alpha + image.astype(np.float32) * (1 - alpha)).astype(np.uint8)
+
+            # Handle potential size mismatch (e.g. LaMa output may differ by 1–2 px after padding)
+            h = min(result.shape[0], image.shape[0], alpha.shape[0])
+            w = min(result.shape[1], image.shape[1], alpha.shape[1])
+            result_crop = result[:h, :w].astype(np.float32)
+            image_crop = image[:h, :w].astype(np.float32)
+            alpha_crop = alpha[:h, :w]
+            blended = (result_crop * alpha_crop + image_crop * (1 - alpha_crop)).astype(np.uint8)
+            # Replace the blended area back into result to preserve original size if needed
+            result[:h, :w] = blended
+        
+        # Ensure output has the same spatial size as the input image
+        if result.shape[:2] != image.shape[:2]:
+            h0, w0 = image.shape[:2]
+            result = result[:h0, :w0]
         
         # Save result if output path is provided
         if output_path:

@@ -191,7 +191,7 @@ def test_dip_inpainting():
         blend=True,
         dilate_percent=0.05,
         feather_radius=20,
-        method="edge_fill"
+        method="lama"
     )
     
     # Paste the result back into the original image

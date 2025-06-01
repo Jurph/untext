@@ -1,31 +1,77 @@
-# untext
-Finds, masks, and inpaints text-based watermarks on images using Deep Image Prior
+Remove (un)wanted text by detecting it with DocTR and in-painting the masked region with LaMa (default) or Deep-Image-Prior.
 
-## installation 
+untext = find words ➜ generate pixel mask ➜ in-paint
 
-Nothing shocking here! Copy the repository using 
+* Text detection: [DocTR](https://github.com/mindee/doctr) DB-Net (lightweight, CPU friendly)
+* In-painting back-end (pick one at run-time)
+  * **LaMa** via the `simple-lama-inpainting` wheel  ← default, fast, good quality
+  * Deep-Image-Prior (`--method dip`) for pure-PyTorch fallback
+  * Edge-fill toy (`--method edge_fill`) for instant mock-ups
 
-```git clone https://github.com/jurph/untext.git``` 
+---
 
-and then navigate to the directory where it was installed using 
+## Installation
 
-```cd untext```
+```bash
+git clone https://github.com/jurph/untext.git
+cd untext
+python -m venv venv && source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
 
-create a virtual environment and activate it, using   
+# (optional) install as editable module
+pip install -e .
+```
 
-```python -m venv venv``` 
+The requirements pull:
 
-```.\venv\Scripts\activate.ps1``` 
+* PyTorch ≥ 2.0
+* DocTR 0.6.1 (text detection)
+* simple-lama-inpainting 0.1.2 (LaMa backend)
 
-install requirements with   
+All wheels are available on PyPI—no heavy git check-outs needed.
 
-```pip install -r requirements.txt``` 
+---
 
-and you should be ready to go.  You can optionally run ```setup.py``` to install it as a module. 
+## Command-line usage
 
-## running  
+```bash
+untext -i watermarked.jpg -o clean.jpg            # uses LaMa
+untext -i img.jpg -o out.jpg --method dip         # use Deep-Image-Prior
+untext -h                                         # full options
+```
 
-```python -m untext.py -i infile.jpg -o outfile.jpg``` 
+Internally the CLI will:
+
+1. detect words with DocTR and convert each bounding box into a binary mask
+2. dilate & feather the mask
+3. in-paint with the selected backend
+
+---
+
+## Python API (simplest path)
+
+```python
+from untext.image_patcher import ImagePatcher
+
+patcher = ImagePatcher()
+result  = patcher.patch_image('photo.jpg', 'mask.png', method='lama')
+```
+
+`method` can be `"lama"`, `"dip"`, or `"edge_fill"`.
+
+---
+
+## Tests
+
+```bash
+pytest -v
+```
+
+Unit tests cover detection, mask generation, and in-painting with LaMa.
+
+---
+
+© 2025  Jurph – MIT license
 
 
 
