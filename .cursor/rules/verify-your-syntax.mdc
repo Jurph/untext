@@ -1,0 +1,99 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# API Compatibility and Verification Rules
+
+## Core Principles
+1. NEVER assume API behavior - verify it through documentation or testing
+2. NEVER guess about data structures or return types
+3. ALWAYS verify library versions and compatibility
+4. ALWAYS check actual runtime behavior before implementing
+
+## Required Steps for Library Integration
+1. **Version Verification**
+   - Check minimum required version
+   - Verify version compatibility
+   - Document version requirements
+
+2. **API Structure Verification**
+   - Run minimal test script to verify actual return types
+   - Print and inspect all intermediate data structures
+   - Document the exact format of inputs and outputs
+   - Never proceed without seeing actual runtime behavior
+
+3. **Data Structure Validation**
+   - Print shape, type, and content of all data structures
+   - Verify array dimensions and types
+   - Check for unexpected transformations
+   - Document exact format requirements
+
+4. **Error Case Handling**
+   - Test with invalid inputs
+   - Verify error messages
+   - Document all possible error conditions
+   - Implement proper error handling
+
+## Implementation Checklist
+- [ ] Run minimal test script showing actual API behavior
+- [ ] Document exact data structures and types
+- [ ] Verify all assumptions with runtime output
+- [ ] Test edge cases and error conditions
+- [ ] Document version requirements
+- [ ] Implement proper error handling
+- [ ] Add type hints matching actual types
+- [ ] Add validation for all inputs and outputs
+
+## Common Pitfalls to Avoid
+1. Assuming data structure formats without verification
+2. Guessing about library behavior
+3. Implementing before seeing actual runtime output
+4. Using incorrect version requirements
+5. Missing error cases
+6. Incorrect type hints
+7. Assuming transformations without verification
+
+## Example Verification Pattern
+```python
+# 1. Import and version check
+import library
+print("Version:", library.__version__)
+
+# 2. Create minimal test case
+test_input = create_test_input()
+print("Input type:", type(test_input))
+print("Input shape:", test_input.shape if hasattr(test_input, 'shape') else 'N/A')
+
+# 3. Run minimal operation
+result = library.operation(test_input)
+print("Result type:", type(result))
+print("Result structure:", result.keys() if hasattr(result, 'keys') else 'N/A')
+
+# 4. Inspect all intermediate data
+for key, value in result.items():
+    print(f"\n{key}:")
+    print(f"  Type: {type(value)}")
+    print(f"  Shape: {value.shape if hasattr(value, 'shape') else 'N/A'}")
+    print(f"  Content: {value}")
+```
+
+## Documentation Requirements
+1. Document exact version requirements
+2. Document all data structure formats
+3. Document all error conditions
+4. Document all assumptions
+5. Document all transformations
+6. Document all validation rules
+
+## Testing Requirements
+1. Test with minimal example
+2. Test with edge cases
+3. Test with invalid inputs
+4. Test with different versions
+5. Test with different data types
+6. Test with different shapes
+7. Test with different formats
+
+
+Remember: If you haven't seen it run, you don't know it works!

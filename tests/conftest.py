@@ -5,6 +5,13 @@ import pytest
 import numpy as np
 from pathlib import Path
 import cv2
+import sys
+
+# Add the local DocTR module to the Python path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'docs', 'doctr')))
+
+# Now import the installed DocTR module
+from doctr import models
 
 
 @pytest.fixture
@@ -33,7 +40,7 @@ def sample_image(test_image_dir):
     
     # Save it
     os.makedirs(test_image_dir, exist_ok=True)
-    image_path = test_image_dir / "test_image.jpg"
+    image_path = test_image_dir / "images/test_image.jpg"
     cv2.imwrite(str(image_path), image)
     
     return image_path 

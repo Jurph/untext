@@ -1,4 +1,4 @@
-"""Setup configuration for untext package."""
+s."""Setup configuration for untext package."""
 
 from setuptools import setup, find_packages
 
