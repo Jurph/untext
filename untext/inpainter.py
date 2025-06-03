@@ -8,6 +8,8 @@ import torch.nn.functional as F
 from torch.optim import Adam
 from tqdm import tqdm
 
+  # LamaInpainter expects image: np.ndarray (H, W, 3, uint8), mask: np.ndarray (H, W, uint8, 255=hole)
+  # Returns: np.ndarray (H, W, 3, uint8), same shape as input image.
 
 class SkipConnection(nn.Module):
     """Skip connection block for the U-Net architecture."""

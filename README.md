@@ -1,77 +1,75 @@
-Remove (un)wanted text by detecting it with DocTR and in-painting the masked region with LaMa (default) or Deep-Image-Prior.
+# untext
 
-untext = find words ➜ generate pixel mask ➜ in-paint
+A tool for removing text-based watermarks from images using state-of-the-art inpainting models.
 
-* Text detection: [DocTR](https://github.com/mindee/doctr) DB-Net (lightweight, CPU friendly)
-* In-painting back-end (pick one at run-time)
-  * **LaMa** via the `simple-lama-inpainting` wheel  ← default, fast, good quality
-  * Deep-Image-Prior (`--method dip`) for pure-PyTorch fallback
-  * Edge-fill toy (`--method edge_fill`) for instant mock-ups
-
----
+Features:
+* Fast text detection using DocTR
+* High-quality inpainting using LaMa (default)
+* Alternative inpainting backends:
+  * TALEA for high-quality results on complex textures
+  * Deep Image Prior (DIP) for cases where neural approaches struggle
+* Automatic subregion detection and processing
+* Edge blending for seamless results
 
 ## Installation
 
 ```bash
-git clone https://github.com/jurph/untext.git
-cd untext
-python -m venv venv && source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-
-# (optional) install as editable module
-pip install -e .
 ```
 
-The requirements pull:
-
-* PyTorch ≥ 2.0
-* DocTR 0.6.1 (text detection)
-* simple-lama-inpainting 0.1.2 (LaMa backend)
-
-All wheels are available on PyPI—no heavy git check-outs needed.
-
----
-
-## Command-line usage
+For GPU acceleration (recommended), also install PyTorch with CUDA support:
 
 ```bash
-untext -i watermarked.jpg -o clean.jpg            # uses LaMa
-untext -i img.jpg -o out.jpg --method dip         # use Deep-Image-Prior
-untext -h                                         # full options
+pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118
 ```
 
-Internally the CLI will:
+## Usage
 
-1. detect words with DocTR and convert each bounding box into a binary mask
-2. dilate & feather the mask
-3. in-paint with the selected backend
+Basic usage:
 
----
+```bash
+python -m untext.cli -i image.jpg -o output.jpg
+```
 
-## Python API (simplest path)
+Advanced options:
+
+```bash
+python -m untext.cli -i input_dir/ -o output_dir/ --method lama --save-masks
+```
+
+### Options
+
+* `-i`, `--input`: Input image or directory
+* `-o`, `--output`: Output image or directory
+* `--mask`: Mask geometry (`"box"` or `"letters"`, default: `"box"`)
+* `--save-masks`: Save intermediate mask files (useful for debugging, default = `"False"`)
+* `--method`: Inpainting backend to use (`"lama"`, `"talea"`, or `"dip"`)
+* `--device`: Device to run on (`"cuda"` or `"cpu"`, default: `"cuda"`)
+* `--verbose`: Enable verbose output
+* `--skip-existing`: Skip images that already have output files
+
+## API
 
 ```python
-from untext.image_patcher import ImagePatcher
+from untext import ImagePatcher
 
-patcher = ImagePatcher()
-result  = patcher.patch_image('photo.jpg', 'mask.png', method='lama')
+patcher = ImagePatcher(device='cuda')
+result = patcher.patch_image('input.jpg', 'mask.jpg', 'output.jpg')
 ```
 
-`method` can be `"lama"`, `"dip"`, or `"edge_fill"`.
+The main `patch_image()` method accepts these parameters:
 
----
+* `image_path`: Path to input image
+* `mask_path`: Path to binary mask (white = area to inpaint)
+* `output_path`: Optional path to save result
+* `method`: Inpainting backend (`"lama"`, `"talea"`, or `"dip"`)
+* `blend`: Whether to apply edge blending (default: `True`)
+* `dilate_percent`: How much to expand the mask (default: `0.05`)
+* `feather_radius`: Width of edge feathering in pixels (default: `20`)
 
-## Tests
+## License
 
-```bash
-pytest -v
-```
-
-Unit tests cover detection, mask generation, and in-painting with LaMa.
-
----
-
-© 2025  Jurph – MIT license
+MIT
 
 
 

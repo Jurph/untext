@@ -20,6 +20,7 @@ from PIL import Image
 from pathlib import Path
 from typing import Tuple, Optional, Union, Callable
 import logging
+import torch.nn.functional as F
 
 logger = logging.getLogger(__name__)
 
@@ -167,7 +168,8 @@ class DeepImagePrior:
         self,
         image: np.ndarray,
         mask: np.ndarray,
-        progress_callback: Optional[Callable[[int,int,float], None]] = None
+        progress_callback: Optional[Callable[[int,int,float], None]] = None,
+        subregion: Optional[tuple[int, int, int, int]] = None
     ) -> np.ndarray:
         """Inpaint masked regions in an image.
         
@@ -175,6 +177,7 @@ class DeepImagePrior:
             image: Input image as numpy array (H, W, C)
             mask: Binary mask as numpy array (H, W) where 1 indicates pixels to inpaint
             progress_callback: Optional callback function to report progress
+            subregion: Optional tuple (x1, y1, x2, y2) defining region to process
             
         Returns:
             Inpainted image as numpy array (H, W, C)
@@ -184,6 +187,18 @@ class DeepImagePrior:
             mask = (mask > 0).astype(np.float32)
         else:
             mask = mask.astype(np.float32)
+
+        # Handle subregion if provided
+        full_image = None
+        if subregion is not None:
+            x1, y1, x2, y2 = subregion
+            logger.info(f"Processing subregion: ({x1}, {y1}) to ({x2}, {y2})")
+            # Store full image for later
+            full_image = image.copy()
+            # Crop image and mask to subregion
+            image = image[y1:y2, x1:x2]
+            mask = mask[y1:y2, x1:x2]
+            logger.info(f"Cropped to subregion size: {image.shape[1]}x{image.shape[0]}")
 
         # Convert inputs to tensors
         image_tensor = torch.from_numpy(image).permute(2, 0, 1).unsqueeze(0).float() / 255.0
@@ -254,5 +269,12 @@ class DeepImagePrior:
                      output[:, :, :image.shape[0], :image.shape[1]] * mask_tensor[:, :, :image.shape[0], :image.shape[1]]
             result = result[0].cpu().permute(1, 2, 0).clamp(0, 1).numpy()
             result = (result * 255).astype(np.uint8)
+        
+        # If we processed a subregion, paste it back into the full image
+        if full_image is not None:
+            logger.info("Pasting subregion back into full image")
+            x1, y1, x2, y2 = subregion
+            full_image[y1:y2, x1:x2] = result
+            result = full_image
         
         return result 
