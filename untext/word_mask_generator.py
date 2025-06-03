@@ -96,8 +96,8 @@ class WordMaskGenerator:
                     logger.warning(f"No text detected in {image_path}")
                     continue
                 
-                # Generate mask
-                mask = self._create_mask(image.shape[:2], detections)
+                # Generate mask using the original image
+                mask = self._create_mask(image.shape[:2], detections, image)
                 
                 # Save mask
                 if output_dir is not None:
@@ -122,13 +122,15 @@ class WordMaskGenerator:
     def _create_mask(
         self,
         image_shape: Tuple[int, int],
-        detections: List[Dict]
+        detections: List[Dict],
+        image: np.ndarray
     ) -> MaskArray:
         """Create a binary mask for detected text regions.
         
         Args:
             image_shape: Shape of the image (height, width)
             detections: List of detection dictionaries from TextDetector
+            image: Original image
             
         Returns:
             Binary mask as H×W uint8 numpy array (255 = text region)
@@ -137,15 +139,56 @@ class WordMaskGenerator:
         mask = np.zeros(image_shape, dtype=np.uint8)
         
         # Fill detected regions
-        for det in detections:
-            points = det['geometry'].astype(np.int32)
-            if self.mode == "box":
-                # Use bounding box
+        if self.mode == "box":
+            for det in detections:
+                points = det['geometry'].astype(np.int32)
                 x1, y1 = points.min(axis=0)
                 x2, y2 = points.max(axis=0)
                 cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
-            else:  # letters mode
-                # Use exact polygon
-                cv2.fillPoly(mask, [points], 255)
+        else:  # letters mode
+            import pytesseract
+            for det in detections:
+                points = det['geometry'].astype(np.int32)
+                x1, y1 = points.min(axis=0)
+                x2, y2 = points.max(axis=0)
+                # Crop the region from the original image
+                cropped = image[y1:y2, x1:x2]
+
+                # Attempt OCR on the cropped region
+                text = pytesseract.image_to_string(cropped)
+                if text and any(char.isalpha() for char in text):
+                    boxes = pytesseract.image_to_boxes(cropped)
+                    h_cropped = cropped.shape[0]
+                    for b in boxes.strip().splitlines():
+                        parts = b.split()
+                        if len(parts) == 6:
+                            letter, bx1, by1, bx2, by2, _ = parts
+                            bx1, by1, bx2, by2 = int(bx1), int(by1), int(bx2), int(by2)
+                            # Adjust y coordinates (pytesseract returns coordinates with origin at bottom-left)
+                            new_y1 = h_cropped - by2
+                            new_y2 = h_cropped - by1
+                            cv2.rectangle(mask, (x1 + bx1, y1 + new_y1), (x1 + bx2, y1 + new_y2), 255, -1)
+                else:
+                    # Enhance contrast and try again
+                    cropped_gray = cv2.cvtColor(cropped, cv2.COLOR_BGR2GRAY)
+                    cropped_eq = cv2.equalizeHist(cropped_gray)
+                    text_eq = pytesseract.image_to_string(cropped_eq)
+                    if text_eq and any(char.isalpha() for char in text_eq):
+                        boxes = pytesseract.image_to_boxes(cropped_eq)
+                        h_cropped = cropped_eq.shape[0]
+                        for b in boxes.strip().splitlines():
+                            parts = b.split()
+                            if len(parts) == 6:
+                                letter, bx1, by1, bx2, by2, _ = parts
+                                bx1, by1, bx2, by2 = int(bx1), int(by1), int(bx2), int(by2)
+                                new_y1 = h_cropped - by2
+                                new_y2 = h_cropped - by1
+                                cv2.rectangle(mask, (x1 + bx1, y1 + new_y1), (x1 + bx2, y1 + new_y2), 255, -1)
+                    else:
+                        # If still no letters, skip this detection box
+                        continue
+            # Dilate all white regions in the mask by approximately 8 pixels
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))
+            mask = cv2.dilate(mask, kernel)
         
         return mask 
