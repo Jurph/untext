@@ -276,7 +276,7 @@ class ImagePatcher:
         detections: List[Dict],
         image_shape: Tuple[int, int],
         mask: Optional[MaskArray] = None,
-        scale_factor: int = 4,
+        scale_factor: int = 3,
         min_margin: int = 16
     ) -> Optional[Subregion]:
         """Calculate the subregion to process based on detections and mask.

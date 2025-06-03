@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from pathlib import Path
 from typing import Tuple, Optional
-from untext.lama_inpainter import LamaInpainter
+from untext.telea_inpainter import TeleaInpainter
 
 def create_test_image(size: Tuple[int, int] = (100, 100), text: str = "Test") -> Tuple[np.ndarray, np.ndarray]:
     """Create a test image with text.
@@ -66,7 +66,7 @@ def test_image_dir(tmp_path: Path) -> Tuple[Path, list[Path]]:
 def test_inpainter_initialization() -> None:
     """Test LamaInpainter initialization."""
     try:
-        inpainter = LamaInpainter()
+        inpainter = TeleaInpainter()
         assert inpainter is not None
     except RuntimeError as e:
         if "LaMa dependencies not installed" in str(e):
@@ -81,7 +81,7 @@ def test_inpaint_single_image() -> None:
         image, mask = create_test_image((200, 200), "Test")
         
         # Initialize inpainter
-        inpainter = LamaInpainter()
+        inpainter = TeleaInpainter()
         
         # Inpaint image
         result = inpainter.inpaint(image, mask)
@@ -95,8 +95,8 @@ def test_inpaint_single_image() -> None:
         assert not np.array_equal(result[mask > 0], image[mask > 0])
         
     except RuntimeError as e:
-        if "LaMa dependencies not installed" in str(e):
-            pytest.skip("LaMa not installed - skipping test")
+        if "dependencies not installed" in str(e):
+            pytest.skip("Telea not installed - skipping test")
         else:
             raise
 
@@ -107,7 +107,7 @@ def test_inpaint_with_subregion() -> None:
         image, mask = create_test_image((200, 200), "Test")
         
         # Initialize inpainter
-        inpainter = LamaInpainter()
+        inpainter = TeleaInpainter()
         
         # Define subregion
         subregion = (50, 50, 150, 150)
@@ -127,15 +127,16 @@ def test_inpaint_with_subregion() -> None:
         assert not np.array_equal(result[masked_subregion], image[masked_subregion])
         
     except RuntimeError as e:
-        if "LaMa dependencies not installed" in str(e):
-            pytest.skip("LaMa not installed - skipping test")
+        if "dependencies not installed" in str(e):
+            pytest.skip("Telea not installed - skipping test")
         else:
             raise
 
 def test_inpaint_with_invalid_input() -> None:
     """Test inpainting with invalid inputs."""
     try:
-        inpainter = LamaInpainter()
+
+        inpainter = TeleaInpainter()
         
         # Create valid test image and mask
         image, mask = create_test_image((200, 200), "Test")
@@ -161,8 +162,8 @@ def test_inpaint_with_invalid_input() -> None:
             inpainter.inpaint(image, np.zeros((100, 100), dtype=np.uint8))  # Different size
         
     except RuntimeError as e:
-        if "LaMa dependencies not installed" in str(e):
-            pytest.skip("LaMa not installed - skipping test")
+        if "dependencies not installed" in str(e):
+            pytest.skip("Telea not installed - skipping test")
         else:
             raise
 
@@ -173,7 +174,7 @@ def test_inpaint_with_invalid_subregion() -> None:
         image, mask = create_test_image((200, 200), "Test")
         
         # Initialize inpainter
-        inpainter = LamaInpainter()
+        inpainter = TeleaInpainter()
         
         # Test with invalid subregion
         with pytest.raises(ValueError):
@@ -186,7 +187,7 @@ def test_inpaint_with_invalid_subregion() -> None:
             inpainter.inpaint(image, mask, subregion=(0, 0, 300, 300))  # Out of bounds
         
     except RuntimeError as e:
-        if "LaMa dependencies not installed" in str(e):
-            pytest.skip("LaMa not installed - skipping test")
+        if "dependencies not installed" in str(e):
+            pytest.skip("Telea not installed - skipping test")
         else:
             raise 

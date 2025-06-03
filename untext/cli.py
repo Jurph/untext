@@ -14,6 +14,7 @@ import numpy as np
 from tqdm import tqdm
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 import torch
+from typing import Optional
 
 from untext.image_patcher import ImagePatcher
 from untext.word_mask_generator import WordMaskGenerator
@@ -103,6 +104,12 @@ def parse_args():
         action="store_true",
         help="Skip images that already have output files"
     )
+    parser.add_argument(
+        "--mask-file",
+        type=str,
+        default=None,
+        help="Path to a mask file to use instead of generating one"
+    )
     return parser.parse_args()
 
 
@@ -131,7 +138,8 @@ def process_single_image(
     patcher: ImagePatcher,
     save_masks: bool,
     method: str,
-    verbose: bool
+    verbose: bool,
+    mask_file: Optional[str] = None
 ) -> bool:
     """Process a single image. Returns True if successful, False otherwise."""
     start_time = time.time()
@@ -150,75 +158,95 @@ def process_single_image(
             print(f"Image is not a numpy array: {type(image)}")
             return False
         
-        print(f"Image loaded: {image.shape[1]}x{image.shape[0]} pixels")
-        print(f"Image type: {type(image)}, dtype: {image.dtype}")
+        logger.info(f"Image loaded: {image.shape[1]}x{image.shape[0]} pixels")
+        logger.info(f"Image type: {type(image)}, dtype: {image.dtype}")
         
-        # Generate mask in temporary directory
-        with TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
-            
-            # Copy image to temp directory to avoid polluting source
-            temp_image = temp_path / image_path.name
-            cv2.imwrite(str(temp_image), image)
-            
-            logger.info(f"Detecting text in {image_path.name}...")
-            
-            # Generate mask with timeout
-            mask_start = time.time()
-            mask_map = mask_gen.generate_masks([str(temp_image)])
-            mask_time = time.time() - mask_start
-            logger.info(f"Mask generation took {mask_time:.2f}s")
-            
-            if not mask_map or temp_image not in mask_map:
-                logger.info(f"No text detected in {image_path.name}")
+        # If a mask file was provided, load it; otherwise generate the mask
+        if mask_file is not None:
+            mask_file_path = Path(mask_file)
+            if not mask_file_path.exists():
+                logger.warning(f"Mask file {mask_file} does not exist.")
                 return False
-            
-            mask_path = mask_map[temp_image]
-            logger.info(f"Text detected, generated mask: {mask_path.name}")
-            
-            logger.info(f"Inpainting with {method}...")
-            
-            # Calculate subregion for inpainting using TextDetector directly
+            mask = cv2.imread(str(mask_file_path), cv2.IMREAD_GRAYSCALE)
+            if mask is None:
+                logger.error(f"Failed to load mask file: {mask_file}")
+                return False
+            logger.info(f"Using provided mask file: {mask_file_path.name}")
+        else:
+            with TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+                
+                # Copy image to temp directory to avoid polluting source
+                temp_image = temp_path / image_path.name
+                cv2.imwrite(str(temp_image), image)
+                
+                logger.info(f"Detecting text in {image_path.name}...")
+                
+                # Generate mask with timeout
+                mask_start = time.time()
+                mask_map = mask_gen.generate_masks([str(temp_image)])
+                mask_time = time.time() - mask_start
+                logger.info(f"Mask generation took {mask_time:.2f}s")
+                
+                if not mask_map or temp_image not in mask_map:
+                    logger.info(f"No text detected in {image_path.name}")
+                    return False
+                
+                mask_file_generated = mask_map[temp_image]
+                logger.info(f"Text detected, generated mask: {mask_file_generated.name}")
+                mask = cv2.imread(str(mask_file_generated), cv2.IMREAD_GRAYSCALE)
+        
+        logger.info(f"Inpainting with {method}...")
+        
+        # Calculate subregion for inpainting
+        if mask_file is not None:
+            # Use the provided mask to calculate the subregion
+            subregion = patcher.calculate_subregion([], image.shape, mask=mask)
+            if subregion:
+                logger.info(f"CLI: Cropping to subregion (from provided mask): {subregion}")
+            else:
+                logger.info("CLI: No subregion found from provided mask, using whole image")
+        else:
+            # Use text detection results to calculate the subregion
             text_detector = TextDetector()
             detections = text_detector.detect(image)[1]
-            subregion = patcher.calculate_subregion(detections, image.shape)
+            subregion = patcher.calculate_subregion(detections, image.shape, mask=mask)
             if subregion:
                 logger.info(f"CLI: Cropping to subregion: {subregion}")
             else:
                 logger.info("CLI: No subregion found, using whole image")
-            
-            # Inpaint with timeout monitoring
-            inpaint_start = time.time()
-            result = patcher.patch_image(
-                image,  # Pass the image array instead of path
-                cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE),  # Load mask as array
-                method=method, 
-                output_path=None, 
-                blend=True,
-                subregion=subregion
-            )
-            inpaint_time = time.time() - inpaint_start
-            logger.info(f"Inpainting took {inpaint_time:.2f}s")
-            
-            # Save result
-            cv2.imwrite(str(output_path), result)
-            
-            total_time = time.time() - start_time
-            logger.info(f"✓ Processed {image_path.name} → {output_path.name} (total: {total_time:.2f}s)")
-            
-            # Optionally save mask
-            if save_masks:
-                mask_output = output_path.with_name(f"{output_path.stem}_mask.png")
-                mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
-                cv2.imwrite(str(mask_output), mask)
-                logger.info(f"  Saved mask to {mask_output.name}")
-            
-            # Force cleanup
-            del image, result
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            
-            return True
+        
+        # Inpaint with timeout monitoring
+        inpaint_start = time.time()
+        result = patcher.patch_image(
+            image,  # Pass the image array instead of path
+            mask,  # Use the loaded mask
+            method=method, 
+            output_path=None, 
+            blend=True,
+            subregion=subregion
+        )
+        inpaint_time = time.time() - inpaint_start
+        logger.info(f"Inpainting took {inpaint_time:.2f}s")
+        
+        # Save result
+        cv2.imwrite(str(output_path), result)
+        
+        total_time = time.time() - start_time
+        logger.info(f"✓ Processed {image_path.name} → {output_path.name} (total: {total_time:.2f}s)")
+        
+        # Optionally save mask
+        if save_masks:
+            mask_output = output_path.with_name(f"{output_path.stem}_mask.png")
+            cv2.imwrite(str(mask_output), mask)
+            logger.info(f"  Saved mask to {mask_output.name}")
+        
+        # Force cleanup
+        del image, result
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        return True
             
     except Exception as e:
         total_time = time.time() - start_time
@@ -326,7 +354,8 @@ def main():
             patcher,
             args.save_masks,
             args.method,
-            args.verbose
+            args.verbose,
+            args.mask_file
         )
         
         elapsed = time.time() - start_time

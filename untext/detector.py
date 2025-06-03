@@ -45,7 +45,7 @@ MaskArray = np.ndarray  # H×W uint8
 class TextDetector:
     """Class for detecting text in images using DocTR."""
     
-    def __init__(self, confidence_threshold: float = 0.3, min_text_size: int = 10, mask_dilation: int = 2) -> None:
+    def __init__(self, confidence_threshold: float = 0.25, min_text_size: int = 10, mask_dilation: int = 2) -> None:
         """Initialize the TextDetector with a pre-trained model.
         
         Args:
