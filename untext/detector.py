@@ -32,6 +32,12 @@ from doctr.models import detection
 from doctr.models.detection.predictor import DetectionPredictor
 from doctr.models.preprocessor.pytorch import PreProcessor
 
+# Import the optimized preprocessor
+try:
+    from . import preprocessor
+except ImportError:
+    preprocessor = None
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -45,13 +51,20 @@ MaskArray = np.ndarray  # H×W uint8
 class TextDetector:
     """Class for detecting text in images using DocTR."""
     
-    def __init__(self, confidence_threshold: float = 0.25, min_text_size: int = 10, mask_dilation: int = 2) -> None:
+    def __init__(
+        self, 
+        confidence_threshold: float = 0.3, 
+        min_text_size: int = 10, 
+        mask_dilation: int = 2,
+        preprocess: bool = True
+    ) -> None:
         """Initialize the TextDetector with a pre-trained model.
         
         Args:
             confidence_threshold: Minimum confidence score for detections (0-1)
             min_text_size: Minimum size of text regions to detect
             mask_dilation: Number of pixels to dilate masks by
+            preprocess: Whether to apply optimized preprocessing before text detection
         """
         if not 0 <= confidence_threshold <= 1:
             raise ValueError("confidence_threshold must be between 0 and 1")
@@ -63,6 +76,12 @@ class TextDetector:
         self.confidence_threshold = confidence_threshold
         self.min_text_size = min_text_size
         self.mask_dilation = mask_dilation
+        self.preprocess = preprocess
+        
+        if self.preprocess and preprocessor is None:
+            logger.warning("Preprocessing requested but preprocessor module not available")
+            self.preprocess = False
+            
         try:
             # Initialize detection model
             self.model = detection.db_resnet50(pretrained=True)
@@ -76,7 +95,7 @@ class TextDetector:
                 pre_processor=self.pre_processor,
                 model=self.model
             )
-            logger.info("Initialized TextDetector with DB ResNet50 model")
+            logger.info(f"Initialized TextDetector with DB ResNet50 model (preprocessing: {self.preprocess})")
         except Exception as e:
             logger.error(f"Failed to initialize TextDetector: {e}")
             raise RuntimeError("Failed to initialize TextDetector") from e
@@ -111,8 +130,21 @@ class TextDetector:
             raise ValueError("Image must be H×W×3 BGR")
         
         try:
+            # Apply preprocessing if enabled
+            processed_image = image
+            if self.preprocess and preprocessor is not None:
+                logger.debug("Applying optimized preprocessing before text detection")
+                processed_image = preprocessor.preprocess_image_array(image)
+                if processed_image is None:
+                    logger.warning("Preprocessing failed, using original image")
+                    processed_image = image
+                else:
+                    # Convert back to BGR if needed (preprocessor returns RGB)
+                    if processed_image.shape[2] == 3:
+                        processed_image = cv2.cvtColor(processed_image, cv2.COLOR_RGB2BGR)
+            
             # Run detection
-            raw = self.predictor([image])
+            raw = self.predictor([processed_image])
             if not isinstance(raw, list) or len(raw) == 0:
                 logger.warning("No text detected")
                 return np.zeros(image.shape[:2], dtype=np.uint8), []
@@ -135,7 +167,7 @@ class TextDetector:
                 mask = cv2.dilate(mask, kernel)
             
             # Return 2D mask instead of 3D
-            logger.info(f"Detected {len(detections)} text regions")
+            logger.info(f"Detected {len(detections)} text regions (preprocessing: {self.preprocess})")
             return mask, detections
             
         except Exception as e:
@@ -240,6 +272,46 @@ class TextDetector:
             filtered.append(det)
             
         return filtered
+
+    def detect_and_ocr(self, image: np.ndarray) -> List[Dict]:
+        """
+        Run text detection and perform OCR on the cropped detected regions.
+        
+        Args:
+            image: Input image as an H×W×3 BGR uint8 numpy array.
+        
+        Returns:
+            A list of dictionaries, each containing:
+              - 'box': Bounding box (x, y, w, h) of the detected region.
+              - 'text': OCR extracted text from that region.
+        """
+        mask, detections = self.detect(image)
+        if not detections:
+            logger.info("No detections to process for OCR.")
+            return []
+
+        from doctr.models import ocr_predictor
+        from doctr.io import DocumentFile
+
+        # Instantiate OCR predictor using the existing detection model and default recognition model 'crnn_vgg16_bn'
+        ocr_model = ocr_predictor(self.model, "crnn_vgg16_bn", pretrained=True)
+
+        ocr_results = []
+        for det in detections:
+            # Compute bounding rectangle from the detected geometry
+            pts = det["geometry"].astype(np.int32)
+            x, y, w, h = cv2.boundingRect(pts)
+            # Crop the detected region from the image
+            cropped = image[y:y+h, x:x+w]
+            # Create a DocumentFile from the cropped image
+            doc = DocumentFile.from_images([cropped])
+            # Run OCR on the cropped region
+            ocr_out = ocr_model(doc)
+            # Render OCR result to extract text
+            text = ocr_out.render()
+            ocr_results.append({"box": (x, y, w, h), "text": text})
+
+        return ocr_results
 
 class WordMaskGenerator:
     """Class for generating word-level masks from text detection results."""

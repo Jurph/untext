@@ -110,6 +110,17 @@ def parse_args():
         default=None,
         help="Path to a mask file to use instead of generating one"
     )
+    parser.add_argument(
+        "--preprocess",
+        action="store_true",
+        default=True,
+        help="Apply optimized preprocessing before text detection (enabled by default)"
+    )
+    parser.add_argument(
+        "--no-preprocess",
+        action="store_true",
+        help="Disable preprocessing (for testing or comparison)"
+    )
     return parser.parse_args()
 
 
@@ -313,7 +324,11 @@ def main():
         logger.info("Loading ImagePatcher...")
         patcher = ImagePatcher(device=device, num_iterations=args.iterations)
         logger.info("Loading WordMaskGenerator...")
-        mask_gen = WordMaskGenerator(mode=args.mask)
+        
+        # Handle preprocessing flags
+        use_preprocess = args.preprocess and not args.no_preprocess
+        mask_gen = WordMaskGenerator(mode=args.mask, preprocess=use_preprocess)
+        logger.info(f"Preprocessing {'enabled' if use_preprocess else 'disabled'}")
         logger.info("Models initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize models: {e}")

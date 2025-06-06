@@ -8,13 +8,20 @@ from untext.word_mask_generator import WordMaskGenerator
 
 def test_mask_generator_initialization():
     """Test WordMaskGenerator initialization with different modes."""
-    # Test default mode
+    # Test default mode (with preprocessing enabled by default)
     gen = WordMaskGenerator()
     assert gen.mode == "box"
+    assert gen.preprocess == True  # Default should be True
     
-    # Test letters mode
-    gen = WordMaskGenerator(mode="letters")
+    # Test letters mode with preprocessing
+    gen = WordMaskGenerator(mode="letters", preprocess=True)
     assert gen.mode == "letters"
+    assert gen.preprocess == True
+    
+    # Test box mode with preprocessing disabled
+    gen = WordMaskGenerator(mode="box", preprocess=False)
+    assert gen.mode == "box"
+    assert gen.preprocess == False
     
     # Test invalid mode
     with pytest.raises(ValueError):
@@ -33,8 +40,8 @@ def test_generate_masks_basic():
     test_image_path = test_dir / "synthetic_text.png"
     cv2.imwrite(str(test_image_path), image)
     
-    # Generate masks
-    gen = WordMaskGenerator()
+    # Test with preprocessing enabled
+    gen = WordMaskGenerator(preprocess=True)
     mask_map = gen.generate_masks([str(test_image_path)])
     
     # Verify results
@@ -47,6 +54,13 @@ def test_generate_masks_basic():
     assert mask is not None, "Should be able to load generated mask"
     assert mask.shape == (200, 400), "Mask should match input image dimensions"
     assert np.any(mask > 0), "Mask should contain non-zero values"
+    
+    # Test with preprocessing disabled
+    gen_no_preprocess = WordMaskGenerator(preprocess=False)
+    mask_map_no_preprocess = gen_no_preprocess.generate_masks([str(test_image_path)])
+    
+    # Both should generate masks, but may differ in quality
+    assert test_image_path in mask_map_no_preprocess, "Should generate mask without preprocessing"
 
 def test_generate_masks_empty_image():
     """Test mask generation on an image with no text."""

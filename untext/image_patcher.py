@@ -297,7 +297,7 @@ class ImagePatcher:
             """Round a number to the nearest multiple of 4."""
             return (x + 2) & ~3  # Round up to nearest multiple of 4
         
-        # 1. Try detections (as before)
+        # 1. Try detections (apply both scale_factor and min_margin)
         if detections:
             min_x = min(det['geometry'][:, 0].min() for det in detections)
             min_y = min(det['geometry'][:, 1].min() for det in detections)
@@ -306,12 +306,17 @@ class ImagePatcher:
             if max_x > min_x and max_y > min_y:
                 center_x = (min_x + max_x) / 2
                 center_y = (min_y + max_y) / 2
-                width = (max_x - min_x) * scale_factor
-                height = (max_y - min_y) * scale_factor
-                x1 = max(0, int(center_x - width / 2))
-                y1 = max(0, int(center_y - height / 2))
-                x2 = min(image_shape[1], int(center_x + width / 2))
-                y2 = min(image_shape[0], int(center_y + height / 2))
+                width = max_x - min_x
+                height = max_y - min_y
+                
+                # Apply both scale_factor and min_margin constraints
+                margin_x = max(int(width * (scale_factor - 1) / 2), min_margin)
+                margin_y = max(int(height * (scale_factor - 1) / 2), min_margin)
+                
+                x1 = max(0, int(center_x - width / 2 - margin_x))
+                y1 = max(0, int(center_y - height / 2 - margin_y))
+                x2 = min(image_shape[1], int(center_x + width / 2 + margin_x))
+                y2 = min(image_shape[0], int(center_y + height / 2 + margin_y))
                 if x2 > x1 and y2 > y1:
                     # Round dimensions to multiples of 4
                     x1 = round_to_multiple_of_4(x1)

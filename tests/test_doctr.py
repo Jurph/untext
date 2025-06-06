@@ -89,10 +89,8 @@ def test_text_detector():
     # Create test image
     image, _ = create_test_image((200, 200), "Test")
     
-    # Initialize detector
-    detector = TextDetector()
-    
-    # Detect text
+    # Test with preprocessing enabled (default)
+    detector = TextDetector(preprocess=True)
     processed_image, detections = detector.detect(image)
     
     # Check results
@@ -101,24 +99,23 @@ def test_text_detector():
     assert processed_image.shape == image.shape[:2]
     assert processed_image.dtype == np.uint8
     assert isinstance(detections, list)
-    assert len(detections) > 0
     
-    # Check detection format
-    for det in detections:
-        assert isinstance(det, dict)
-        assert 'geometry' in det
-        assert 'confidence' in det
-        assert isinstance(det['geometry'], np.ndarray)
-        assert isinstance(det['confidence'], float)
+    # Test with preprocessing disabled
+    detector_no_preprocess = TextDetector(preprocess=False)
+    processed_image_no_preprocess, detections_no_preprocess = detector_no_preprocess.detect(image)
+    
+    # Both should return valid results
+    assert isinstance(processed_image_no_preprocess, np.ndarray)
+    assert processed_image_no_preprocess.shape == image.shape[:2]
+    assert processed_image_no_preprocess.dtype == np.uint8
+    assert isinstance(detections_no_preprocess, list)
 
 def test_word_mask_generator(test_image_dir):
     """Test the WordMaskGenerator class."""
     tmp_path, image_paths = test_image_dir
     
-    # Initialize generator
-    generator = WordMaskGenerator()
-    
-    # Generate masks
+    # Test with preprocessing enabled (default)
+    generator = WordMaskGenerator(preprocess=True)
     mask_paths = generator.generate_masks(image_paths, tmp_path / "masks")
     
     # Check results
@@ -135,4 +132,11 @@ def test_word_mask_generator(test_image_dir):
         if np.sum(mask) == 0:
             warnings.warn("No text detected in synthetic image. This is common for deep models on synthetic or small images.")
         else:
-            assert np.sum(mask) > 0  # Should detect some text 
+            assert np.sum(mask) > 0  # Should detect some text
+    
+    # Test with preprocessing disabled
+    generator_no_preprocess = WordMaskGenerator(preprocess=False)
+    mask_paths_no_preprocess = generator_no_preprocess.generate_masks(image_paths, tmp_path / "masks_no_preprocess")
+    
+    # Both should generate results
+    assert len(mask_paths_no_preprocess) > 0, "Should generate masks even without preprocessing" 

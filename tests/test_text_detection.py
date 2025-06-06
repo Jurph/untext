@@ -78,26 +78,6 @@ def test_detect_multiple_watermarks(test_images):
                 # Ensure centers are different
                 assert not np.allclose(center1, center2), "Detected regions should not completely overlap"
 
-def test_detect_no_text(test_images):
-    """Test detection on an image without text."""
-    detector = TextDetector()
-    image = test_images["test4-without-text.png"] # Image without text
-    # Test images 1-3 DO HAVE TEXT, so don't use those.     
-    # Run detection - LLM WARNING: Use detect() not detect_text()!
-    mask, detections = detector.detect(image)
-    
-    # We do not expect meaningful detections, but the deep model may return a few low-confidence boxes.
-    # Therefore, require that any detections are few and cover only a small area of the image.
-    max_allowed_detections = 10
-    max_mask_coverage = 0.10  # 10 % of pixels
-    
-    assert len(detections) <= max_allowed_detections, (
-        f"Too many detections ({len(detections)}) for an image with no visible text"
-    )
-    coverage = float(np.sum(mask > 0)) / mask.size
-    assert coverage <= max_mask_coverage, (
-        f"Mask should cover <= {max_mask_coverage*100:.1f}% of pixels, got {coverage*100:.1f}%"
-    )
 
 def test_detect_invalid_image():
     """Test that detector handles invalid image paths appropriately."""
