@@ -122,7 +122,7 @@ def compute_figure_of_merit(ocr_text: str, ground_truth: str) -> float:
     if combined == 0:
         logger.debug(f"Perfect match detected: '{ocr_text}' == '{ground_truth}'")
         logger.debug(f"  Hamming: {hamming_dist}, Edit: {edit_dist}")
-    
+
     # Log scale for dynamic range (add small epsilon to avoid log(0))
     fom = np.log10(combined + 1e-6)
     
@@ -135,52 +135,10 @@ def compute_figure_of_merit(ocr_text: str, ground_truth: str) -> float:
 
 
 def ocr_image(image_path: str) -> str:
-    """Perform OCR on an image and return the extracted text as a string."""
-    logger.info(f'Processing image "{image_path}" through preprocessor...')
-    img_array = preprocessor.preprocess_image(image_path)
-    if img_array is None:
-        logger.error(f"Preprocessing failed for image {image_path}")
-        return ""
-
-    # Initialize the OCR predictor
-    ocr = ocr_predictor(pretrained=True)
-
-    try:
-        ocr_results = ocr([img_array])
-        if isinstance(ocr_results, list):
-            ocr_results = ocr_results[0]
-    except Exception as e:
-        logger.error(f"OCR processing failed for {image_path}: {e}")
-        return ""
-
-    # Additional debug logging after OCR call
-    logger.info(f"OCR results type: {type(ocr_results)}")
-    if hasattr(ocr_results, "pages"):
-        num_pages = len(ocr_results.pages)
-        logger.info(f"OCR results contain {num_pages} pages")
-        for i, page in enumerate(ocr_results.pages):
-            logger.debug(f"Page {i} has {len(page.blocks)} blocks")
-    else:
-        try:
-            keys = list(ocr_results.keys())
-            logger.info(f"OCR results keys: {keys}")
-        except Exception as e:
-            logger.error(f"Could not retrieve keys from OCR results: {e}")
-
-    # Extract text from OCR results using 'value' property
-    extracted_text = ""
-    if hasattr(ocr_results, "pages"):
-        for page in ocr_results.pages:
-            for block in page.blocks:
-                for line in block.lines:
-                    extracted_text += line.value + " "
-    else:
-        for page in ocr_results.get("pages", []):
-            for block in page.get("blocks", []):
-                for line in block.get("lines", []):
-                    extracted_text += line.get("value", "") + " "
-
-    return extracted_text.strip()
+    """Perform OCR on an image using standardized OCR module."""
+    from . import ocr
+    logger.info(f'Processing image "{image_path}" with standardized OCR...')
+    return ocr.extract_text_from_image(image_path)
 
 
 def ocr_image_with_detection(image_path: str) -> str:
@@ -314,21 +272,337 @@ def generate_text_mask(image_path: str) -> "np.ndarray":
     return mask
 
 
+def clean_grid_search() -> None:
+    """Clean, simple grid search using only known-good code.
+    
+    1. Take each image in tests/images/ directory as a test case
+    2. Modify it using color, contrast, and threshold tuning
+    3. Run the KNOWN GOOD ocr_image routine on it
+    4. Compare output to caption file
+    5. Calculate figure-of-merit
+    """
+    import os
+    import cv2
+    import tempfile
+    from pathlib import Path
+    
+    logger.info("Starting clean grid search using only known-good code...")
+    
+    # Test images directory
+    test_dir = Path("tests/images")
+    if not test_dir.exists():
+        logger.error(f"Test directory not found: {test_dir}")
+        return
+    
+    # Find test images and their captions
+    test_cases = []
+    for img_file in ["test1.png", "test2.png", "test3.jpg", "test4-with-text.png"]:
+        img_path = test_dir / img_file
+        caption_path = test_dir / f"{img_path.stem}-caption.txt"
+        
+        if img_path.exists() and caption_path.exists():
+            with open(caption_path, "r", encoding="utf-8") as f:
+                ground_truth = f.read().strip()
+            test_cases.append({
+                'image_path': str(img_path),
+                'ground_truth': ground_truth,
+                'name': img_path.stem
+            })
+            logger.info(f"Added test case: {img_path.stem} -> '{ground_truth}'")
+    
+    if not test_cases:
+        logger.error("No valid test cases found")
+        return
+    
+    logger.info(f"Found {len(test_cases)} test cases")
+    
+    # Define simple tuning configurations
+    tuning_configs = [
+        # Baseline - no tuning
+        {'name': 'baseline', 'operations': []},
+        
+        # CLAHE enhancement only
+        {'name': 'clahe_2_8x8', 'operations': [('clahe', {'clip_limit': 2.0, 'tile_size': (8, 8)})]},
+        {'name': 'clahe_3_8x8', 'operations': [('clahe', {'clip_limit': 3.0, 'tile_size': (8, 8)})]},
+        {'name': 'clahe_2_16x16', 'operations': [('clahe', {'clip_limit': 2.0, 'tile_size': (16, 16)})]},
+        
+        # Histogram equalization
+        {'name': 'hist_eq', 'operations': [('histogram_eq', {})]},
+        
+        # Contrast adjustment
+        {'name': 'contrast_1.5', 'operations': [('contrast', {'alpha': 1.5, 'beta': 0})]},
+        {'name': 'contrast_2.0', 'operations': [('contrast', {'alpha': 2.0, 'beta': 0})]},
+        
+        # Gaussian blur 
+        {'name': 'blur_3', 'operations': [('gaussian_blur', {'kernel_size': 3})]},
+        {'name': 'blur_5', 'operations': [('gaussian_blur', {'kernel_size': 5})]},
+        
+        # Adaptive threshold
+        {'name': 'adaptive_11_2', 'operations': [('adaptive_threshold', {'block_size': 11, 'C': 2})]},
+        {'name': 'adaptive_15_2', 'operations': [('adaptive_threshold', {'block_size': 15, 'C': 2})]},
+        
+        # OTSU threshold
+        {'name': 'otsu', 'operations': [('otsu_threshold', {})]},
+        
+        # Combinations
+        {'name': 'clahe_2_8x8_then_adaptive_11_2', 'operations': [
+            ('clahe', {'clip_limit': 2.0, 'tile_size': (8, 8)}),
+            ('adaptive_threshold', {'block_size': 11, 'C': 2})
+        ]},
+        {'name': 'contrast_1.5_then_clahe_2_8x8', 'operations': [
+            ('contrast', {'alpha': 1.5, 'beta': 0}),
+            ('clahe', {'clip_limit': 2.0, 'tile_size': (8, 8)})
+        ]},
+    ]
+    
+    def apply_tuning_operations(image_path: str, operations: list) -> str:
+        """Apply tuning operations and return path to processed image."""
+        # Load image
+        img = cv2.imread(image_path)
+        if img is None:
+            raise ValueError(f"Failed to load image: {image_path}")
+        
+        # Convert to grayscale for processing
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Apply each operation in sequence
+        for op_name, params in operations:
+            if op_name == 'clahe':
+                clahe = cv2.createCLAHE(
+                    clipLimit=params['clip_limit'], 
+                    tileGridSize=params['tile_size']
+                )
+                gray = clahe.apply(gray)
+                
+            elif op_name == 'histogram_eq':
+                gray = cv2.equalizeHist(gray)
+                
+            elif op_name == 'contrast':
+                gray = cv2.convertScaleAbs(gray, alpha=params['alpha'], beta=params['beta'])
+                
+            elif op_name == 'gaussian_blur':
+                k = params['kernel_size']
+                gray = cv2.GaussianBlur(gray, (k, k), 0)
+                
+            elif op_name == 'adaptive_threshold':
+                gray = cv2.adaptiveThreshold(
+                    gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    cv2.THRESH_BINARY, params['block_size'], params['C']
+                )
+                
+            elif op_name == 'otsu_threshold':
+                _, gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        
+        # Convert back to BGR for saving
+        if len(gray.shape) == 2:
+            processed_img = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        else:
+            processed_img = gray
+        
+        # Save to temporary file
+        with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+            temp_path = tmp_file.name
+            cv2.imwrite(temp_path, processed_img)
+        
+        return temp_path
+    
+    # Run grid search
+    results = []
+    total_configs = len(tuning_configs)
+    total_tests = total_configs * len(test_cases)
+    
+    logger.info(f"Testing {total_configs} configurations on {len(test_cases)} images = {total_tests} total tests")
+    
+    test_count = 0
+    for config in tuning_configs:
+        config_name = config['name']
+        operations = config['operations']
+        
+        logger.info(f"Testing configuration: {config_name}")
+        
+        config_results = []
+        for test_case in test_cases:
+            test_count += 1
+            image_path = test_case['image_path']
+            ground_truth = test_case['ground_truth']
+            test_name = test_case['name']
+            
+            logger.info(f"  [{test_count}/{total_tests}] {test_name} + {config_name}")
+            
+            temp_image_path = None
+            try:
+                # Apply tuning operations
+                temp_image_path = apply_tuning_operations(image_path, operations)
+                
+                # Run OCR using the FIXED OCR implementation
+                ocr_result = ocr_image(temp_image_path)
+                
+                # Calculate metrics
+                hamming_dist = compute_hamming(ocr_result, ground_truth)
+                edit_dist = compute_edit_distance(ocr_result, ground_truth)
+                fom = compute_figure_of_merit(ocr_result, ground_truth)
+                
+                result = {
+                    'config_name': config_name,
+                    'test_name': test_name,
+                    'ground_truth': ground_truth,
+                    'ocr_result': ocr_result,
+                    'hamming_distance': hamming_dist,
+                    'edit_distance': edit_dist,
+                    'figure_of_merit': fom
+                }
+                
+                config_results.append(result)
+                results.append(result)
+                
+                logger.info(f"    OCR: '{ocr_result}' | FOM: {fom:.4f} | Hamming: {hamming_dist} | Edit: {edit_dist}")
+                
+            except Exception as e:
+                logger.error(f"    Failed: {e}")
+                
+            finally:
+                # Clean up temp file
+                if temp_image_path and os.path.exists(temp_image_path):
+                    os.remove(temp_image_path)
+        
+        # Calculate average FOM for this configuration
+        if config_results:
+            avg_fom = sum(r['figure_of_merit'] for r in config_results) / len(config_results)
+            logger.info(f"  Configuration {config_name} average FOM: {avg_fom:.4f}")
+    
+    # Summary
+    logger.info("=" * 60)
+    logger.info("GRID SEARCH RESULTS SUMMARY")
+    logger.info("=" * 60)
+    
+    # Group results by configuration
+    config_summaries = {}
+    for result in results:
+        config_name = result['config_name']
+        if config_name not in config_summaries:
+            config_summaries[config_name] = []
+        config_summaries[config_name].append(result['figure_of_merit'])
+    
+    # Calculate averages and sort
+    config_averages = []
+    for config_name, foms in config_summaries.items():
+        avg_fom = sum(foms) / len(foms) if foms else 0
+        config_averages.append((config_name, avg_fom, len(foms)))
+    
+    # Sort by average FOM (higher is better)
+    config_averages.sort(key=lambda x: x[1], reverse=True)
+    
+    logger.info("Configuration rankings (by average FOM):")
+    for i, (config_name, avg_fom, count) in enumerate(config_averages, 1):
+        logger.info(f"  {i:2d}. {config_name:30s} | Avg FOM: {avg_fom:.4f} | Tests: {count}")
+    
+    # Best configuration
+    if config_averages:
+        best_config, best_fom, _ = config_averages[0]
+        logger.info(f"\nBEST CONFIGURATION: {best_config} (FOM: {best_fom:.4f})")
+    
+    logger.info("Grid search completed!")
+
+
+def test_raw_ocr() -> None:
+    """Test OCR on raw images without any preprocessing to debug the pipeline."""
+    import os
+    from pathlib import Path
+    from doctr.models import ocr_predictor
+    from PIL import Image
+    import numpy as np
+    
+    logger.info("Testing raw OCR without preprocessor...")
+    
+    # Test images directory
+    test_dir = Path("tests/images")
+    test_image = test_dir / "test1.png"
+    caption_file = test_dir / "test1-caption.txt"
+    
+    if not test_image.exists():
+        logger.error(f"Test image not found: {test_image}")
+        return
+        
+    if not caption_file.exists():
+        logger.error(f"Caption file not found: {caption_file}")
+        return
+    
+    # Load ground truth
+    with open(caption_file, "r", encoding="utf-8") as f:
+        ground_truth = f.read().strip()
+    logger.info(f"Ground truth: '{ground_truth}'")
+    
+    try:
+        # Test 1: Raw image with PIL + numpy (like the working parts of ocr_image)
+        logger.info("Test 1: Raw image via PIL + numpy...")
+        img_pil = Image.open(test_image).convert("RGB")
+        img_array = np.array(img_pil)
+        
+        logger.info(f"Image shape: {img_array.shape}, dtype: {img_array.dtype}")
+        logger.info(f"Image value range: [{img_array.min()}, {img_array.max()}]")
+        
+        # Use simple OCR predictor
+        ocr = ocr_predictor(pretrained=True)
+        ocr_results = ocr([img_array])
+        
+        if isinstance(ocr_results, list):
+            ocr_results = ocr_results[0]
+        
+        logger.info(f"OCR results type: {type(ocr_results)}")
+        if hasattr(ocr_results, "pages"):
+            logger.info(f"OCR results contain {len(ocr_results.pages)} pages")
+            for i, page in enumerate(ocr_results.pages):
+                logger.info(f"Page {i} has {len(page.blocks)} blocks")
+                for j, block in enumerate(page.blocks):
+                    logger.info(f"  Block {j} has {len(block.lines)} lines")
+                    for k, line in enumerate(block.lines):
+                        logger.info(f"    Line {k}: '{line.value}' (confidence: {getattr(line, 'confidence', 'unknown')})")
+        
+        # Extract text
+        extracted_text = ""
+        if hasattr(ocr_results, "pages"):
+            for page in ocr_results.pages:
+                for block in page.blocks:
+                    for line in block.lines:
+                        extracted_text += line.value + " "
+        
+        extracted_text = extracted_text.strip()
+        logger.info(f"Raw OCR result: '{extracted_text}'")
+        
+        # Calculate metrics if we got text
+        if extracted_text:
+            hamming_dist = compute_hamming(extracted_text, ground_truth)
+            edit_dist = compute_edit_distance(extracted_text, ground_truth)
+            fom = compute_figure_of_merit(extracted_text, ground_truth)
+            
+            logger.info(f"Raw OCR metrics:")
+            logger.info(f"  Hamming distance: {hamming_dist}")
+            logger.info(f"  Edit distance: {edit_dist}")
+            logger.info(f"  Figure of Merit: {fom:.4f}")
+        else:
+            logger.error("Raw OCR returned empty string - fundamental DocTR issue!")
+            
+    except Exception as e:
+        logger.error(f"Raw OCR test failed: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+
+
 def orthogonal_grid_search() -> None:
-    """Perform orthogonal grid search over preprocessing parameter groups.
+    """Perform orthogonal grid search over image tuning parameter groups.
     
     This function implements a two-phase search strategy for finding optimal
-    image preprocessing parameters for OCR:
+    image tuning parameters for OCR:
     
-    Phase 1: Test each preprocessing group independently (threshold, blur, enhancement)
+    Phase 1: Test each tuning group independently (threshold, blur, enhancement)
              to find the best method and parameters within each group.
     Phase 2: Combine the winners from each group and test the final pipeline.
     
-    The approach recognizes that some preprocessing operations are mutually exclusive
+    The approach recognizes that some tuning operations are mutually exclusive
     (e.g., different thresholding methods) while others are orthogonal and can be
     combined (e.g., blur + threshold + enhancement).
     
-    Preprocessing Groups:
+    Image Tuning Groups:
     - Threshold: adaptive, Otsu, simple threshold, or none
     - Blur: Gaussian, bilateral, median, or none  
     - Enhancement: CLAHE, histogram equalization, contrast stretching, or none
@@ -336,14 +610,23 @@ def orthogonal_grid_search() -> None:
     Evaluation:
     - Uses Figure of Merit combining Hamming + Edit distance
     - Tests against ground truth captions in tests/images/*-caption.txt
-    - Reports best parameters and final combined performance
+    - Reports best parameters and final combined tuning pipeline
     
     Output:
     - Logs detailed results for each parameter combination tested
-    - Reports final optimal preprocessing pipeline configuration
+    - Reports final optimal image tuning pipeline configuration
     """
     import cv2
     from itertools import product
+    try:
+        from tqdm import tqdm
+    except ImportError:
+        # Fallback if tqdm not installed
+        def tqdm(iterable, **kwargs):
+            return iterable
+    
+    # Import the fixed DocTR configuration
+    from untext.detector import TextDetector
     
     test_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tests", "images")
     test_images = ["test1.png", "test2.png", "test3.jpg", "test4-with-text.png"]
@@ -369,6 +652,41 @@ def orthogonal_grid_search() -> None:
         'contrast': {'method': 'contrast', 'alpha': [1.2, 1.5, 2.0], 'beta': [0, 10, 20]},
         'none': {'method': 'none'}
     }
+    
+    # Count total configurations for progress tracking
+    def count_configs(methods_dict):
+        total = 0
+        for config in methods_dict.values():
+            if config['method'] == 'none':
+                total += 1
+            else:
+                param_names = [k for k in config.keys() if k != 'method']
+                if not param_names:
+                    total += 1
+                else:
+                    param_combinations = 1
+                    for param in param_names:
+                        param_combinations *= len(config[param])
+                    total += param_combinations
+        return total
+    
+    threshold_count = count_configs(threshold_methods)
+    blur_count = count_configs(blur_methods)
+    enhancement_count = count_configs(enhancement_methods)
+    total_phase1_configs = threshold_count + blur_count + enhancement_count
+    
+    logger.info(f"=== GRID SEARCH CONFIGURATION ===")
+    logger.info(f"Threshold configs: {threshold_count}")
+    logger.info(f"Blur configs: {blur_count}")
+    logger.info(f"Enhancement configs: {enhancement_count}")
+    logger.info(f"Total Phase 1 configs: {total_phase1_configs}")
+    logger.info(f"Total OCR calls: {total_phase1_configs * len(test_images)}")
+    logger.info(f"Estimated runtime: {(total_phase1_configs * len(test_images) * 2.5) / 60:.1f} minutes")
+    
+    # Initialize the fixed DocTR detector once
+    logger.info("Initializing fixed DocTR configuration...")
+    fixed_detector = TextDetector(preprocess=False)  # We'll do custom preprocessing
+    logger.info("✅ Fixed DocTR initialized successfully")
     
     def apply_preprocessing_pipeline(
         image_path: str, 
@@ -468,34 +786,42 @@ def orthogonal_grid_search() -> None:
         best_config = None
         best_fom = float('inf')
         
-        logger.info(f"Testing {group_name} configurations...")
+        logger.info(f"🔍 Testing {group_name} configurations...")
         
+        # Build list of all test configs for progress tracking
+        all_test_configs = []
         for config_name, config in configs.items():
             if config['method'] == 'none':
-                # Test the 'none' option
-                test_configs = [{'method': 'none'}]
+                all_test_configs.append((config_name, {'method': 'none'}))
             else:
-                # Generate all parameter combinations for this method
                 param_names = [k for k in config.keys() if k != 'method']
                 if not param_names:
-                    test_configs = [config]
+                    all_test_configs.append((config_name, config))
                 else:
                     param_combinations = product(*[config[param] for param in param_names])
-                    test_configs = []
                     for combo in param_combinations:
                         test_config = {'method': config['method']}
                         for i, param_name in enumerate(param_names):
                             test_config[param_name] = combo[i]
-                        test_configs.append(test_config)
+                        all_test_configs.append((config_name, test_config))
+        
+        # Test each config with progress bar
+        progress_bar = tqdm(all_test_configs, desc=f"{group_name.capitalize()} configs", leave=False)
+        for config_name, test_config in progress_bar:
+            avg_fom = test_single_config(test_config, group_name, fixed_others)
             
-            for test_config in test_configs:
-                avg_fom = test_single_config(test_config, group_name, fixed_others)
-                logger.info(f"  {config_name} {test_config}: FOM = {avg_fom:.6f} (raw: {repr(avg_fom)})")
-                if avg_fom < best_fom:
-                    best_fom = avg_fom
-                    best_config = test_config
+            # Update progress bar with current best
+            progress_bar.set_postfix({
+                'current_fom': f'{avg_fom:.4f}',
+                'best_fom': f'{best_fom:.4f}' if best_fom != float('inf') else 'None'
+            })
+            
+            logger.info(f"  {config_name} {test_config}: FOM = {avg_fom:.6f}")
+            if avg_fom < best_fom:
+                best_fom = avg_fom
+                best_config = test_config
                     
-        logger.info(f"Best {group_name}: {best_config} with FOM: {best_fom:.4f}")
+        logger.info(f"✅ Best {group_name}: {best_config} with FOM: {best_fom:.4f}")
         return best_config, best_fom
     
     def test_single_config(
@@ -573,58 +899,22 @@ def orthogonal_grid_search() -> None:
         return sum(foms) / len(foms) if foms else float('inf')
     
     def extract_ocr_text_from_array(img_array: np.ndarray) -> str:
-        """Extract text from a preprocessed image array using DocTR OCR.
-        
-        This function applies the DocTR OCR model to a preprocessed image and
-        extracts all detected text by iterating through the hierarchical structure
-        of pages -> blocks -> lines.
+        """Extract text from a tuned image array using standardized OCR module.
         
         Args:
-            img_array: Preprocessed image as RGB numpy array
+            img_array: Tuned image as RGB numpy array
             
         Returns:
             Concatenated text string from all detected text regions, or empty
             string if OCR fails or no text is detected
-            
-        Note:
-            DocTR returns results in a hierarchical structure. We traverse all
-            pages, blocks, and lines to extract the complete text content.
         """
-        # Debug the input array
+        from . import ocr
         logger.debug(f"Input array shape: {img_array.shape}, dtype: {img_array.dtype}")
         logger.debug(f"Input array value range: [{img_array.min()}, {img_array.max()}]")
         
-        ocr = ocr_predictor(pretrained=True)
-        try:
-            ocr_results = ocr([img_array])
-            if isinstance(ocr_results, list):
-                ocr_results = ocr_results[0]
-        except Exception as e:
-            logger.error(f"OCR processing failed: {e}")
-            return ""
-        
-        # Debug the OCR results structure
-        logger.debug(f"OCR results type: {type(ocr_results)}")
-        if hasattr(ocr_results, "pages"):
-            logger.debug(f"Number of pages: {len(ocr_results.pages)}")
-            for i, page in enumerate(ocr_results.pages):
-                logger.debug(f"Page {i} has {len(page.blocks)} blocks")
-                for j, block in enumerate(page.blocks):
-                    logger.debug(f"Block {j} has {len(block.lines)} lines")
-                    for k, line in enumerate(block.lines):
-                        logger.debug(f"Line {k}: '{line.value}' (confidence: {getattr(line, 'confidence', 'N/A')})")
-        else:
-            logger.debug("OCR results has no 'pages' attribute")
-            
-        extracted_text = ""
-        if hasattr(ocr_results, "pages"):
-            for page in ocr_results.pages:
-                for block in page.blocks:
-                    for line in block.lines:
-                        extracted_text += line.value + " "
-        
-        logger.debug(f"Final extracted text: '{extracted_text.strip()}'")
-        return extracted_text.strip()
+        text = ocr.extract_text_from_array(img_array)
+        logger.debug(f"Final extracted text: '{text}'")
+        return text
     
     # Phase 1: Test each group independently
     logger.info("=== PHASE 1: Testing each preprocessing group independently ===")
@@ -2122,6 +2412,129 @@ def test_complete_doctr_fix():
     return success_count > 0
 
 
+def test_raw_ocr() -> None:
+    """Test OCR on raw images without any preprocessing to debug the pipeline."""
+    import os
+    from pathlib import Path
+    from doctr.models import ocr_predictor
+    from PIL import Image
+    import numpy as np
+    
+    logger.info("Testing raw OCR without preprocessor...")
+    
+    # Test images directory
+    test_dir = Path("tests/images")
+    test_image = test_dir / "test1.png"
+    caption_file = test_dir / "test1-caption.txt"
+    
+    if not test_image.exists():
+        logger.error(f"Test image not found: {test_image}")
+        return
+        
+    if not caption_file.exists():
+        logger.error(f"Caption file not found: {caption_file}")
+        return
+    
+    # Load ground truth
+    with open(caption_file, "r", encoding="utf-8") as f:
+        ground_truth = f.read().strip()
+    logger.info(f"Ground truth: '{ground_truth}'")
+    
+    try:
+        # Test 1: Raw image with PIL + numpy (like the working parts of ocr_image)
+        logger.info("Test 1: Raw image via PIL + numpy...")
+        img_pil = Image.open(test_image).convert("RGB")
+        img_array = np.array(img_pil)
+        
+        logger.info(f"Image shape: {img_array.shape}, dtype: {img_array.dtype}")
+        logger.info(f"Image value range: [{img_array.min()}, {img_array.max()}]")
+        
+        # Use simple OCR predictor
+        ocr = ocr_predictor(pretrained=True)
+        ocr_results = ocr([img_array])
+        
+        if isinstance(ocr_results, list):
+            ocr_results = ocr_results[0]
+        
+        logger.info(f"OCR results type: {type(ocr_results)}")
+        if hasattr(ocr_results, "pages"):
+            logger.info(f"OCR results contain {len(ocr_results.pages)} pages")
+            for i, page in enumerate(ocr_results.pages):
+                logger.info(f"Page {i} has {len(page.blocks)} blocks")
+                for j, block in enumerate(page.blocks):
+                    logger.info(f"  Block {j} has {len(block.lines)} lines")
+                    for k, line in enumerate(block.lines):
+                        logger.info(f"    Line {k}: '{line.value}' (confidence: {getattr(line, 'confidence', 'unknown')})")
+        
+        # Extract text
+        extracted_text = ""
+        if hasattr(ocr_results, "pages"):
+            for page in ocr_results.pages:
+                for block in page.blocks:
+                    for line in block.lines:
+                        extracted_text += line.value + " "
+        
+        extracted_text = extracted_text.strip()
+        logger.info(f"Raw OCR result: '{extracted_text}'")
+        
+        # Calculate metrics
+        if extracted_text:
+            hamming_dist = compute_hamming(extracted_text, ground_truth)
+            edit_dist = compute_edit_distance(extracted_text, ground_truth)
+            fom = compute_figure_of_merit(extracted_text, ground_truth)
+            
+            logger.info(f"Raw OCR metrics:")
+            logger.info(f"  Hamming distance: {hamming_dist}")
+            logger.info(f"  Edit distance: {edit_dist}")
+            logger.info(f"  Figure of Merit: {fom:.4f}")
+        else:
+            logger.error("Raw OCR returned empty string!")
+            
+        # Test 2: Check what the preprocessor does
+        logger.info("\nTest 2: Checking preprocessor behavior...")
+        try:
+            import untext.preprocessor as preprocessor
+            processed_array = preprocessor.preprocess_image(str(test_image))
+            if processed_array is not None:
+                logger.info(f"Preprocessed shape: {processed_array.shape}, dtype: {processed_array.dtype}")
+                logger.info(f"Preprocessed value range: [{processed_array.min()}, {processed_array.max()}]")
+                
+                # Try OCR on preprocessed image
+                ocr_preprocessed = ocr([processed_array])
+                if isinstance(ocr_preprocessed, list):
+                    ocr_preprocessed = ocr_preprocessed[0]
+                    
+                processed_text = ""
+                if hasattr(ocr_preprocessed, "pages"):
+                    logger.info(f"Preprocessed OCR: {len(ocr_preprocessed.pages)} pages")
+                    for page in ocr_preprocessed.pages:
+                        logger.info(f"  {len(page.blocks)} blocks")
+                        for block in page.blocks:
+                            for line in block.lines:
+                                processed_text += line.value + " "
+                
+                processed_text = processed_text.strip()
+                logger.info(f"Preprocessed OCR result: '{processed_text}'")
+                
+                if not processed_text and extracted_text:
+                    logger.error("Preprocessor is BREAKING the OCR! Raw works but preprocessed doesn't.")
+                elif not extracted_text and not processed_text:
+                    logger.error("Both raw and preprocessed OCR fail - fundamental DocTR issue.")
+                elif processed_text:
+                    logger.info("Preprocessor is working correctly.")
+                    
+            else:
+                logger.error("Preprocessor returned None!")
+                
+        except Exception as e:
+            logger.error(f"Preprocessor test failed: {e}")
+    
+    except Exception as e:
+        logger.error(f"Raw OCR test failed: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+
+
 def main():
     use_detection = False
     use_tesseract = False
@@ -2135,6 +2548,22 @@ def main():
         use_mask = True
     if '--grid-search' in sys.argv:
         use_grid_search = True
+    if '--smoke-test' in sys.argv:
+        logger.info("Running OCR smoke test...")
+        success = smoke_test_fixed_ocr()
+        if success:
+            logger.info("Smoke test passed! OCR implementation is ready for grid search.")
+        else:
+            logger.error("Smoke test failed! Fix OCR implementation before running grid search.")
+        return
+    if '--clean-grid-search' in sys.argv:
+        logger.info("Running clean grid search...")
+        clean_grid_search()
+        return
+    if '--test-raw-ocr' in sys.argv:
+        logger.info("Testing raw OCR...")
+        test_raw_ocr()
+        return
     if '--compare-preprocess' in sys.argv:
         compare_preprocessing_performance()
         return
@@ -2166,7 +2595,7 @@ def main():
     if use_grid_search:
         orthogonal_grid_search()
         return
-
+    
     # Define the directory containing test images and caption files
     test_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tests", "images")
 
@@ -2222,6 +2651,188 @@ def main():
                 logger.error(f"Failed to read caption file {caption_path}: {e}")
         else:
             logger.warning(f"Caption file not found for {img_file}")
+
+
+def smoke_test_fixed_ocr() -> bool:
+    """Smoke test to verify the fixed OCR implementation works correctly.
+    
+    This function tests the OCR pipeline on a known test image to ensure:
+    1. The fixed DocTR configuration is working
+    2. Text extraction produces reasonable results
+    3. Hamming/Edit distance metrics work properly
+    
+    Returns:
+        True if smoke test passes, False otherwise
+    """
+    logger.info("Running OCR smoke test...")
+    
+    test_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "tests", "images")
+    test_image = os.path.join(test_dir, "test1.png")
+    caption_file = os.path.join(test_dir, "test1-caption.txt")
+    
+    if not os.path.exists(test_image):
+        logger.error(f"Smoke test failed: test image not found at {test_image}")
+        return False
+    
+    if not os.path.exists(caption_file):
+        logger.error(f"Smoke test failed: caption file not found at {caption_file}")
+        return False
+    
+    try:
+        # Load ground truth
+        with open(caption_file, "r", encoding="utf-8") as f:
+            ground_truth = f.read().strip()
+        logger.info(f"Ground truth: '{ground_truth}'")
+        
+        # Test 1: No tuning (just basic image loading)
+        logger.info("Test 1: No image tuning...")
+        no_tuning_config = {'method': 'none'}
+        
+        # Use the apply_tuning_pipeline function from grid search
+        def apply_tuning_pipeline(image_path, threshold_config, blur_config, enhancement_config):
+            img = cv2.imread(image_path)
+            if img is None:
+                return None
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            
+            # Apply enhancement
+            if enhancement_config['method'] == 'clahe':
+                clahe = cv2.createCLAHE(clipLimit=enhancement_config['clip_limit'], 
+                                       tileGridSize=enhancement_config['tile_size'])
+                gray = clahe.apply(gray)
+            elif enhancement_config['method'] == 'histogram_eq':
+                gray = cv2.equalizeHist(gray)
+            elif enhancement_config['method'] == 'contrast':
+                gray = cv2.convertScaleAbs(gray, alpha=enhancement_config['alpha'], beta=enhancement_config['beta'])
+            
+            # Apply blur
+            if blur_config['method'] == 'gaussian':
+                k = blur_config['kernel']
+                gray = cv2.GaussianBlur(gray, (k, k), 0)
+            elif blur_config['method'] == 'bilateral':
+                gray = cv2.bilateralFilter(gray, blur_config['d'], blur_config['sigma_color'], blur_config['sigma_space'])
+            elif blur_config['method'] == 'median':
+                gray = cv2.medianBlur(gray, blur_config['kernel'])
+            
+            # Apply thresholding
+            if threshold_config['method'] == 'adaptive':
+                result = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                             cv2.THRESH_BINARY, threshold_config['block_size'], threshold_config['C'])
+            elif threshold_config['method'] == 'otsu':
+                _, result = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            elif threshold_config['method'] == 'simple':
+                _, result = cv2.threshold(gray, threshold_config['threshold'], 255, cv2.THRESH_BINARY)
+            else:  # none
+                result = gray
+            
+            # Convert back to RGB
+            if len(result.shape) == 2:
+                result = cv2.cvtColor(result, cv2.COLOR_GRAY2RGB)
+            
+            return result
+        
+        tuned_img = apply_tuning_pipeline(test_image, no_tuning_config, no_tuning_config, no_tuning_config)
+        if tuned_img is None:
+            logger.error("Failed to load test image")
+            return False
+        
+        # Save the tuned image temporarily and use the WORKING ocr_image function
+        import tempfile
+        temp_image_path = None
+        try:
+            # Convert RGB back to BGR for saving
+            if len(tuned_img.shape) == 3:
+                bgr_img = cv2.cvtColor(tuned_img, cv2.COLOR_RGB2BGR)
+            else:
+                bgr_img = tuned_img
+                
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                temp_image_path = tmp_file.name
+                cv2.imwrite(temp_image_path, bgr_img)
+            
+            # Use the WORKING ocr_image function
+            ocr_result = ocr_image(temp_image_path)
+            
+        finally:
+            # Clean up temp file
+            if temp_image_path and os.path.exists(temp_image_path):
+                os.remove(temp_image_path)
+        logger.info(f"OCR result: '{ocr_result}'")
+        
+        # Calculate metrics
+        hamming_dist = compute_hamming(ocr_result, ground_truth)
+        edit_dist = compute_edit_distance(ocr_result, ground_truth)
+        fom = compute_figure_of_merit(ocr_result, ground_truth)
+        
+        logger.info(f"Metrics:")
+        logger.info(f"   Hamming distance: {hamming_dist}")
+        logger.info(f"   Edit distance: {edit_dist}")
+        logger.info(f"   Figure of Merit: {fom:.4f}")
+        
+        # Test 2: Simple tuning pipeline
+        logger.info("Test 2: Simple CLAHE enhancement...")
+        clahe_config = {'method': 'clahe', 'clip_limit': 2.0, 'tile_size': (8, 8)}
+        
+        tuned_img2 = apply_tuning_pipeline(test_image, no_tuning_config, no_tuning_config, clahe_config)
+        
+        # Use the WORKING ocr_image function for second test too
+        temp_image_path2 = None
+        try:
+            # Convert RGB back to BGR for saving
+            if len(tuned_img2.shape) == 3:
+                bgr_img2 = cv2.cvtColor(tuned_img2, cv2.COLOR_RGB2BGR)
+            else:
+                bgr_img2 = tuned_img2
+                
+            # Save to temporary file
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_file:
+                temp_image_path2 = tmp_file.name
+                cv2.imwrite(temp_image_path2, bgr_img2)
+            
+            # Use the WORKING ocr_image function
+            ocr_result2 = ocr_image(temp_image_path2)
+            
+        finally:
+            # Clean up temp file
+            if temp_image_path2 and os.path.exists(temp_image_path2):
+                os.remove(temp_image_path2)
+        
+        hamming_dist2 = compute_hamming(ocr_result2, ground_truth)
+        edit_dist2 = compute_edit_distance(ocr_result2, ground_truth)
+        fom2 = compute_figure_of_merit(ocr_result2, ground_truth)
+        
+        logger.info(f"OCR result with CLAHE: '{ocr_result2}'")
+        logger.info(f"CLAHE Metrics:")
+        logger.info(f"   Hamming distance: {hamming_dist2}")
+        logger.info(f"   Edit distance: {edit_dist2}")
+        logger.info(f"   Figure of Merit: {fom2:.4f}")
+        
+        # Comparison
+        if fom2 < fom:
+            logger.info(f"CLAHE tuning improves FOM by {fom - fom2:.4f}")
+        elif fom2 > fom:
+            logger.info(f"CLAHE tuning worsens FOM by {fom2 - fom:.4f}")
+        else:
+            logger.info(f"CLAHE tuning has no effect on FOM")
+        
+        # Success criteria
+        if len(ocr_result) == 0:
+            logger.error("Smoke test failed: No text extracted")
+            return False
+        
+        if fom == float('inf'):
+            logger.error("Smoke test failed: Invalid FOM calculation")
+            return False
+        
+        logger.info("Smoke test passed! Fixed OCR is working correctly")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Smoke test failed with exception: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        return False
 
 
 if __name__ == "__main__":

@@ -276,8 +276,8 @@ class ImagePatcher:
         detections: List[Dict],
         image_shape: Tuple[int, int],
         mask: Optional[MaskArray] = None,
-        scale_factor: int = 3,
-        min_margin: int = 16
+        scale_factor: float = 1.2,
+        min_margin: int = 32
     ) -> Optional[Subregion]:
         """Calculate the subregion to process based on detections and mask.
         
@@ -372,7 +372,7 @@ class ImagePatcher:
         Args:
             image_mask_pairs: Dictionary mapping image paths to their mask paths
             output_dir: Directory to save patched images. If None, will save in the
-                       same directory as input images.
+            same directory as input images.
         
         Returns:
             Dictionary mapping input image paths to their patched image paths.
@@ -416,7 +416,7 @@ class ImagePatcher:
                 
             except Exception as e:
                 logger.error("Failed to process image pair %s -> %s: %s",
-                           image_path, mask_path, str(e))
+                        image_path, mask_path, str(e))
                 continue
         
         if not patched_paths:

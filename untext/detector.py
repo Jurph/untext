@@ -219,14 +219,128 @@ class TextDetector:
             image_shape: Shape of the image (height, width)
             
         Returns:
-            Binary mask as H×W uint8 numpy array (1 = text region)
+            Binary mask as H×W uint8 numpy array (255 = text region)
         """
         # Convert input to numpy array if needed
         if not isinstance(geometry, np.ndarray):
             geometry = np.array(geometry, dtype=np.float32)
             
         mask = np.zeros(image_shape, dtype=np.uint8)
-        cv2.fillPoly(mask, [geometry.astype(np.int32)], 1)
+        cv2.fillPoly(mask, [geometry.astype(np.int32)], 255)
+        return mask
+
+    def detect_with_character_masks(self, image: ImageArray) -> Tuple[MaskArray, List[Detection]]:
+        """Detect text and create character-level masks by rendering recognized text.
+        
+        This method performs full OCR (detection + recognition) and creates masks
+        by drawing the actual recognized characters at their detected positions,
+        then dilating for better coverage.
+        
+        Args:
+            image: Input image as H×W×3 BGR uint8 numpy array
+            
+        Returns:
+            Tuple of:
+            - Binary mask created by rendering recognized characters
+            - List of detection dictionaries with text content
+        """
+        # Get basic detections first
+        mask, detections = self.detect(image)
+        
+        if len(detections) == 0:
+            return mask, detections
+        
+        # Use standardized OCR to get actual text content
+        try:
+            from .ocr import extract_text_from_array
+            
+            # Convert BGR to RGB for OCR
+            image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            
+            # Extract text content (this uses the full OCR pipeline)
+            ocr_text = extract_text_from_array(image_rgb)
+            
+            # Create character-based mask by rendering text
+            char_mask = self._create_character_mask(image, detections, ocr_text)
+            
+            # Apply dilation to the character mask
+            if self.mask_dilation > 0:
+                kernel = np.ones((self.mask_dilation * 2 + 1, self.mask_dilation * 2 + 1), np.uint8)
+                char_mask = cv2.dilate(char_mask, kernel)
+            
+            logger.info(f"Created character-level mask from {len(detections)} detections")
+            return char_mask, detections
+            
+        except Exception as e:
+            logger.warning(f"Character mask generation failed, using polygon masks: {e}")
+            # Fall back to polygon masks if character rendering fails
+            return mask, detections
+
+    def _create_character_mask(self, image: ImageArray, detections: List[Detection], ocr_text: str) -> MaskArray:
+        """Create mask by rendering actual characters at detected positions.
+        
+        Args:
+            image: Original image for size reference
+            detections: List of text detection regions
+            ocr_text: Recognized text content
+            
+        Returns:
+            Binary mask with rendered characters
+        """
+        mask = np.zeros(image.shape[:2], dtype=np.uint8)
+        
+        # If we have no OCR text, fall back to polygon rendering
+        if not ocr_text or not ocr_text.strip():
+            for det in detections:
+                det_mask = self._geometry_to_mask(det['geometry'], image.shape[:2])
+                mask = np.maximum(mask, det_mask)
+            return mask
+        
+        # Split OCR text into words/characters for rendering
+        words = ocr_text.strip().split()
+        
+        for i, detection in enumerate(detections):
+            geometry = detection['geometry']
+            
+            # Calculate bounding box from geometry
+            x_coords = geometry[:, 0]
+            y_coords = geometry[:, 1]
+            x1, y1 = int(np.min(x_coords)), int(np.min(y_coords))
+            x2, y2 = int(np.max(x_coords)), int(np.max(y_coords))
+            width, height = x2 - x1, y2 - y1
+            
+            # Determine text to render for this detection
+            if i < len(words):
+                text_to_render = words[i]
+            elif len(words) == 1:
+                # Single word detected, use it for all detections
+                text_to_render = words[0]
+            else:
+                # Fall back to rendering "X" as placeholder
+                text_to_render = "X" * max(1, width // 10)
+            
+            # Calculate font scale based on detection size
+            base_font_scale = min(width / 100.0, height / 30.0)
+            font_scale = max(0.3, min(3.0, base_font_scale))  # Clamp between 0.3 and 3.0
+            
+            # Calculate thickness based on font scale
+            thickness = max(1, int(font_scale * 2))
+            
+            # Get text size to center it
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            (text_width, text_height), baseline = cv2.getTextSize(text_to_render, font, font_scale, thickness)
+            
+            # Center text in detection region
+            text_x = x1 + (width - text_width) // 2
+            text_y = y1 + (height + text_height) // 2
+            
+            # Ensure text position is within image bounds
+            text_x = max(0, min(text_x, image.shape[1] - text_width))
+            text_y = max(text_height, min(text_y, image.shape[0]))
+            
+            # Render white text on the mask
+            cv2.putText(mask, text_to_render, (text_x, text_y), font, font_scale, 255, thickness)
+        
         return mask
 
     def _filter_detections(self, detections: List[Dict], image_shape: Tuple[int, int]) -> List[Dict]:
@@ -290,28 +404,13 @@ class TextDetector:
             logger.info("No detections to process for OCR.")
             return []
 
-        from doctr.models import ocr_predictor
-        from doctr.io import DocumentFile
-
-        # Instantiate OCR predictor using the existing detection model and default recognition model 'crnn_vgg16_bn'
-        ocr_model = ocr_predictor(self.model, "crnn_vgg16_bn", pretrained=True)
-
-        ocr_results = []
-        for det in detections:
-            # Compute bounding rectangle from the detected geometry
-            pts = det["geometry"].astype(np.int32)
-            x, y, w, h = cv2.boundingRect(pts)
-            # Crop the detected region from the image
-            cropped = image[y:y+h, x:x+w]
-            # Create a DocumentFile from the cropped image
-            doc = DocumentFile.from_images([cropped])
-            # Run OCR on the cropped region
-            ocr_out = ocr_model(doc)
-            # Render OCR result to extract text
-            text = ocr_out.render()
-            ocr_results.append({"box": (x, y, w, h), "text": text})
-
-        return ocr_results
+        # Use standardized OCR module
+        from .ocr import extract_text_from_detections
+        
+        # Convert BGR to RGB for standardized OCR
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
+        return extract_text_from_detections(image_rgb, detections)
 
 class WordMaskGenerator:
     """Class for generating word-level masks from text detection results."""

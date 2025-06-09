@@ -1,15 +1,17 @@
 # untext
 
-A tool for removing text-based watermarks from images using state-of-the-art inpainting models.
+A tool for removing text-based watermarks from images using OCR, masking, and inpainting models.
 
 Features:
 * Fast text detection using DocTR
 * High-quality inpainting using LaMa (default)
 * Alternative inpainting backends:
-  * TALEA for high-quality results on complex textures
+  * TELEA for high-quality results on complex textures
   * Deep Image Prior (DIP) for cases where neural approaches struggle
 * Automatic subregion detection and processing
-* Edge blending for seamless results
+
+**untext** looks at an image for text and locates it within the image using DocTR's detection rules. In `--letters` mode (the default) we use DocTR's OCR engine to recognize individual letters and generate a mask that silghtly dilates the letters' shapes. In `--box` mode we avoid the OCR step and simply mask a large region covered by the text bounding box. The masked region(s) are cropped to a manageable pixel size before inpainting so we're only computing over the pixels that contribute context to the inpainted area, about 2x the size of the masked region. Then inpainting defaults to `--method LaMa` but can also use `--method TELEA` or, if you really need it, Deep Image Prior (but this is slow and you should ensure you have the mask perfect first!). 
+
 
 ## Installation
 
