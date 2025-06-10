@@ -60,7 +60,7 @@ def main() -> None:
     for i, image_path in enumerate(image_files, 1):
         logger.info(f"Processing image {i}/{len(image_files)}: {image_path.name}")
         try:
-            process_single_image(image_path, output_path, target_color, args.keep_masks)
+            process_single_image(image_path, output_path, target_color, args.keep_masks, args.method)
         except Exception as e:
             logger.error(f"Error processing {image_path.name}: {str(e)}")
             if args.keep_masks:
@@ -81,7 +81,8 @@ def process_single_image(
     image_path: Path, 
     output_dir: Path, 
     target_color: Optional[tuple] = None,
-    keep_masks: bool = False
+    keep_masks: bool = False,
+    method: str = "lama"
 ) -> None:
     """Process a single image through the complete pipeline.
     
@@ -90,6 +91,7 @@ def process_single_image(
         output_dir: Directory to save outputs
         target_color: Optional target color as BGR tuple
         keep_masks: Whether to save debug masks
+        method: Inpainting method to use ("lama" or "telea")
     """
     logger.info(f"Loading image: {image_path.name}")
     
@@ -124,7 +126,7 @@ def process_single_image(
     
     # 5. Inpaint image
     logger.info("Inpainting masked regions...")
-    result = inpaint_image(image, mask, bbox)
+    result = inpaint_image(image, mask, bbox, method=method)
     
     # Save results
     output_path = output_dir / f"{image_path.stem}_clean{image_path.suffix}"
@@ -162,6 +164,13 @@ def parse_args() -> argparse.Namespace:
         "-k", "--keep-masks",
         action="store_true",
         help="Save debug masks alongside output images"
+    )
+    
+    parser.add_argument(
+        "-m", "--method",
+        choices=["lama", "telea"],
+        default="lama",
+        help="Inpainting method to use (default: lama)"
     )
     
     parser.add_argument(

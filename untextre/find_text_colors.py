@@ -35,8 +35,8 @@ def find_text_colors(
         - Representative BGR color tuple (the quantized color)
         - List of original BGR colors that were assigned to this quantized color
     """
-    # TODO: Make number of quantized colors configurable (currently hardcoded to 12)
-    return _get_most_common_color(image, bbox, num_colors=12, target_color=target_color)
+    # TODO: Make number of quantized colors configurable (currently hardcoded to 8)
+    return _get_most_common_color(image, bbox, num_colors=8, target_color=target_color)
 
 def hex_to_bgr(hex_color: str) -> Color:
     """Convert hex color string to BGR tuple.
@@ -81,7 +81,7 @@ def _get_most_common_color(
     Args:
         image: Input image in BGR format
         bbox: Bounding box (x, y, width, height)
-        num_colors: Number of colors to quantize to (default: 12)
+        num_colors: Number of colors to quantize to (default: 8)
         target_color: Optional target BGR color to match against
         
     Returns:
@@ -149,7 +149,7 @@ def _get_most_common_color(
     
     # Filter out colors that appear in fewer than MIN_PIXELS pixels
     # TODO: Make minimum pixel threshold configurable
-    MIN_PIXELS = 2
+    MIN_PIXELS = 4
     mask = color_counts >= MIN_PIXELS
     filtered_colors = unique_colors[mask]
     filtered_counts = color_counts[mask]

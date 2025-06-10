@@ -50,17 +50,30 @@ def detect_text_regions(image: ImageArray) -> List[BBox]:
         bbox = _geometry_to_bbox(det['geometry'])
         bboxes.append(bbox)
     
-    logger.info(f"Detected {len(bboxes)} text regions")
+    if bboxes:
+        bbox_coords = [f"({bbox[0]},{bbox[1]})" for bbox in bboxes]
+        logger.info(f"Detected {len(bboxes)} text regions")
+        logger.info(f"Found bounding boxes at: {', '.join(bbox_coords)}")
+        # Also log dimensions for context
+        bbox_dims = [f"{bbox[2]}×{bbox[3]}" for bbox in bboxes]
+        logger.info(f"Bounding box dimensions: {', '.join(bbox_dims)}")
+    else:
+        logger.info("No text regions detected")
+    
     return bboxes
 
 def get_largest_text_region(image: ImageArray) -> BBox:
-    """Get the largest detected text region.
+    """Get the largest detected text region, merged with boxes at the same height.
+    
+    This function finds the largest bounding box, then merges it with any other
+    bounding boxes whose vertical span includes the centroid Y-coordinate of
+    the largest box. This groups text that appears on the same line.
     
     Args:
         image: Input image as H×W×3 BGR uint8 numpy array
         
     Returns:
-        Bounding box of the largest text region as (x, y, width, height)
+        Merged bounding box as (x, y, width, height)
         
     Raises:
         ValueError: If no text is detected
@@ -73,7 +86,75 @@ def get_largest_text_region(image: ImageArray) -> BBox:
     
     # Find largest bbox by area
     largest_bbox = max(bboxes, key=lambda bbox: bbox[2] * bbox[3])
-    return largest_bbox
+    area = largest_bbox[2] * largest_bbox[3]
+    logger.info(f"Largest text region: ({largest_bbox[0]},{largest_bbox[1]}) "
+                f"size {largest_bbox[2]}×{largest_bbox[3]} (area: {area} pixels)")
+    
+    # Calculate centroid Y-coordinate of the largest box
+    largest_x, largest_y, largest_w, largest_h = largest_bbox
+    centroid_y = largest_y + largest_h // 2
+    logger.info(f"Largest box centroid Y-coordinate: {centroid_y}")
+    
+    # Find boxes whose vertical span includes the centroid Y-coordinate
+    boxes_to_merge = [largest_bbox]
+    for bbox in bboxes:
+        if bbox == largest_bbox:
+            continue
+        
+        x, y, w, h = bbox
+        # Check if centroid_y falls within this box's vertical span
+        if y <= centroid_y <= y + h:
+            boxes_to_merge.append(bbox)
+            logger.info(f"Merging box ({x},{y}) size {w}×{h} - overlaps at height {centroid_y}")
+    
+    # Merge all selected boxes into one
+    merged_bbox = _merge_bboxes(boxes_to_merge)
+    merged_area = merged_bbox[2] * merged_bbox[3]
+    
+    logger.info(f"Merged {len(boxes_to_merge)} boxes into final region: "
+                f"({merged_bbox[0]},{merged_bbox[1]}) size {merged_bbox[2]}×{merged_bbox[3]} "
+                f"(area: {merged_area} pixels)")
+    
+    return merged_bbox
+
+def _merge_bboxes(bboxes: List[BBox]) -> BBox:
+    """Merge multiple bounding boxes into one encompassing box.
+    
+    Args:
+        bboxes: List of bounding boxes as (x, y, width, height) tuples
+        
+    Returns:
+        Merged bounding box as (x, y, width, height)
+    """
+    if not bboxes:
+        raise ValueError("Cannot merge empty list of bounding boxes")
+    
+    if len(bboxes) == 1:
+        return bboxes[0]
+    
+    # Convert to (x1, y1, x2, y2) format for easier calculation
+    x1_coords = []
+    y1_coords = []
+    x2_coords = []
+    y2_coords = []
+    
+    for x, y, w, h in bboxes:
+        x1_coords.append(x)
+        y1_coords.append(y)
+        x2_coords.append(x + w)
+        y2_coords.append(y + h)
+    
+    # Find the encompassing bounds
+    merged_x1 = min(x1_coords)
+    merged_y1 = min(y1_coords)
+    merged_x2 = max(x2_coords)
+    merged_y2 = max(y2_coords)
+    
+    # Convert back to (x, y, width, height) format
+    merged_w = merged_x2 - merged_x1
+    merged_h = merged_y2 - merged_y1
+    
+    return (merged_x1, merged_y1, merged_w, merged_h)
 
 def _geometry_to_bbox(geometry: np.ndarray) -> BBox:
     """Convert geometry points to bounding box.

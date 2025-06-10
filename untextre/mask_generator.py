@@ -111,7 +111,11 @@ def clean_up_mask(mask: MaskArray, bbox: BBox) -> MaskArray:
     mask = cv2.dilate(mask, kernel_dilate, iterations=2)
     mask = cv2.GaussianBlur(mask, (3, 3), 0)
     
-    # 8. Filter out components far from the text region
+    # 8. Additional dilate-by-6, blur-by-3 round for better coverage
+    mask = cv2.dilate(mask, kernel_dilate)
+    mask = cv2.GaussianBlur(mask, (3, 3), 0)
+    
+    # 9. Filter out components far from the text region
     mask = anchor_connected_components(mask, bbox)
     
     return mask
