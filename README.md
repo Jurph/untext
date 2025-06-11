@@ -3,26 +3,42 @@
 A tool for removing text-based watermarks from images using OCR, masking, and inpainting models.
 
 Features:
-* Fast text detection using DocTR
-* High-quality inpainting using LaMa (default)
-* Alternative inpainting backends:
-  * TELEA for high-quality results on complex textures
-  * Deep Image Prior (DIP) for cases where neural approaches struggle
+* Multiple text detection methods:
+  * **DocTR** (default): Deep learning-based detection with high accuracy
+  * **EasyOCR**: Simple OCR-based detection  
+  * **EAST**: Efficient OpenCV-based detector (fast, no PyTorch dependency)
+* High-quality inpainting using LaMa (default) or TELEA 
 * Automatic subregion detection and processing
+* Batch processing 
+* Timing measurements 
 
-**untext** looks at an image for text and locates it within the image using DocTR's detection rules. In `--letters` mode (the default) we use DocTR's OCR engine to recognize individual letters and generate a mask that silghtly dilates the letters' shapes. In `--box` mode we avoid the OCR step and simply mask a large region covered by the text bounding box. The masked region(s) are cropped to a manageable pixel size before inpainting so we're only computing over the pixels that contribute context to the inpainted area, about 2x the size of the masked region. Then inpainting defaults to `--method LaMa` but can also use `--method TELEA` or, if you really need it, Deep Image Prior (but this is slow and you should ensure you have the mask perfect first!). 
-
+**untext** looks at an image for text and locates it within the image using the OCR engine's detection rules. We look for clusters of similar coloration within the detection region and decide which one is most likely to be text, then mask that set of colors throughout the neighborhood of the detection region. The white pixels in the binary mask are dilated, eroded, blurred, and more to ensure that noisy one-off pixels aren't inpainted and text-like contiguous shapes are. The masked region(s) are cropped to a manageable pixel size before inpainting so we're only computing over the pixels that contribute context to the inpainted area, about 2x the size of the masked region. Then we inpaint the original image 
 
 ## Installation
 
+**Important: Install PyTorch First**
+
+Before installing other dependencies, we strongly recommend installing PyTorch through their official ["Get Started" page](https://pytorch.org/get-started/locally/). PyTorch's installation tool automatically handles the complex deconfliction of CUDA versions, operating systems, and wheel files to ensure you get the right build for your system.
+
+Visit https://pytorch.org/get-started/locally/ and select your configuration:
+- Your OS (Linux, Mac, Windows)  
+- Package manager (Pip, Conda, etc.)
+- Python version
+- CUDA version (or CPU-only)
+
+Then run the generated command, for example:
 ```bash
-pip install -r requirements.txt
+# Example for Linux/Windows with CUDA 11.8
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# Example for CPU-only
+pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 ```
 
-For GPU acceleration (recommended), also install PyTorch with CUDA support:
+**Then install remaining dependencies:**
 
 ```bash
-pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu118
+pip install -r requirements.txt
 ```
 
 ## Usage
@@ -36,7 +52,14 @@ python -m untext.cli -i image.jpg -o output.jpg
 Advanced options:
 
 ```bash
-python -m untext.cli -i input_dir/ -o output_dir/ --method lama --save-masks
+# Use EAST detector (faster, requires only OpenCV)
+python -m untextre.cli -i input_dir/ -o output_dir/ --detector east
+
+# Use EasyOCR with TELEA inpainting
+python -m untextre.cli -i image.jpg -o output.jpg --detector easyocr --paint telea
+
+# Full pipeline with debug masks
+python -m untextre.cli -i input_dir/ -o output_dir/ --keep-masks --timing
 ```
 
 ### Options

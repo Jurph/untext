@@ -49,6 +49,11 @@ def inpaint_image(
     if method not in ["lama", "telea"]:
         raise ValueError(f"Invalid inpainting method: {method}. Must be 'lama' or 'telea'")
     
+    # Check if there are any pixels to inpaint
+    if not _has_pixels_to_inpaint(mask):
+        logger.info("No pixels to inpaint found in mask - returning original image unchanged")
+        return image.copy()
+    
     if method == "lama":
         return _inpaint_with_lama(image, mask, bbox)
     else:  # method == "telea"
@@ -77,6 +82,11 @@ def _inpaint_with_lama(
     
     # Calculate subregion for efficient processing
     subregion = _calculate_inpainting_subregion(mask, bbox, image.shape[:2])
+    
+    # If no subregion found (no pixels to inpaint), return original image
+    if subregion is None:
+        logger.info("No subregion to inpaint - returning original image unchanged")
+        return image.copy()
     
     # Initialize LaMa inpainter
     inpainter = LamaInpainter()
@@ -115,6 +125,11 @@ def _inpaint_with_telea(
             mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
         mask = mask.astype(np.uint8)
         
+        # Check if there are any pixels to inpaint in the processed mask
+        if not np.any(mask > 0):
+            logger.info("No pixels to inpaint in processed mask - returning original image unchanged")
+            return image.copy()
+        
         # Apply TELEA inpainting with radius of 3
         # TODO: Make inpainting radius configurable
         logger.info("Applying TELEA inpainting")
@@ -125,6 +140,17 @@ def _inpaint_with_telea(
         
     except Exception as e:
         raise RuntimeError(f"TELEA inpainting failed: {e}")
+
+def _has_pixels_to_inpaint(mask: MaskArray) -> bool:
+    """Check if the mask contains any pixels to inpaint.
+    
+    Args:
+        mask: Binary mask array
+        
+    Returns:
+        True if there are pixels to inpaint (white pixels), False otherwise
+    """
+    return np.any(mask > 0)
 
 def _calculate_inpainting_subregion(
     mask: MaskArray, 
@@ -152,15 +178,37 @@ def _calculate_inpainting_subregion(
     min_y, max_y = ys.min(), ys.max()
     mask_bbox = (min_x, min_y, max_x - min_x, max_y - min_y)
     
+    # Log mask statistics for debugging
+    total_white_pixels = len(xs)
+    mask_area = mask_bbox[2] * mask_bbox[3]
+    coverage_percent = (total_white_pixels / mask_area) * 100 if mask_area > 0 else 0
+    
+    logger.info(f"Mask analysis:")
+    logger.info(f"  White pixels found: {total_white_pixels:,}")
+    logger.info(f"  Mask bounding box: ({mask_bbox[0]}, {mask_bbox[1]}) size {mask_bbox[2]}×{mask_bbox[3]}")
+    logger.info(f"  Mask area: {mask_area:,} pixels")
+    logger.info(f"  Coverage density: {coverage_percent:.1f}%")
+    
+    if image_shape is not None:
+        total_image_pixels = image_shape[0] * image_shape[1]
+        image_coverage_percent = (total_white_pixels / total_image_pixels) * 100
+        logger.info(f"  Image coverage: {image_coverage_percent:.2f}% of total image")
+    
     # Dilate the mask bbox by 64px for better context
     # TODO: Make dilation amount configurable
     dilation_amount = 64
+    original_bbox = mask_bbox
     if image_shape is not None:
         mask_bbox = dilate_bbox(mask_bbox, dilation_amount, image_shape)
+    
+    # Log dilation results
+    logger.info(f"After {dilation_amount}px dilation:")
+    logger.info(f"  Original bbox: ({original_bbox[0]}, {original_bbox[1]}) size {original_bbox[2]}×{original_bbox[3]}")
+    logger.info(f"  Dilated bbox: ({mask_bbox[0]}, {mask_bbox[1]}) size {mask_bbox[2]}×{mask_bbox[3]}")
     
     # Convert to subregion format (x1, y1, x2, y2)
     x, y, w, h = mask_bbox
     subregion = (x, y, x + w, y + h)
     
-    logger.debug(f"Calculated inpainting subregion: {subregion}")
+    logger.info(f"Final inpainting subregion: {subregion}")
     return subregion 

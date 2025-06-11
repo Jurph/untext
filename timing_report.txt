@@ -1,0 +1,53 @@
+========================================
+DETAILED TIMING REPORT
+========================================
+Image        MP  Det Col Msk Inp Tot
+----------------------------------------
+022.jpg      20.0 7.0 3.3 10.3 6.4 27.8
+026.jpg      20.0 7.1 0.1 0.4 0.0 8.9
+2316x3088_5b 7.2 6.1 0.4 1.9 5.9 14.7
+2316x3088_b9 7.2 6.7 0.3 3.6 40.9 51.9
+2316x3088_e4 7.2 6.2 0.4 3.1 5.4 15.3
+2688x3763_62 10.1 7.1 1.3 4.7 8.5 22.1
+2688x3763_fa 10.1 6.3 0.8 3.5 7.8 18.8
+2689x3585_28 9.6 6.3 1.0 6.1 18.5 32.5
+2x8fhv.jpg   22.1 6.7 1.1 38.6 83.0 130.4
+2x8fi7.jpg   22.1 6.9 1.0 39.2 116.7 164.8
+3840x2880_06 11.1 6.7 0.7 7.5 6.2 21.5
+3840x5376_8a 20.6 6.5 1.8 35.4 10.3 54.9
+6592ic.jpg   9.8 6.0 1.6 5.3 9.8 23.3
+6592ie.jpg   9.8 7.2 1.0 4.5 9.9 23.1
+740825-elena 2.5 6.0 0.1 0.2 4.2 10.7
+cNoNHcQ.jpg  11.9 6.1 0.3 5.9 4.9 17.9
+GCCOia6.jpg  1.3 5.7 0.0 0.0 0.0 5.8
+he0qb71ocap8 0.7 5.8 0.1 0.0 0.0 5.9
+hpbffap72b08 6.5 6.9 0.4 1.3 7.3 16.1
+iSZiiSsi.jpe 1.5 7.3 0.1 0.4 4.9 12.7
+jn80wrlncap8 0.8 5.5 0.1 0.0 0.0 5.7
+mkrn7ijncap8 1.2 5.5 0.1 0.0 0.0 5.8
+phfh5pk8qbs8 14.9 7.1 0.9 13.3 5.3 27.3
+tumblr_orgg6 2.5 5.7 0.1 0.3 6.7 12.9
+v9c8636pn5q8 11.2 6.6 1.3 14.6 83.1 106.1
+----------------------------------------
+MEDIAN           6.5 0.4 3.6 6.4 18.8
+MAX              7.3 3.3 39.2 116.7 164.8
+TOTAL                            837.0
+========================================
+
+KEY INSIGHTS:
+- 25 images processed in 837 seconds (13.9 minutes)
+- Detection time is consistent (5.5-7.3s, median 6.5s)
+- Color analysis is very fast (0.0-3.3s, median 0.4s)
+- Mask generation varies widely (0.0-39.2s, median 3.6s)
+- Inpainting is the biggest variable (0.0-116.7s, median 6.4s)
+
+BOTTLENECKS IDENTIFIED:
+1. Large images with complex masks (2x8fi7.jpg: 39.2s mask + 116.7s inpaint)
+2. High-resolution images (20+ MP) take longer for masking
+3. Several images had empty masks (0.0s inpaint) - good optimization working
+
+PERFORMANCE NOTES:
+- 6 images had no inpainting (empty masks detected)
+- Median inpaint time of 6.4s suggests most watermarks are manageable
+- Max inpaint time of 116.7s indicates some very complex cases
+- Detection time scales poorly with resolution (needs DocTR optimization) 
