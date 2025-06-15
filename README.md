@@ -5,11 +5,8 @@ A tool for removing text watermarks from images using consensus detection, spati
 ## Key Features
 
 * **Consensus Detection**: Combines three text detection methods (EAST, DocTR, EasyOCR) to find regions where multiple detectors agree, ensuring high-confidence text detection
-* **Spatial TF-IDF Analysis**: Revolutionary color detection that treats text regions as "documents" and surrounding areas as "corpus" to identify colors distinctive to text
-* **Adaptive Thresholding**: Uses Otsu thresholding on TF-IDF likelihood maps for automatic binary mask generation
+* **Spatial TF-IDF Analysis**: Finds the most text-like color family in each consensus region and masks it out 
 * **High-Quality Inpainting**: LaMa (default) or TELEA inpainting with optimized region processing
-* **Performance Optimized**: Models loaded once and reused across all images for fast batch processing
-* **Configurable Granularity**: Adjustable color clustering (4-48 clusters) for speed vs. accuracy trade-offs
 
 ## How It Works
 
@@ -17,9 +14,9 @@ A tool for removing text watermarks from images using consensus detection, spati
 
 1. **Consensus Detection**: Runs EAST, DocTR, and EasyOCR detectors simultaneously to find text regions where 2+ detectors agree
 2. **Spatial TF-IDF**: For each consensus region, clusters colors and calculates a pseudo-TF-IDF scores to identify colors distinctive to text vs. background  
-3. **Adaptive Masking**: Creates grayscale "text-likelihood" maps from TF-IDF scores, then uses Otsu thresholding for optimal binary masks
+3. **Adaptive Masking**: Creates grayscale "text-likelihood" maps from TF-IDF scores then thresholds the text from the background 
 4. **Regional Processing**: Each consensus region gets its own color analysis, allowing different text colors in different areas
-5. **Smart Inpainting**: Combines regional masks and applies LaMa inpainting for seamless text removal 
+5. **Smart Inpainting**: Combines regional masks and applies LaMa or TELEA inpainting for seamless text removal 
 
 ## Installation
 
@@ -50,13 +47,39 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Basic Syntax
+**untextre** provides two interfaces for removing text watermarks:
 
+### 🖥️ Web Interface (Recommended for Beginners)
+
+The easiest way to use **untextre** is through the web interface - just drag and drop images in your browser!
+
+**Quick Start:**
+```bash
+# Install web interface dependencies
+pip install -r requirements_streamlit.txt
+
+# Launch the web interface
+python run_web_interface.py
+```
+
+The interface will open automatically at `http://localhost:8501`
+
+**Web Interface Options:**
+- **Confidence Threshold** (0.1-0.9): Lower = detect more text, higher = more conservative
+- **Color Granularity** (8-48): Number of color clusters for text detection  
+- **Inpainting Method**: LaMa (high quality) or TELEA (fast)
+- **Show Masks**: Display detected text regions for debugging
+
+### 💻 Command Line Interface
+
+For batch processing, automation, or advanced control, use the command line:
+
+**Basic Syntax:**
 ```bash
 python -m untextre.cli -i <input> -o <output> [options]
 ```
 
-### Quick Start
+**CLI Quick Start:**
 
 **Single image:**
 ```bash
@@ -73,7 +96,7 @@ python -m untextre.cli -i input_folder/ -o output_folder/
 python -m untextre.cli -i image.jpg -o results/ --keep-masks --verbose --timing
 ```
 
-### Command-Line Options
+**Command-Line Options:**
 
 #### Required Arguments
 
@@ -115,7 +138,7 @@ python -m untextre.cli -i image.jpg -o results/ --keep-masks --verbose --timing
 
 * `-v`, `--verbose` - Enable verbose console output
 
-### Advanced Examples
+**CLI Advanced Examples:**
 
 **High-precision processing:**
 ```bash
@@ -137,7 +160,7 @@ python -m untextre.cli -i test.jpg -o debug/ --keep-masks --timing --verbose --l
 python -m untextre.cli -i logo.png -o clean.png --force-bbox 50,100,200,30
 ```
 
-### Performance Tips
+## Performance Tips
 
 * **First run**: Model loading takes 10-15 seconds, then processing is fast
 * **Batch processing**: Models loaded once, subsequent images process in 2-5 seconds
@@ -148,10 +171,10 @@ python -m untextre.cli -i logo.png -o clean.png --force-bbox 50,100,200,30
 
 When processing images, **untextre** generates several files:
 
-### Primary Output
+### Cleaned Image  
 * `image_clean.jpg` - Main result with text removed (high-quality JPEG at 95% quality)
 
-### Debug Files (with `--keep-masks`)
+### Image Mask File (with `--keep-masks`)
 * `image_mask.png` - Binary mask showing detected text regions (white = text, black = background)
 
 ### Timing Reports (with `--timing`)
@@ -160,31 +183,21 @@ When processing images, **untextre** generates several files:
   - Consensus region counts and success rates
   - Average times and statistics for batch processing
 
-### Logs (with `--logfile`)
-* Custom log file with detailed processing information and any errors
-
 ## Troubleshooting
 
 ### No Consensus Regions Detected
 If no text regions are found, try:
-* Lower confidence threshold: `--confidence-threshold 0.2`
+* Lower confidence threshold: `--confidence-threshold 0.025` improves the odds that two detectors will guess the same area 
 * Use forced bounding box: `--force-bbox x,y,width,height`
-* Check that text is clearly visible and not too small/faint
 
 ### Poor Color Detection
-If wrong colors are being masked:
-* Increase granularity: `--granularity 32` or `--granularity 48`
-* Use debug mode to analyze: `--keep-masks --verbose`
+If wrong colors are being masked, adjust granularity: Settings as coarse as `--granularity 4` work well on smaller images; values higher than `--granularity 32` almost always slice the color spectrum too thinly and leave important colors out. 
 
-### Slow Performance
-For faster processing:
-* Reduce granularity: `--granularity 12` or `--granularity 16`
-* Use TELEA inpainting: `--paint telea`
+### Debugging
+* The `-v / --verbose` option will show what's happening at each step 
+* The `-k / --keep-masks` option will let you see what the model ended up removing  
+* The `-l / --logfile {filename}` option stores logs in a file of your choice 
 
-### Memory Issues
-For large images or limited memory:
-* Reduce granularity: `--granularity 8`
-* Process images individually rather than in batches
 
 ## Technical Details
 
@@ -197,26 +210,16 @@ The system runs three different text detection algorithms:
 Regions where 2 or more detectors agree (with configurable overlap threshold) become "consensus regions" - areas of high confidence for containing text.
 
 ### Spatial TF-IDF Analysis
-This is the key innovation of **untextre**. Traditional approaches try to find text colors globally, but this fails when:
-- Text colors appear in the background  
-- Different regions have different text colors
-- Background colors are similar to text colors
-
-Instead, **untextre** treats each text region as a "document" and its surrounding area as the "corpus", then:
-1. Clusters all colors in both regions using K-means
-2. Calculates TF-IDF scores for each color cluster
-3. Creates a spatial map where pixel intensity = text likelihood
-4. Uses Otsu thresholding to automatically find the optimal binary threshold
+This is the key innovation of **untextre**. In a region where text is known to exist, we identify the text color by finding the family of colors that are most distinctive to the text region. 
+1. Generate a bounding or outer region outside the detection region, with the same pixel count as the detection region  
+2. Cluster all colors in both regions using K-means (with K = `--granularity`, anywhere from 4 - 256)
+3. Calculate scores for each color cluster using an approach like TF-IDF (where the detection region is the "document" and the outer region is the "corpus")
+4. Normalize those scores to a 0-255 scale 
+5. Empirical investigation revealed that text tends to have a TF-IDF score of >192 
 
 This approach automatically identifies colors that are distinctive to text regions vs. background, handling complex scenarios like multi-colored text, varying backgrounds, and edge anti-aliasing.
 
-### Performance Optimizations
-- **Model Caching**: All three detection models loaded once at startup, reused for all images
-- **Regional Processing**: Only analyzes colors within consensus regions, not entire images
-- **Configurable Granularity**: Trade speed vs. accuracy with 6-48 color clusters
-- **Memory Efficiency**: Processes regions independently to minimize memory usage
-
-## License
+### License
 
 MIT
 

@@ -326,11 +326,11 @@ def run_consensus_detection(image: np.ndarray, confidence_threshold: float = 0.3
     
     return padded_boxes
 
-def initialize_consensus_models(confidence_threshold: float = 0.3) -> None:
-    """Initialize all models for consensus detection to avoid per-image startup costs."""
+def initialize_consensus_models(confidence_threshold: float = 0.3, device: str = "cuda") -> None:
+    """Initialize all models (detection and inpainting) to avoid per-image startup costs."""
     global _global_doctr_detector, _global_easyocr_reader, _global_east_model
     
-    logger.info("Pre-loading all detection models for consensus...")
+    logger.info("Pre-loading all detection and inpainting models...")
     
     # Initialize DocTR
     try:
@@ -357,6 +357,14 @@ def initialize_consensus_models(confidence_threshold: float = 0.3) -> None:
     except Exception as e:
         logger.error(f"Failed to load EAST: {e}")
         _global_east_model = None
+    
+    # Initialize LaMa inpainting model
+    try:
+        from .inpaint import initialize_lama_model
+        initialize_lama_model(device=device)
+        logger.info("✓ LaMa model loaded")
+    except Exception as e:
+        logger.error(f"Failed to load LaMa: {e}")
     
     logger.info("Model initialization complete - all models cached for reuse")
 
@@ -434,7 +442,7 @@ def main() -> None:
     
     # Initialize models once for persistent loading
     model_init_start = time.time()
-    initialize_consensus_models(args.confidence_threshold)
+    initialize_consensus_models(args.confidence_threshold, args.device)
     model_init_time = time.time() - model_init_start
     logger.info(f"All models cached and ready in {model_init_time:.1f} seconds")
     
@@ -520,7 +528,8 @@ def process_single_image(
         'total_time': 0,
         'image_mp': 0,
         'consensus_boxes_count': 0,
-        'total_bbox_area': 0
+        'total_bbox_area': 0,
+        'failover_type': 'none'  # Track type of failover used
     }
     
     start_time = time.time()
@@ -568,6 +577,7 @@ def process_single_image(
             used_rotation_failover = True
             
             if rotated_consensus_boxes:
+                timings['failover_type'] = 'rotation'
                 logger.info(f"Found {len(rotated_consensus_boxes)} consensus regions in rotated image")
                 
                 # Translate consensus boxes back to original coordinate system
@@ -593,18 +603,31 @@ def process_single_image(
                 
                 logger.info(f"Successfully translated {len(consensus_boxes)} consensus regions back to original orientation")
             else:
-                logger.error("No consensus regions detected even after rotation failover")
-                # Return partial timing data for failed images
-                timings['detection_time'] = time.time() - detection_start
-                timings['consensus_boxes_count'] = 0
-                timings['total_bbox_area'] = 0
-                timings['used_rotation_failover'] = used_rotation_failover
-                timings['color_time'] = None  # N/A
-                timings['mask_time'] = None   # N/A
-                timings['inpaint_time'] = None # N/A
-                timings['total_time'] = time.time() - start_time
-                timings['failed'] = True
-                return timings
+                logger.warning("No consensus regions detected after rotation failover, using common watermark locations...")
+                
+                # Always process common watermark locations in bottom-right corner
+                h, w = preprocessed.shape[:2]
+                
+                # Horizontal watermark (1/4 width × 1/16 height, bottom-right)
+                horizontal_w = w // 4
+                horizontal_h = h // 16
+                horizontal_x = w - horizontal_w
+                horizontal_y = h - horizontal_h
+                horizontal_bbox = (horizontal_x, horizontal_y, horizontal_w, horizontal_h)
+                
+                # Vertical watermark (1/16 width × 1/4 height, bottom-right)
+                vertical_w = w // 16
+                vertical_h = h // 4
+                vertical_x = w - vertical_w
+                vertical_y = h - vertical_h
+                vertical_bbox = (vertical_x, vertical_y, vertical_w, vertical_h)
+                
+                # Always process both regions
+                consensus_boxes = [horizontal_bbox, vertical_bbox]
+                timings['failover_type'] = 'watermark'
+                logger.info(f"Processing horizontal watermark region: {horizontal_bbox}")
+                logger.info(f"Processing vertical watermark region: {vertical_bbox}")
+                used_rotation_failover = True  # Mark as using failover
         else:
             used_rotation_failover = False
     
@@ -804,25 +827,39 @@ def _save_clean_timing_report(detailed_timings: list, total_time: float, avg_tim
             f.write(f"Target color (deprecated): {target_color}\n")
         if forced_bbox:
             f.write(f"Forced bbox: {forced_bbox}\n")
-        f.write("\nColumns: MP=Megapixels, Det=Detection, Msk=Mask, Inp=Inpaint, Tot=Total, Rot=Rotation Failover (R=used)\n")
+        f.write("\nColumns: MP=Megapixels, Det=Detection, Msk=Mask, Inp=Inpaint, Tot=Total, Failover=R/W (Rotation/Watermark)\n")
         
         # Header with wider format
-        f.write(f"{'Image Name':<25} {'MP':>4} {'Det':>4} {'TF-IDF':>6} {'Msk':>4} {'Inp':>5} {'Tot':>5} {'Boxes':>5} {'Rot':>3}\n")
+        f.write(f"{'Image Name':<25} {'MP':>4} {'Det':>4} {'TF-IDF':>6} {'Msk':>4} {'Inp':>5} {'Tot':>5} {'Boxes':>5} {'Fail':>4}\n")
         f.write("-" * 74 + "\n")
         
         # Individual rows
         for timing in detailed_timings:
             name = timing['image_name'][:25]  # Allow longer names
-            rotation_marker = "R" if timing.get('used_rotation_failover', False) else ""
+            
+            # Map failover type to marker
+            failover_type = timing.get('failover_type', 'none')
+            if failover_type == 'rotation':
+                failover_marker = "R"
+            elif failover_type == 'watermark':
+                failover_marker = "W"
+            else:
+                failover_marker = ""
+            
+            # Handle None values for failed images
+            color_time_str = "N/A" if timing['color_time'] is None else f"{timing['color_time']:>6.1f}"
+            mask_time_str = "N/A" if timing['mask_time'] is None else f"{timing['mask_time']:>4.1f}"
+            inpaint_time_str = "N/A" if timing['inpaint_time'] is None else f"{timing['inpaint_time']:>5.1f}"
+            
             row = (f"{name:<25} "
                    f"{timing['image_mp']:>4.1f} "
                    f"{timing['detection_time']:>4.1f} "
-                   f"{timing['color_time']:>6.1f} "
-                   f"{timing['mask_time']:>4.1f} "
-                   f"{timing['inpaint_time']:>5.1f} "
+                   f"{color_time_str:>6} "
+                   f"{mask_time_str:>4} "
+                   f"{inpaint_time_str:>5} "
                    f"{timing['total_time']:>5.1f} "
                    f"{timing['consensus_boxes_count']:>5d} "
-                   f"{rotation_marker:>3}\n")
+                   f"{failover_marker:>4}\n")
             f.write(row)
         
         if len(detailed_timings) > 1:
@@ -830,20 +867,28 @@ def _save_clean_timing_report(detailed_timings: list, total_time: float, avg_tim
             
             # Statistics
             det_times = [t['detection_time'] for t in detailed_timings]
-            col_times = [t['color_time'] for t in detailed_timings] 
-            msk_times = [t['mask_time'] for t in detailed_timings]
-            inp_times = [t['inpaint_time'] for t in detailed_timings]
+            col_times = [t['color_time'] for t in detailed_timings if t['color_time'] is not None] 
+            msk_times = [t['mask_time'] for t in detailed_timings if t['mask_time'] is not None]
+            inp_times = [t['inpaint_time'] for t in detailed_timings if t['inpaint_time'] is not None]
             tot_times = [t['total_time'] for t in detailed_timings]
             box_counts = [t['consensus_boxes_count'] for t in detailed_timings]
             
+            # Handle cases where all values might be None
+            col_median = statistics.median(col_times) if col_times else 0.0
+            col_mean = statistics.mean(col_times) if col_times else 0.0
+            msk_median = statistics.median(msk_times) if msk_times else 0.0
+            msk_mean = statistics.mean(msk_times) if msk_times else 0.0
+            inp_median = statistics.median(inp_times) if inp_times else 0.0
+            inp_mean = statistics.mean(inp_times) if inp_times else 0.0
+            
             f.write(f"{'MEDIAN':<25} {'':>4} {statistics.median(det_times):>4.1f} "
-                   f"{statistics.median(col_times):>6.1f} {statistics.median(msk_times):>4.1f} "
-                   f"{statistics.median(inp_times):>5.1f} {statistics.median(tot_times):>5.1f} "
+                   f"{col_median:>6.1f} {msk_median:>4.1f} "
+                   f"{inp_median:>5.1f} {statistics.median(tot_times):>5.1f} "
                    f"{statistics.median(box_counts):>5.1f}\n")
             
             f.write(f"{'AVERAGE':<25} {'':>4} {statistics.mean(det_times):>4.1f} "
-                   f"{statistics.mean(col_times):>6.1f} {statistics.mean(msk_times):>4.1f} "
-                   f"{statistics.mean(inp_times):>5.1f} {statistics.mean(tot_times):>5.1f} "
+                   f"{col_mean:>6.1f} {msk_mean:>4.1f} "
+                   f"{inp_mean:>5.1f} {statistics.mean(tot_times):>5.1f} "
                    f"{statistics.mean(box_counts):>5.1f}\n")
         
         f.write("-" * 70 + "\n")
@@ -856,6 +901,17 @@ def _save_clean_timing_report(detailed_timings: list, total_time: float, avg_tim
         images_with_consensus = sum(1 for t in detailed_timings if t['consensus_boxes_count'] > 0)
         f.write(f"Total consensus boxes: {total_boxes}\n")
         f.write(f"Images with consensus: {images_with_consensus}/{len(detailed_timings)} ({100*images_with_consensus/len(detailed_timings):.1f}%)\n")
+        
+        # Failover statistics
+        failover_counts = {}
+        for timing in detailed_timings:
+            failover_type = timing.get('failover_type', 'none')
+            failover_counts[failover_type] = failover_counts.get(failover_type, 0) + 1
+        
+        f.write(f"\nFailover usage:\n")
+        f.write(f"  Normal consensus: {failover_counts.get('none', 0)}\n")
+        f.write(f"  Rotation failover: {failover_counts.get('rotation', 0)}\n")
+        f.write(f"  Watermark regions: {failover_counts.get('watermark', 0)}\n")
 
 if __name__ == "__main__":
     main() 

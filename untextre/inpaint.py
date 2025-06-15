@@ -20,6 +20,37 @@ except ImportError:
 
 logger = setup_logger(__name__)
 
+# Global LaMa model cache for persistent loading
+_lama_inpainter = None
+
+def initialize_lama_model(device: str = "cuda") -> None:
+    """Initialize and cache the LaMa model for persistent use.
+    
+    Args:
+        device: Device to load the model on ("cuda" or "cpu")
+    """
+    global _lama_inpainter
+    
+    if LamaInpainter is None:
+        logger.warning("LaMa inpainter is not available - skipping initialization")
+        return
+    
+    if _lama_inpainter is not None:
+        logger.info("LaMa model already initialized")
+        return
+    
+    logger.info(f"Initializing LaMa model on {device}...")
+    _lama_inpainter = LamaInpainter(device=device)
+    logger.info("LaMa model initialized and cached")
+
+def get_lama_inpainter() -> Optional[LamaInpainter]:
+    """Get the cached LaMa inpainter instance.
+    
+    Returns:
+        The cached LaMa inpainter or None if not initialized
+    """
+    return _lama_inpainter
+
 InpaintMethod = Literal["lama", "telea"]
 
 def inpaint_image(
@@ -80,6 +111,11 @@ def _inpaint_with_lama(
     if LamaInpainter is None:
         raise RuntimeError("LaMa inpainter is not available. Please check installation.")
     
+    # Get cached LaMa inpainter
+    inpainter = get_lama_inpainter()
+    if inpainter is None:
+        raise RuntimeError("LaMa model not initialized. Call initialize_lama_model() first.")
+    
     # Calculate subregion for efficient processing
     subregion = _calculate_inpainting_subregion(mask, bbox, image.shape[:2])
     
@@ -88,10 +124,7 @@ def _inpaint_with_lama(
         logger.info("No subregion to inpaint - returning original image unchanged")
         return image.copy()
     
-    # Initialize LaMa inpainter
-    inpainter = LamaInpainter()
-    
-    # Perform inpainting
+    # Perform inpainting using cached model
     logger.info(f"Applying LaMa inpainting (subregion: {subregion})")
     result = inpainter.inpaint(image, mask, subregion=subregion)
     

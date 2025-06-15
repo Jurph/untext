@@ -1,0 +1,5 @@
+# Additional dependencies for the Streamlit web interface
+# Install core dependencies first: pip install -r requirements.txt
+# Then install web interface dependencies: pip install -r requirements_streamlit.txt
+
+streamlit>=1.28.0 

@@ -63,7 +63,6 @@ def save_image(image: ImageArray, output_path: ImagePath, quality: int = 97) -> 
     Args:
         image: Image array in BGR format
         output_path: Path where to save the image
-        quality: JPEG quality (1-100, default 97). Ignored for PNG files.
         
     Raises:
         ValueError: If image cannot be saved
