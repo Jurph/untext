@@ -14,7 +14,7 @@ from .utils import ImageArray, MaskArray, BBox, setup_logger, dilate_bbox
 
 
 try:
-    from untext.lama_inpainter import LamaInpainter
+    from .lama_inpainter import LamaInpainter
 except ImportError:
     LamaInpainter = None
 

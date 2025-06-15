@@ -55,7 +55,7 @@ def initialize_models(detector_methods: List[str]) -> None:
         _east_net = _load_east_model()
         logger.info("EAST model ready")
 
-def detect_text_regions(image: ImageArray, method: str = "doctr") -> List[BBox]:
+def detect_text_regions(image: ImageArray, method: str = "doctr", confidence_threshold: float = 0.3) -> List[BBox]:
     """Detect text regions in an image and return bounding boxes.
     
     This is the main entry point for text detection. It applies preprocessing,
@@ -64,6 +64,7 @@ def detect_text_regions(image: ImageArray, method: str = "doctr") -> List[BBox]:
     Args:
         image: Input image as H×W×3 BGR uint8 numpy array
         method: Detection method to use ("doctr", "easyocr", or "east")
+        confidence_threshold: Minimum confidence threshold for detections (0.0-1.0, default: 0.3)
         
     Returns:
         List of bounding boxes as (x, y, width, height) tuples
@@ -77,15 +78,17 @@ def detect_text_regions(image: ImageArray, method: str = "doctr") -> List[BBox]:
     if method == "doctr":
         if _doctr_detector is None:
             initialize_models(["doctr"])
-        detections = _doctr_detector.detect(image)
+        # Create a new detector instance with the specified confidence threshold
+        detector = TextDetector(confidence_threshold=confidence_threshold)
+        detections = detector.detect(image)
     elif method == "easyocr":
         if _easyocr_reader is None:
             initialize_models(["easyocr"])
-        detections = _detect_with_easyocr(image, _easyocr_reader)
+        detections = _detect_with_easyocr(image, _easyocr_reader, confidence_threshold=confidence_threshold)
     elif method == "east":
         if _east_net is None:
             initialize_models(["east"])
-        detections = _detect_with_east(image, _east_net)
+        detections = _detect_with_east(image, _east_net, min_confidence=confidence_threshold)
     else:
         raise ValueError(f"Unsupported detection method: {method}")
     
@@ -109,12 +112,13 @@ def detect_text_regions(image: ImageArray, method: str = "doctr") -> List[BBox]:
     
     return bboxes
 
-def _detect_with_easyocr(image: ImageArray, reader: easyocr.Reader) -> List[Detection]:
+def _detect_with_easyocr(image: ImageArray, reader: easyocr.Reader, confidence_threshold: float = 0.3) -> List[Detection]:
     """Detect text regions using EasyOCR with pre-initialized reader.
     
     Args:
         image: Input image as H×W×3 BGR uint8 numpy array
         reader: Pre-initialized EasyOCR reader instance
+        confidence_threshold: Minimum confidence threshold for detections (0.0-1.0, default: 0.3)
         
     Returns:
         List of detection dictionaries in the same format as DocTR
@@ -129,9 +133,13 @@ def _detect_with_easyocr(image: ImageArray, reader: easyocr.Reader) -> List[Dete
         # Run detection
         results = reader.readtext(rgb_image)
         
-        # Convert EasyOCR results to our format
+        # Convert EasyOCR results to our format, filtering by confidence
         detections = []
         for bbox, text, confidence in results:
+            # Skip detections below confidence threshold (0.3)
+            if confidence < confidence_threshold:
+                continue
+                
             # EasyOCR returns bbox as [[x1,y1], [x2,y2], [x3,y3], [x4,y4]]
             # Convert to numpy array for consistency
             geometry = np.array(bbox, dtype=np.float32)
@@ -188,7 +196,7 @@ def _load_east_model() -> cv2.dnn_Net:
         raise RuntimeError("EAST model loading failed") from e
 
 def _detect_with_east(image: ImageArray, net: cv2.dnn_Net, 
-                     min_confidence: float = 0.5, 
+                     min_confidence: float = 0.3, 
                      nms_threshold: float = 0.4,
                      width: int = 320, 
                      height: int = 320) -> List[Detection]:
@@ -359,7 +367,7 @@ def _decode_east_predictions(scores: np.ndarray, geometry: np.ndarray,
     
     return rectangles, confidences
 
-def get_largest_text_region(image: ImageArray, method: str = "doctr") -> BBox:
+def get_largest_text_region(image: ImageArray, method: str = "doctr", confidence_threshold: float = 0.3) -> BBox:
     """Get the largest detected text region, merged with boxes at the same height.
     
     This function finds the largest bounding box, then merges it with any other
@@ -375,7 +383,7 @@ def get_largest_text_region(image: ImageArray, method: str = "doctr") -> BBox:
     Raises:
         ValueError: If no text is detected
     """
-    bboxes = detect_text_regions(image, method)
+    bboxes = detect_text_regions(image, method, confidence_threshold)
     
     if not bboxes:
         # TODO: Add fallover to corner-based region selection
@@ -532,19 +540,11 @@ class TextDetector:
             raise ValueError("Image must be H×W×3 BGR")
         
         try:
-            # Apply preprocessing
-            logger.debug("Applying optimized preprocessing before text detection")
-            processed_image = preprocess_image(image)
-            if processed_image is None:
-                logger.warning("Preprocessing failed, using original image")
-                processed_image = image
-            else:
-                # Convert back to BGR if needed (preprocessor returns RGB)
-                if processed_image.shape[2] == 3:
-                    processed_image = cv2.cvtColor(processed_image, cv2.COLOR_RGB2BGR)
+            # Use the image as provided (preprocessing now handled uniformly by caller)
+            logger.debug("Running DocTR detection on preprocessed image")
             
             # Run detection
-            raw = self.predictor([processed_image])
+            raw = self.predictor([image])
             if not isinstance(raw, list) or len(raw) == 0:
                 logger.warning("No text detected")
                 return []

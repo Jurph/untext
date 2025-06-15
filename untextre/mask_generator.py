@@ -30,50 +30,70 @@ def generate_mask(image: ImageArray, text_colors: List[Color], bbox: BBox) -> Ma
     # Create initial color-based mask
     mask = create_color_mask(image, text_colors)
     
+    # Save raw mask before cleanup for debugging
+    cv2.imwrite("raw_color_mask.png", mask)
+    logger.debug(f"Saved raw color mask to raw_color_mask.png")
+    
     # Clean up mask with morphological operations
     mask = clean_up_mask(mask, bbox)
     
     logger.info(f"Generated mask from {len(text_colors)} text colors")
     return mask
 
-def create_color_mask(image: ImageArray, target_colors: List[Color], tolerance: int = 2) -> MaskArray:
-    """Create a binary mask for pixels matching any of the target colors.
+def create_color_mask(image: ImageArray, target_colors: List[Color]) -> MaskArray:
+    """Create a binary mask for pixels exactly matching any of the target colors.
     
     Args:
         image: Input image in BGR format
-        target_colors: List of BGR color tuples to match
-        tolerance: Color matching tolerance (default: 2)
+        target_colors: List of BGR color tuples to match exactly
         
     Returns:
         Binary mask as H×W uint8 numpy array
     """
+    logger.debug(f"Creating mask for {len(target_colors)} colors (exact matching)")
+    
     # Create empty mask
     mask = np.zeros(image.shape[:2], dtype=np.uint8)
     
-    # For each target color, create a mask and combine
-    for target_color in target_colors:
-        # Create color bounds with tolerance
-        lower = np.array([max(0, c - tolerance) for c in target_color])
-        upper = np.array([min(255, c + tolerance) for c in target_color])
+    # Convert target colors to set for O(1) lookup
+    target_set = set(target_colors)
+    
+    # Process image in chunks to avoid memory explosion
+    h, w = image.shape[:2]
+    chunk_size = 1000  # Process 1000 rows at a time
+    
+    total_matched = 0
+    for start_row in range(0, h, chunk_size):
+        end_row = min(start_row + chunk_size, h)
+        chunk = image[start_row:end_row]
         
-        # Create mask for this color
-        color_mask = cv2.inRange(image, lower, upper)
+        # Reshape chunk to (chunk_pixels, 3)
+        chunk_reshaped = chunk.reshape(-1, 3)
         
-        # Combine with main mask
-        mask = cv2.bitwise_or(mask, color_mask)
+        # Check each pixel against the target set
+        chunk_matches = np.array([tuple(pixel) in target_set for pixel in chunk_reshaped], dtype=bool)
+        
+        # Reshape back and update mask
+        chunk_mask = (chunk_matches.astype(np.uint8) * 255).reshape(end_row - start_row, w)
+        mask[start_row:end_row] = chunk_mask
+        
+        chunk_matched = np.sum(chunk_mask == 255)
+        total_matched += chunk_matched
+        
+        if chunk_matched > 0:
+            logger.debug(f"  Rows {start_row}-{end_row}: {chunk_matched} pixels matched")
+    
+    logger.debug(f"Total pixels matched (exact): {total_matched}")
     
     return mask
 
-def clean_up_mask(mask: MaskArray, bbox: BBox) -> MaskArray:
-    """Clean up the mask using morphological operations.
+def morph_clean_mask(mask: MaskArray, bbox: BBox) -> MaskArray:
+    """Apply morphological operations to clean up a binary mask.
     
-    This function applies a series of morphological operations to:
-    1. Remove small artifacts (opening)
-    2. Fill gaps (closing) 
-    3. Expand text regions (dilation)
-    4. Smooth edges (erosion + blur)
-    5. Final expansion and smoothing
-    6. Remove disconnected components far from text region
+    This function applies a simplified series of morphological operations to:
+    1. Fill gaps and connect text fragments (closing)
+    2. Light expansion for inpainting coverage (dilation)
+    3. Smooth edges (blur + threshold)
     
     Args:
         mask: Binary mask (H×W uint8)
@@ -82,43 +102,94 @@ def clean_up_mask(mask: MaskArray, bbox: BBox) -> MaskArray:
     Returns:
         Cleaned binary mask
     """
-    # TODO: Make morphological operation parameters configurable
+    initial_white_pixels = np.sum(mask == 255)
+    logger.debug(f"Starting morphological cleanup with {initial_white_pixels} white pixels")
     
-    # 1. Morphological opening with 3x3 ellipse kernel
-    kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel_open)
+    # Simplified parameters for detail preservation
+    close_kernel_size = 11
+    dilate_size = 13
+    blur_size = 9
     
-    # 2. Morphological closing with 4x4 kernel
-    kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (4, 4))
+    # 1. Morphological closing to fill gaps and connect text fragments
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (close_kernel_size, close_kernel_size))
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel_close)
+    logger.debug(f"After closing: {np.sum(mask == 255)} white pixels")
     
-    # 3. First dilation by 6px
-    kernel_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (6, 6))
+    # 2. Light dilation to ensure good inpainting coverage
+    kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_size, dilate_size))
     mask = cv2.dilate(mask, kernel_dilate)
+    logger.debug(f"After dilation: {np.sum(mask == 255)} white pixels")
     
-    # 4. Erode by 3px
-    kernel_erode = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-    mask = cv2.erode(mask, kernel_erode)
+    # 3. Light Gaussian blur for smooth edges
+    mask = cv2.GaussianBlur(mask, (blur_size, blur_size), 0)
+    logger.debug(f"After blur: {np.sum(mask == 255)} white pixels")
     
-    # 5. Blur with 3x3 kernel
-    mask = cv2.GaussianBlur(mask, (3, 3), 0)
-    
-    # 6. Sharpen using unsharp masking
-    gaussian = cv2.GaussianBlur(mask, (0, 0), 3.0)
-    mask = cv2.addWeighted(mask, 1.5, gaussian, -0.5, 0)
-    
-    # 7. Final dilation by 6px (with iterations and blur)
-    mask = cv2.dilate(mask, kernel_dilate, iterations=2)
-    mask = cv2.GaussianBlur(mask, (3, 3), 0)
-    
-    # 8. Additional dilate-by-6, blur-by-3 round for better coverage
-    mask = cv2.dilate(mask, kernel_dilate)
-    mask = cv2.GaussianBlur(mask, (3, 3), 0)
-    
-    # 9. Filter out components far from the text region
-    mask = anchor_connected_components(mask, bbox)
+    # 4. Re-threshold to binary
+    mask = (mask > 127).astype(np.uint8) * 255
     
     return mask
+
+def morph_expand_mask(mask: MaskArray, expansion_px: int = 8) -> MaskArray:
+    """Expand a binary mask by a specified number of pixels.
+    
+    Args:
+        mask: Binary mask (H×W uint8)
+        expansion_px: Number of pixels to expand the mask
+        
+    Returns:
+        Expanded binary mask
+    """
+    if expansion_px <= 0:
+        return mask
+        
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (expansion_px * 2 + 1, expansion_px * 2 + 1))
+    expanded_mask = cv2.dilate(mask, kernel)
+    
+    logger.debug(f"Expanded mask by {expansion_px}px: {np.sum(mask == 255)} -> {np.sum(expanded_mask == 255)} pixels")
+    return expanded_mask
+
+def morph_smooth_mask(mask: MaskArray, blur_size: int = 5) -> MaskArray:
+    """Smooth a binary mask using Gaussian blur and re-threshold.
+    
+    Args:
+        mask: Binary mask (H×W uint8)
+        blur_size: Size of the Gaussian blur kernel (must be odd)
+        
+    Returns:
+        Smoothed binary mask
+    """
+    if blur_size <= 1:
+        return mask
+        
+    # Ensure blur_size is odd
+    if blur_size % 2 == 0:
+        blur_size += 1
+        
+    # Apply Gaussian blur
+    blurred = cv2.GaussianBlur(mask, (blur_size, blur_size), 0)
+    
+    # Re-threshold to binary
+    smoothed_mask = (blurred > 127).astype(np.uint8) * 255
+    
+    logger.debug(f"Smoothed mask with {blur_size}x{blur_size} kernel")
+    return smoothed_mask
+
+def clean_up_mask(mask: MaskArray, bbox: BBox) -> MaskArray:
+    """Clean up the mask using morphological operations.
+    
+    This function applies a simplified series of morphological operations to:
+    1. Fill gaps and connect text fragments (closing)
+    2. Light expansion for inpainting coverage (dilation)
+    3. Smooth edges (blur + threshold)
+    
+    Args:
+        mask: Binary mask (H×W uint8)
+        bbox: Tuple (x, y, w, h) from the original text detection
+        
+    Returns:
+        Cleaned binary mask
+    """
+    return morph_clean_mask(mask, bbox)
 
 def anchor_connected_components(mask: MaskArray, bbox: BBox) -> MaskArray:
     """Filter connected components based on their distance from the bounding box center.

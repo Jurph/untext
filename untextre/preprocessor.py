@@ -45,7 +45,8 @@ def preprocess_image(image: ImageArray) -> Optional[ImageArray]:
     
     # First apply gray-to-black conversion if needed
     # TODO: Add support for customizable gray range parameters
-    result_img = _preprocess_gray_to_black(image, gray_min=124, gray_max=132)
+    # result_img = _preprocess_gray_to_black(image, gray_min=124, gray_max=132)
+    result_img = image
     if result_img is None:
         result_img = image  # Fall back to original if gray-to-black fails
     else:
@@ -54,11 +55,11 @@ def preprocess_image(image: ImageArray) -> Optional[ImageArray]:
             result_img = cv2.cvtColor(result_img, cv2.COLOR_RGB2BGR)
     
     try:
-        # Convert to grayscale
-        if len(image.shape) == 3:
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        # Convert to grayscale - use the preprocessed image, not the original
+        if len(result_img.shape) == 3:
+            gray = cv2.cvtColor(result_img, cv2.COLOR_BGR2GRAY)
         else:
-            gray = image
+            gray = result_img
     
         # Apply optimized CLAHE for contrast enhancement (grid search winner)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))

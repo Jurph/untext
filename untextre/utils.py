@@ -57,17 +57,31 @@ def load_image(image_path: ImagePath) -> ImageArray:
         raise ValueError(f"Could not load image: {image_path}")
     return image
 
-def save_image(image: ImageArray, output_path: ImagePath) -> None:
-    """Save an image to file.
+def save_image(image: ImageArray, output_path: ImagePath, quality: int = 97) -> None:
+    """Save an image to file with quality control.
     
     Args:
         image: Image array in BGR format
         output_path: Path where to save the image
+        quality: JPEG quality (1-100, default 97). Ignored for PNG files.
         
     Raises:
         ValueError: If image cannot be saved
     """
-    success = cv2.imwrite(str(output_path), image)
+    output_path = Path(output_path)
+    
+    # Set compression parameters based on file extension
+    if output_path.suffix.lower() in {'.jpg', '.jpeg'}:
+        # JPEG with specified quality
+        params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+    elif output_path.suffix.lower() == '.png':
+        # PNG with high compression (0-9, where 9 is max compression)
+        params = [cv2.IMWRITE_PNG_COMPRESSION, 8]  # High compression for smaller files
+    else:
+        # Default parameters for other formats
+        params = []
+    
+    success = cv2.imwrite(str(output_path), image, params)
     if not success:
         raise ValueError(f"Could not save image to: {output_path}")
 
@@ -137,6 +151,41 @@ def dilate_bbox(bbox: BBox, dilation: int, image_shape: Optional[Tuple[int, int]
         y2 = min(img_h, y2)
     
     return (x1, y1, x2 - x1, y2 - y1)
+
+def dilate_by_pixels(image: ImageArray, bbox: BBox, pixels: int) -> BBox:
+    """Dilate a bounding box by a specific number of pixels.
+    
+    Args:
+        image: Input image to get dimensions from
+        bbox: Bounding box as (x, y, width, height)
+        pixels: Number of pixels to dilate by
+        
+    Returns:
+        Dilated bounding box clamped to image bounds
+    """
+    return dilate_bbox(bbox, pixels, image.shape[:2])
+
+def dilate_by_percent(image: ImageArray, bbox: BBox, percent: float) -> BBox:
+    """Dilate a bounding box by a percentage of its current size.
+    
+    Args:
+        image: Input image to get dimensions from
+        bbox: Bounding box as (x, y, width, height)
+        percent: Percentage to dilate by (e.g., 0.2 for 20%)
+        
+    Returns:
+        Dilated bounding box clamped to image bounds
+    """
+    x, y, w, h = bbox
+    
+    # Calculate dilation amount based on bbox dimensions
+    dilation_w = int(w * percent / 2)  # Divide by 2 since we dilate in both directions
+    dilation_h = int(h * percent / 2)
+    
+    # Use the average of width and height dilation for uniform expansion
+    dilation = (dilation_w + dilation_h) // 2
+    
+    return dilate_bbox(bbox, dilation, image.shape[:2])
 
 def color_distance(color1: Color, color2: Color) -> float:
     """Calculate Euclidean distance between two BGR colors.

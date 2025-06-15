@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from pathlib import Path
 from typing import Tuple, Optional
-from untext.telea_inpainter import TeleaInpainter
+from untextre.telea_inpainter import TeleaInpainter
 
 def create_test_image(size: Tuple[int, int] = (100, 100), text: str = "Test") -> Tuple[np.ndarray, np.ndarray]:
     """Create a test image with text.

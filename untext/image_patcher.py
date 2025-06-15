@@ -24,7 +24,7 @@ except Exception:  # pragma: no cover
     LamaInpainter = None  # type: ignore
 
 try:
-    from .telea_inpainter import TeleaInpainter
+    from ..untextre.telea_inpainter import TeleaInpainter
 except Exception:  # pragma: no cover
     TeleaInpainter = None  # type: ignore
 
