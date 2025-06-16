@@ -30,6 +30,93 @@ _global_doctr_detector = None
 _global_easyocr_reader = None
 _global_east_model = None
 
+def _apply_color_enhancement(image: np.ndarray, target_hex: str, sensitivity: int = 3) -> np.ndarray:
+    """Apply color-based enhancement to make subtle watermarks more visible.
+    
+    Args:
+        image: Original image (H×W×3 BGR uint8)
+        target_hex: Target color in hex format (e.g., "#808080", "#FFFFFF")
+        sensitivity: Plus-or-minus range around target color (default: 3)
+        
+    Returns:
+        Enhanced image with specified color range converted to black
+    """
+    # Work with a copy to avoid modifying original
+    enhanced = image.copy()
+    
+    # Convert hex color to BGR values
+    if not target_hex.startswith('#') or len(target_hex) != 7:
+        raise ValueError(f"Invalid hex color format: {target_hex}. Use format #RRGGBB")
+    
+    try:
+        # Parse hex color (#RRGGBB -> RGB -> BGR)
+        hex_value = target_hex[1:]  # Remove '#'
+        r = int(hex_value[0:2], 16)
+        g = int(hex_value[2:4], 16)
+        b = int(hex_value[4:6], 16)
+        target_bgr = np.array([b, g, r], dtype=np.uint8)  # Convert RGB to BGR
+        
+    except ValueError:
+        raise ValueError(f"Invalid hex color format: {target_hex}. Use format #RRGGBB")
+    
+    # Calculate bounds with sensitivity
+    lower_bound = np.maximum(target_bgr - sensitivity, 0).astype(np.uint8)
+    upper_bound = np.minimum(target_bgr + sensitivity, 255).astype(np.uint8)
+    
+    # Convert back to hex for logging
+    lower_hex = f"#{lower_bound[2]:02X}{lower_bound[1]:02X}{lower_bound[0]:02X}"
+    upper_hex = f"#{upper_bound[2]:02X}{upper_bound[1]:02X}{upper_bound[0]:02X}"
+    
+    logger.info(f"Applying color enhancement: converting {lower_hex}-{upper_hex} to black (target: {target_hex}, sensitivity: ±{sensitivity})")
+    
+    # Create mask for pixels in the target color range
+    mask = cv2.inRange(enhanced, lower_bound, upper_bound)
+    
+    # Count affected pixels
+    affected_pixels = np.sum(mask > 0)
+    total_pixels = mask.shape[0] * mask.shape[1]
+    percentage = (affected_pixels / total_pixels) * 100
+    
+    logger.info(f"Color enhancement affected {affected_pixels:,} pixels ({percentage:.2f}% of image)")
+    
+    # Set masked pixels to black
+    enhanced[mask > 0] = [0, 0, 0]  # BGR black
+    
+    return enhanced
+
+def _try_color_enhanced_detection(original_image: np.ndarray, confidence_threshold: float, target_hex: str, sensitivity: int = 3) -> List[Tuple[int, int, int, int]]:
+    """Try consensus detection with color enhancement.
+    
+    Args:
+        original_image: Original unprocessed image
+        confidence_threshold: Confidence threshold for detection
+        target_hex: Target color in hex format (e.g., "#808080", "#FFFFFF")
+        sensitivity: Plus-or-minus range around target color (default: 3)
+        
+    Returns:
+        List of consensus bounding boxes, or empty list if none found
+    """
+    logger.info(f"Trying color enhancement for {target_hex} (±{sensitivity})...")
+    
+    # Apply color enhancement to original image
+    enhanced_image = _apply_color_enhancement(original_image, target_hex, sensitivity)
+    
+    # Re-preprocess the enhanced image
+    enhanced_preprocessed = preprocess_image(enhanced_image)
+    if enhanced_preprocessed is None:
+        logger.warning(f"Failed to preprocess color-enhanced image (target: {target_hex})")
+        return []
+    
+    # Run consensus detection on enhanced image
+    consensus_boxes = run_consensus_detection(enhanced_preprocessed, confidence_threshold)
+    
+    if consensus_boxes:
+        logger.info(f"Color enhancement ({target_hex}) found {len(consensus_boxes)} consensus regions")
+    else:
+        logger.info(f"Color enhancement ({target_hex}) found no consensus regions")
+    
+    return consensus_boxes
+
 def _detect_with_doctr_configurable(image, confidence_threshold: float = 0.3) -> List[Tuple[int, int, int, int, float]]:
     """Run DocTR detection with configurable confidence threshold."""
     global _global_doctr_detector
@@ -361,8 +448,10 @@ def initialize_consensus_models(confidence_threshold: float = 0.3, device: str =
     # Initialize LaMa inpainting model
     try:
         from .inpaint import initialize_lama_model
-        initialize_lama_model(device=device)
-        logger.info("✓ LaMa model loaded")
+        if initialize_lama_model(device=device):
+            logger.info("✓ LaMa model loaded")
+        else:
+            logger.warning("✗ LaMa model failed to initialize (auto-retry will be used if needed)")
     except Exception as e:
         logger.error(f"Failed to load LaMa: {e}")
     
@@ -434,7 +523,10 @@ def main() -> None:
             target_color = hex_to_bgr(args.color)
         else:
             target_color = html_to_bgr(args.color)
-        logger.info(f"Using target color: {target_color}")
+        # Convert back to hex for display
+        b, g, r = target_color
+        target_hex = f"#{r:02X}{g:02X}{b:02X}"
+        logger.info(f"Using target color for immediate enhancement: {target_hex} (BGR: {target_color})")
     
     logger.info(f"Found {len(image_files)} image(s) to process")
     logger.info(f"Using consensus detection with confidence threshold: {args.confidence_threshold}")
@@ -497,20 +589,22 @@ def process_single_image(
     maskfile: Optional[str] = None,
     confidence_threshold: float = 0.3,
     granularity: int = 24,
-    forced_bbox: Optional[tuple] = None
+    forced_bbox: Optional[tuple] = None,
+    color_sensitivity: int = 3
 ) -> Optional[dict]:
     """Process a single image through the consensus-based spatial TF-IDF pipeline.
     
     Args:
         image_path: Path to input image
         output_dir: Directory to save outputs
-        target_color: Optional target color as BGR tuple (deprecated, TF-IDF finds colors automatically)
+        target_color: Optional target color as BGR tuple - will be used for color enhancement failover
         keep_masks: Whether to save debug masks
         method: Inpainting method to use ("lama" or "telea")
         maskfile: Optional path to mask file to use instead of auto-generation
         confidence_threshold: Confidence threshold for consensus detection
         granularity: Number of color clusters for spatial TF-IDF analysis
         forced_bbox: Optional forced bounding box as (x, y, width, height) tuple
+        color_sensitivity: Plus-or-minus range around target color (default: 3)
         
     Returns:
         Dictionary with timing details, or None if processing failed
@@ -562,9 +656,30 @@ def process_single_image(
             consensus_boxes = [clipped_bbox]
             logger.info(f"Clipped bbox: {clipped_bbox}")
     else:
-        logger.info(f"Running consensus detection with confidence threshold {confidence_threshold}...")
-        consensus_boxes = run_consensus_detection(preprocessed, confidence_threshold)
+        # If user specified a target color, try color enhancement FIRST
+        if target_color is not None:
+            # Convert BGR tuple to hex
+            b, g, r = target_color
+            target_hex = f"#{r:02X}{g:02X}{b:02X}"
+            logger.info(f"User specified target color {target_hex} - trying color enhancement first...")
+            
+            consensus_boxes = _try_color_enhanced_detection(image, confidence_threshold, target_hex, sensitivity=color_sensitivity)
+            
+            if consensus_boxes:
+                timings['failover_type'] = 'target_color'
+                logger.info(f"Target color enhancement succeeded with {len(consensus_boxes)} consensus regions")
+        else:
+            consensus_boxes = []
         
+        # If no target color specified OR target color enhancement failed, try normal consensus detection
+        if not consensus_boxes:
+            logger.info(f"Running consensus detection with confidence threshold {confidence_threshold}...")
+            consensus_boxes = run_consensus_detection(preprocessed, confidence_threshold)
+            
+            if consensus_boxes:
+                logger.info(f"Normal consensus detection found {len(consensus_boxes)} regions")
+        
+        # Continue with failover sequence if still no consensus
         if not consensus_boxes:
             logger.warning("No consensus regions detected, trying rotation failover...")
             
@@ -574,7 +689,6 @@ def process_single_image(
             logger.info("Rotated image 90° clockwise, running consensus detection again...")
             
             rotated_consensus_boxes = run_consensus_detection(rotated_image, confidence_threshold)
-            used_rotation_failover = True
             
             if rotated_consensus_boxes:
                 timings['failover_type'] = 'rotation'
@@ -603,38 +717,48 @@ def process_single_image(
                 
                 logger.info(f"Successfully translated {len(consensus_boxes)} consensus regions back to original orientation")
             else:
-                logger.warning("No consensus regions detected after rotation failover, using common watermark locations...")
+                logger.warning("No consensus regions detected after rotation failover, trying generic color enhancements...")
                 
-                # Always process common watermark locations in bottom-right corner
-                h, w = preprocessed.shape[:2]
+                # Try gray enhancement (#808080 with ±3 sensitivity gives #7D7D7D-#838383)
+                consensus_boxes = _try_color_enhanced_detection(image, confidence_threshold, "#808080", sensitivity=3)
                 
-                # Horizontal watermark (1/4 width × 1/16 height, bottom-right)
-                horizontal_w = w // 4
-                horizontal_h = h // 16
-                horizontal_x = w - horizontal_w
-                horizontal_y = h - horizontal_h
-                horizontal_bbox = (horizontal_x, horizontal_y, horizontal_w, horizontal_h)
-                
-                # Vertical watermark (1/16 width × 1/4 height, bottom-right)
-                vertical_w = w // 16
-                vertical_h = h // 4
-                vertical_x = w - vertical_w
-                vertical_y = h - vertical_h
-                vertical_bbox = (vertical_x, vertical_y, vertical_w, vertical_h)
-                
-                # Always process both regions
-                consensus_boxes = [horizontal_bbox, vertical_bbox]
-                timings['failover_type'] = 'watermark'
-                logger.info(f"Processing horizontal watermark region: {horizontal_bbox}")
-                logger.info(f"Processing vertical watermark region: {vertical_bbox}")
-                used_rotation_failover = True  # Mark as using failover
-        else:
-            used_rotation_failover = False
+                if consensus_boxes:
+                    timings['failover_type'] = 'gray_enhancement'
+                else:
+                    # Try white enhancement (#FFFFFF with ±3 sensitivity gives #FCFCFC-#FFFFFF)
+                    consensus_boxes = _try_color_enhanced_detection(image, confidence_threshold, "#FFFFFF", sensitivity=3)
+                    
+                    if consensus_boxes:
+                        timings['failover_type'] = 'white_enhancement'
+                    else:
+                        logger.warning("No consensus regions detected after all enhancements, using common watermark locations...")
+                        
+                        # Always process common watermark locations in bottom-right corner
+                        h, w = preprocessed.shape[:2]
+                        
+                        # Horizontal watermark (1/4 width × 1/16 height, bottom-right)
+                        horizontal_w = w // 4
+                        horizontal_h = h // 16
+                        horizontal_x = w - horizontal_w
+                        horizontal_y = h - horizontal_h
+                        horizontal_bbox = (horizontal_x, horizontal_y, horizontal_w, horizontal_h)
+                        
+                        # Vertical watermark (1/16 width × 1/4 height, bottom-right)
+                        vertical_w = w // 16
+                        vertical_h = h // 4
+                        vertical_x = w - vertical_w
+                        vertical_y = h - vertical_h
+                        vertical_bbox = (vertical_x, vertical_y, vertical_w, vertical_h)
+                        
+                        # Always process both regions
+                        consensus_boxes = [horizontal_bbox, vertical_bbox]
+                        timings['failover_type'] = 'watermark'
+                        logger.info(f"Processing horizontal watermark region: {horizontal_bbox}")
+                        logger.info(f"Processing vertical watermark region: {vertical_bbox}")
     
     timings['detection_time'] = time.time() - detection_start
     timings['consensus_boxes_count'] = len(consensus_boxes)
     timings['total_bbox_area'] = sum(bbox[2] * bbox[3] for bbox in consensus_boxes)
-    timings['used_rotation_failover'] = used_rotation_failover
     
     # 3. Generate or load mask
     if maskfile:
@@ -663,7 +787,8 @@ def process_single_image(
             
             try:
                 # Generate spatial TF-IDF mask for this region
-                region_mask = find_mask_by_spatial_tf_idf(image, bbox, num_clusters=granularity, debug=False)
+                logger.info(f"About to call find_mask_by_spatial_tf_idf with bbox={bbox}, target_color={target_color}")
+                region_mask = find_mask_by_spatial_tf_idf(image, bbox, num_clusters=granularity, debug=True, target_color=target_color)
                 
                 if np.sum(region_mask == 255) > 0:
                     # Create full-sized mask positioned at the bbox location
@@ -747,7 +872,7 @@ def parse_args() -> argparse.Namespace:
     
     parser.add_argument(
         "-c", "--color",
-        help="Target color in hex format (#808080) or HTML color name (gray)"
+        help="Target color for immediate enhancement in hex format (#808080) or HTML color name (gray)"
     )
     
     parser.add_argument(
@@ -827,7 +952,7 @@ def _save_clean_timing_report(detailed_timings: list, total_time: float, avg_tim
             f.write(f"Target color (deprecated): {target_color}\n")
         if forced_bbox:
             f.write(f"Forced bbox: {forced_bbox}\n")
-        f.write("\nColumns: MP=Megapixels, Det=Detection, Msk=Mask, Inp=Inpaint, Tot=Total, Failover=R/W (Rotation/Watermark)\n")
+        f.write("\nColumns: MP=Megapixels, Det=Detection, Msk=Mask, Inp=Inpaint, Tot=Total, Failover=R/T/G/W/B (Rotation/Target/Gray/White/Baseline)\n")
         
         # Header with wider format
         f.write(f"{'Image Name':<25} {'MP':>4} {'Det':>4} {'TF-IDF':>6} {'Msk':>4} {'Inp':>5} {'Tot':>5} {'Boxes':>5} {'Fail':>4}\n")
@@ -841,8 +966,14 @@ def _save_clean_timing_report(detailed_timings: list, total_time: float, avg_tim
             failover_type = timing.get('failover_type', 'none')
             if failover_type == 'rotation':
                 failover_marker = "R"
-            elif failover_type == 'watermark':
+            elif failover_type == 'target_color':
+                failover_marker = "T"
+            elif failover_type == 'gray_enhancement':
+                failover_marker = "G"
+            elif failover_type == 'white_enhancement':
                 failover_marker = "W"
+            elif failover_type == 'watermark':
+                failover_marker = "B"  # Baseline watermark regions
             else:
                 failover_marker = ""
             
@@ -911,7 +1042,10 @@ def _save_clean_timing_report(detailed_timings: list, total_time: float, avg_tim
         f.write(f"\nFailover usage:\n")
         f.write(f"  Normal consensus: {failover_counts.get('none', 0)}\n")
         f.write(f"  Rotation failover: {failover_counts.get('rotation', 0)}\n")
-        f.write(f"  Watermark regions: {failover_counts.get('watermark', 0)}\n")
+        f.write(f"  Target color enhancement: {failover_counts.get('target_color', 0)}\n")
+        f.write(f"  Gray enhancement: {failover_counts.get('gray_enhancement', 0)}\n")
+        f.write(f"  White enhancement: {failover_counts.get('white_enhancement', 0)}\n")
+        f.write(f"  Baseline watermark regions: {failover_counts.get('watermark', 0)}\n")
 
 if __name__ == "__main__":
     main() 

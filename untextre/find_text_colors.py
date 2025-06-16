@@ -1355,7 +1355,7 @@ def find_colors_by_tf_idf(image: ImageArray, bbox: BBox, num_clusters: int = 16,
     
     return text_colors 
 
-def find_mask_by_spatial_tf_idf(image: ImageArray, bbox: BBox, num_clusters: int = 24, debug: bool = False) -> np.ndarray:
+def find_mask_by_spatial_tf_idf(image: ImageArray, bbox: BBox, num_clusters: int = 24, debug: bool = False, target_color: Optional[Color] = None) -> np.ndarray:
     """
     Create a binary mask using spatial TF-IDF analysis with adaptive thresholding and morphological cleanup.
     
@@ -1365,12 +1365,14 @@ def find_mask_by_spatial_tf_idf(image: ImageArray, bbox: BBox, num_clusters: int
     3. Creates a grayscale "text-likelihood" map where pixel intensity = TF-IDF score
     4. Uses Otsu thresholding to automatically find optimal binary threshold
     5. Applies morphological operations to clean up the mask
+    6. If target_color is specified, forces selection of the color group containing that exact color
     
     Args:
         image: Input image in BGR format  
         bbox: Bounding box (x, y, width, height) to analyze
         num_clusters: Number of color clusters for K-means (default: 24)
         debug: If True, prints diagnostic information
+        target_color: Optional BGR color tuple - if provided, forces selection of exact color matches
         
     Returns:
         Binary mask (uint8) where 255 = likely text, 0 = likely background
@@ -1424,11 +1426,13 @@ def find_mask_by_spatial_tf_idf(image: ImageArray, bbox: BBox, num_clusters: int
     bbox_mask[bbox_start_y:bbox_end_y, bbox_start_x:bbox_end_x] = True
     
     # Extract surrounding region (corpus) by excluding bbox area
-    surrounding_region = expanded_region[~bbox_mask]
+    # Need to apply mask to each color channel separately to preserve shape
+    surrounding_mask_3d = np.stack([~bbox_mask, ~bbox_mask, ~bbox_mask], axis=2)
+    surrounding_region = expanded_region[surrounding_mask_3d].reshape(-1, 3)
     
     # Combine both regions for k-means clustering
     bbox_pixels = bbox_region.reshape(-1, 3)
-    surrounding_pixels = surrounding_region.reshape(-1, 3)
+    surrounding_pixels = surrounding_region
     all_pixels = np.vstack([bbox_pixels, surrounding_pixels])
     
     # Convert to RGB for k-means
@@ -1498,8 +1502,50 @@ def find_mask_by_spatial_tf_idf(image: ImageArray, bbox: BBox, num_clusters: int
     fixed_threshold = 188
     binary_mask = (tf_idf_map >= fixed_threshold).astype(np.uint8) * 255
     
+    # Target color override: if target_color is specified, force inclusion of the color cluster containing it
+    if target_color is not None:
+        if debug:
+            logger.info(f"Target color override: forcing inclusion of color cluster containing {target_color}")
+        
+        # Find which cluster the target color belongs to
+        target_color_rgb = np.array([target_color[2], target_color[1], target_color[0]])  # Convert BGR to RGB for comparison with centers
+        
+        # Calculate distances from target color to all cluster centers
+        distances = np.linalg.norm(centers - target_color_rgb, axis=1)
+        target_cluster_id = np.argmin(distances)
+        
+        if debug:
+            closest_center = centers[target_cluster_id]
+            distance = distances[target_cluster_id]
+            logger.info(f"Target color {target_color} (RGB: {target_color_rgb}) closest to cluster {target_cluster_id}")
+            logger.info(f"Cluster center: {closest_center}, distance: {distance:.2f}")
+        
+        # Create mask for all pixels in the target cluster
+        target_cluster_mask = (bbox_labels_2d == target_cluster_id)
+        target_pixel_count = np.sum(target_cluster_mask)
+        
+        if target_pixel_count > 0:
+            if debug:
+                logger.info(f"Forcing inclusion of {target_pixel_count} pixels in target color cluster {target_cluster_id}")
+                original_tf_idf = tf_idf_scores[target_cluster_id]
+                logger.info(f"Original TF-IDF score for target cluster: {original_tf_idf:.4f}")
+            
+            # Add target cluster pixels to the existing TF-IDF mask (combine both)
+            target_mask = target_cluster_mask.astype(np.uint8) * 255
+            binary_mask = cv2.bitwise_or(binary_mask, target_mask)
+            
+            if debug:
+                combined_pixels = np.sum(binary_mask == 255)
+                logger.info(f"Combined mask (TF-IDF + target color): {combined_pixels} pixels")
+        else:
+            if debug:
+                logger.info("No pixels found in target color cluster, using TF-IDF only")
+    
     if debug:
-        logger.info(f"Fixed threshold: {fixed_threshold}")
+        if target_color is not None:
+            logger.info(f"Using TF-IDF threshold {fixed_threshold} + target color override")
+        else:
+            logger.info(f"Using TF-IDF threshold {fixed_threshold} only")
         mask_pixels_before_morph = np.sum(binary_mask == 255)
         total_pixels = binary_mask.size
         logger.info(f"Mask coverage before morphology: {mask_pixels_before_morph}/{total_pixels} pixels ({100*mask_pixels_before_morph/total_pixels:.1f}%)")

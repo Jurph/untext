@@ -1,4 +1,4 @@
-"""Setup configuration for untext package."""
+"""Setup configuration for untextre package."""
 
 from setuptools import setup, find_packages
 
@@ -6,14 +6,14 @@ with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 setup(
-    name="untext",
+    name="untextre",
     version="0.1.0",
     author="Jurph",
     author_email="jurph@example.com",  # TODO: Update with actual email
-    description="Remove text-based watermarks from images using Deep Image Prior",
+    description="Remove text-based watermarks from images",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/jurph/untext",
+    url="https://github.com/jurph/untextre",
     packages=find_packages(),
     classifiers=[
         "Development Status :: 3 - Alpha",
@@ -41,6 +41,7 @@ setup(
         "albumentations>=1.3.0",
         "omegaconf>=2.3.0",
         "simple-lama-inpainting==0.1.2",
+        "streamlit-image-annotation>=0.4.0",  # For force detection boxes
     ],
     extras_require={
         "dev": [
@@ -53,7 +54,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "untext=untext.cli:main",
+            "untextre=untextre.cli:main",
         ],
     },
 ) 

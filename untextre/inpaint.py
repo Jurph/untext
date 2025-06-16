@@ -22,26 +22,145 @@ logger = setup_logger(__name__)
 
 # Global LaMa model cache for persistent loading
 _lama_inpainter = None
+_lama_device = None
+_lama_init_failed = False
 
-def initialize_lama_model(device: str = "cuda") -> None:
+def is_lama_available() -> bool:
+    """Check if LaMa inpainter is available for import.
+    
+    Returns:
+        True if LaMa can be imported, False otherwise
+    """
+    return LamaInpainter is not None
+
+def is_lama_initialized() -> bool:
+    """Check if LaMa model is currently initialized.
+    
+    Returns:
+        True if LaMa model is loaded and ready, False otherwise
+    """
+    global _lama_inpainter
+    return _lama_inpainter is not None
+
+def is_lama_healthy() -> bool:
+    """Check if LaMa model is healthy and responsive.
+    
+    Performs a quick test with a small dummy image to verify the model
+    is working correctly.
+    
+    Returns:
+        True if LaMa is healthy, False otherwise
+    """
+    global _lama_inpainter
+    
+    if _lama_inpainter is None:
+        return False
+    
+    try:
+        # Create a small test image and mask
+        test_image = np.zeros((32, 32, 3), dtype=np.uint8)
+        test_mask = np.zeros((32, 32), dtype=np.uint8)
+        test_mask[10:22, 10:22] = 255  # Small square to inpaint
+        
+        # Try a quick inpaint operation
+        result = _lama_inpainter.inpaint(test_image, test_mask)
+        
+        # Basic validation of result
+        if result is None or result.shape != test_image.shape:
+            return False
+            
+        return True
+        
+    except Exception as e:
+        logger.warning(f"LaMa health check failed: {e}")
+        return False
+
+def get_lama_status() -> dict:
+    """Get comprehensive status information about LaMa.
+    
+    Returns:
+        Dictionary with status information including:
+        - available: Whether LaMa can be imported
+        - initialized: Whether model is loaded
+        - healthy: Whether model passes health check
+        - device: Device the model is loaded on
+        - init_failed: Whether initialization previously failed
+    """
+    return {
+        "available": is_lama_available(),
+        "initialized": is_lama_initialized(),
+        "healthy": is_lama_healthy(),
+        "device": _lama_device,
+        "init_failed": _lama_init_failed
+    }
+
+def reset_lama_model() -> None:
+    """Reset the LaMa model state, clearing any cached instances.
+    
+    This is useful for forcing a fresh initialization after errors.
+    """
+    global _lama_inpainter, _lama_init_failed
+    
+    logger.info("Resetting LaMa model state")
+    
+    # Clear any GPU memory if the model was using CUDA
+    if _lama_inpainter is not None:
+        try:
+            import torch
+            if hasattr(_lama_inpainter, 'device') and _lama_inpainter.device.type == 'cuda':
+                torch.cuda.empty_cache()
+        except Exception as e:
+            logger.warning(f"Error during GPU cleanup: {e}")
+    
+    _lama_inpainter = None
+    _lama_init_failed = False
+    logger.info("LaMa model state reset")
+
+def initialize_lama_model(device: str = "cuda", force_reinit: bool = False) -> bool:
     """Initialize and cache the LaMa model for persistent use.
     
     Args:
         device: Device to load the model on ("cuda" or "cpu")
+        force_reinit: Whether to force reinitialization even if already loaded
+        
+    Returns:
+        True if initialization succeeded, False otherwise
     """
-    global _lama_inpainter
+    global _lama_inpainter, _lama_device, _lama_init_failed
     
     if LamaInpainter is None:
         logger.warning("LaMa inpainter is not available - skipping initialization")
-        return
+        _lama_init_failed = True
+        return False
     
-    if _lama_inpainter is not None:
+    if _lama_inpainter is not None and not force_reinit:
         logger.info("LaMa model already initialized")
-        return
+        return True
     
-    logger.info(f"Initializing LaMa model on {device}...")
-    _lama_inpainter = LamaInpainter(device=device)
-    logger.info("LaMa model initialized and cached")
+    if force_reinit:
+        reset_lama_model()
+    
+    try:
+        logger.info(f"Initializing LaMa model on {device}...")
+        _lama_inpainter = LamaInpainter(device=device)
+        _lama_device = device
+        _lama_init_failed = False
+        logger.info("LaMa model initialized and cached")
+        
+        # Perform initial health check
+        if is_lama_healthy():
+            logger.info("LaMa model passed initial health check")
+            return True
+        else:
+            logger.error("LaMa model failed initial health check")
+            reset_lama_model()
+            return False
+            
+    except Exception as e:
+        logger.error(f"Failed to initialize LaMa model: {e}")
+        _lama_init_failed = True
+        reset_lama_model()
+        return False
 
 def get_lama_inpainter() -> Optional[LamaInpainter]:
     """Get the cached LaMa inpainter instance.
@@ -57,7 +176,8 @@ def inpaint_image(
     image: ImageArray, 
     mask: MaskArray, 
     bbox: Optional[BBox] = None,
-    method: InpaintMethod = "lama"
+    method: InpaintMethod = "lama",
+    auto_retry: bool = True
 ) -> ImageArray:
     """Inpaint masked regions in an image.
     
@@ -69,6 +189,7 @@ def inpaint_image(
         mask: Binary mask (255 = regions to inpaint, 0 = keep original)
         bbox: Optional bounding box to guide subregion calculation
         method: Inpainting method to use ("lama" or "telea")
+        auto_retry: Whether to automatically retry with reinitialization on failure
         
     Returns:
         Inpainted image in BGR format
@@ -86,21 +207,23 @@ def inpaint_image(
         return image.copy()
     
     if method == "lama":
-        return _inpaint_with_lama(image, mask, bbox)
+        return _inpaint_with_lama(image, mask, bbox, auto_retry=auto_retry)
     else:  # method == "telea"
         return _inpaint_with_telea(image, mask, bbox)
 
 def _inpaint_with_lama(
     image: ImageArray, 
     mask: MaskArray, 
-    bbox: Optional[BBox] = None
+    bbox: Optional[BBox] = None,
+    auto_retry: bool = True
 ) -> ImageArray:
-    """Inpaint using LaMa algorithm.
+    """Inpaint using LaMa algorithm with automatic retry on failure.
     
     Args:
         image: Input image in BGR format
         mask: Binary mask (255 = regions to inpaint, 0 = keep original)
         bbox: Optional bounding box to guide subregion calculation
+        auto_retry: Whether to automatically retry with reinitialization on failure
         
     Returns:
         Inpainted image in BGR format
@@ -114,7 +237,14 @@ def _inpaint_with_lama(
     # Get cached LaMa inpainter
     inpainter = get_lama_inpainter()
     if inpainter is None:
-        raise RuntimeError("LaMa model not initialized. Call initialize_lama_model() first.")
+        if auto_retry:
+            logger.warning("LaMa model not initialized. Attempting auto-initialization...")
+            if initialize_lama_model(device=_lama_device or "cuda"):
+                inpainter = get_lama_inpainter()
+            else:
+                raise RuntimeError("Failed to auto-initialize LaMa model.")
+        else:
+            raise RuntimeError("LaMa model not initialized. Call initialize_lama_model() first.")
     
     # Calculate subregion for efficient processing
     subregion = _calculate_inpainting_subregion(mask, bbox, image.shape[:2])
@@ -124,12 +254,33 @@ def _inpaint_with_lama(
         logger.info("No subregion to inpaint - returning original image unchanged")
         return image.copy()
     
-    # Perform inpainting using cached model
-    logger.info(f"Applying LaMa inpainting (subregion: {subregion})")
-    result = inpainter.inpaint(image, mask, subregion=subregion)
-    
-    logger.info("LaMa inpainting completed successfully")
-    return result
+    try:
+        # Perform inpainting using cached model
+        logger.info(f"Applying LaMa inpainting (subregion: {subregion})")
+        result = inpainter.inpaint(image, mask, subregion=subregion)
+        logger.info("LaMa inpainting completed successfully")
+        return result
+        
+    except Exception as e:
+        logger.error(f"LaMa inpainting failed: {e}")
+        
+        if auto_retry:
+            logger.warning("Attempting LaMa recovery by reinitializing model...")
+            try:
+                # Try to reinitialize LaMa
+                if initialize_lama_model(device=_lama_device or "cuda", force_reinit=True):
+                    inpainter = get_lama_inpainter()
+                    if inpainter is not None:
+                        logger.info("LaMa reinitialized, retrying inpainting...")
+                        result = inpainter.inpaint(image, mask, subregion=subregion)
+                        logger.info("LaMa inpainting succeeded after recovery")
+                        return result
+                        
+            except Exception as retry_error:
+                logger.error(f"LaMa recovery attempt failed: {retry_error}")
+        
+        # If we get here, LaMa failed even after retry
+        raise RuntimeError(f"LaMa inpainting failed: {e}")
 
 def _inpaint_with_telea(
     image: ImageArray, 
