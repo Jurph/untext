@@ -1,23 +1,26 @@
 # untextre
 
-A tool for removing watermarks from images using consensus detection, Figure of Merit color analysis, and state-of-the-art inpainting.
+A tool for removing watermarks from images using consensus detection, Figure of Merit color analysis, and GPU-accelerated inpainting. The tool's goal is to remove the bare minimum clutter from the image, and then use state-of-the-art inpainting to fill that information in so that it's almost as if nobody watermarked the image in the first place. 
 
 ## Key Features
 
-* **Consensus Detection**: Combines three text detection methods (EAST, DocTR, EasyOCR) to find regions where multiple detectors agree, ensuring high-confidence text detection
-* **Figure of Merit (FOM) Analysis**: Identifies text-like color clusters using a weighted combination of TF-IDF distinctiveness, border underrepresentation, and connected-component fragmentation
+* **Text Detection via Three-Model Consensus**: Combines three text detection methods (EAST, DocTR, EasyOCR) to find regions where multiple detectors agree, ensuring high-confidence text detection
+* **Figure of Merit (FOM) Analysis**: Within regions detected as containing text, identifies text-like color clusters using a weighted combination of TF-IDF distinctiveness, border underrepresentation, and connected-component fragmentation
+* **Known Watermark Detection via ORB feature matching**: If you have already isolated the watermark to an RGBA file in .PNG format, place it in the `/watermarks` directory and if it matches the watermark on an image, `untextre` will use that watermark's mask instead of the slower text-detection and color-estimation approach. Matching is done via ORB (Oriented FAST and Rotated BRIEF).   
 * **High-Quality Inpainting**: LaMa (default) or TELEA inpainting with optimized region processing
 
 ## How It Works
 
 **untextre** uses the following approach: 
 
-1. **Consensus Detection**: Runs EAST, DocTR, and EasyOCR detectors simultaneously to find text regions where 2+ detectors agree
+1. **Consensus Detection**: Runs EAST, DocTR, and EasyOCR detectors simultaneously to find text regions where 2+ detectors agree; also runs ORB (Oriented FAST and Rotated BRIEF) against known watermarks that are stored in `/watermarks` to see if there's an obvious match  
 2. **Color Clustering**: For each consensus region, clusters all colors (inside and surrounding) using K-means
 3. **Figure of Merit Scoring**: Evaluates each cluster with a weighted FOM combining TF-IDF score (color distinctiveness vs. background), border ratio (text underrepresented at bbox edges), and connected-component fraction (text is fragmented, not one solid blob)
 4. **Adaptive Masking**: Accepts clusters whose FOM exceeds a threshold and whose largest connected component is below a guard value, then applies morphological cleanup
-5. **Regional Processing**: Each consensus region gets its own color analysis, allowing different text colors in different areas
-6. **Smart Inpainting**: Combines regional masks and applies LaMa or TELEA inpainting for seamless text removal 
+6. **Regional Processing**: Each consensus region gets its own color analysis, allowing different text colors in different areas
+7. **Smart Inpainting**: Combines regional masks and applies LaMa or TELEA inpainting for seamless text removal 
+
+The underlying engine works as a command-line tool or as a web UI. I've tried to strike a careful balance between exposing all of the dials and creating a simple and fast user experience. 
 
 ## Installation
 

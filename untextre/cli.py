@@ -1220,13 +1220,15 @@ def _save_clean_timing_report(detailed_timings: list, total_time: float, avg_tim
         f.write(f"{'Image Name':<25} {'MP':>4} {'Det':>4} {'TF-IDF':>6} {'Msk':>4} {'Inp':>5} {'Tot':>5} {'Boxes':>5} {'Fail':>4}\n")
         f.write("-" * 74 + "\n")
         
-        # Individual rows
+        # Individual rows (support both consensus path keys and template-match path keys)
         for timing in detailed_timings:
-            name = timing['image_name'][:25]  # Allow longer names
-            
+            name = (timing.get('image_name') or timing.get('image') or '?')[:25]
+
             # Map failover type to marker
             failover_type = timing.get('failover_type', 'none')
-            if failover_type == 'rotation':
+            if timing.get('matched_template'):
+                failover_marker = "Tpl"  # Template match
+            elif failover_type == 'rotation':
                 failover_marker = "R"
             elif failover_type == 'target_color':
                 failover_marker = "T"
@@ -1238,33 +1240,41 @@ def _save_clean_timing_report(detailed_timings: list, total_time: float, avg_tim
                 failover_marker = "B"  # Baseline watermark regions
             else:
                 failover_marker = ""
-            
-            # Handle None values for failed images
-            color_time_str = "N/A" if timing['color_time'] is None else f"{timing['color_time']:>6.1f}"
-            mask_time_str = "N/A" if timing['mask_time'] is None else f"{timing['mask_time']:>4.1f}"
-            inpaint_time_str = "N/A" if timing['inpaint_time'] is None else f"{timing['inpaint_time']:>5.1f}"
-            
+
+            # Handle None/missing values (template-match and skipped entries lack some keys)
+            color_time = timing.get('color_time')
+            mask_time = timing.get('mask_time')
+            inpaint_time = timing.get('inpaint_time')
+            color_time_str = "N/A" if color_time is None else f"{color_time:>6.1f}"
+            mask_time_str = "N/A" if mask_time is None else f"{mask_time:>4.1f}"
+            inpaint_time_str = "N/A" if inpaint_time is None else f"{inpaint_time:>5.1f}"
+
+            image_mp = timing.get('image_mp', 0)
+            detection_time = timing.get('detection_time', 0)
+            total_time = timing.get('total_time', 0)
+            consensus_boxes_count = timing.get('consensus_boxes_count', 0)
+
             row = (f"{name:<25} "
-                   f"{timing['image_mp']:>4.1f} "
-                   f"{timing['detection_time']:>4.1f} "
+                   f"{image_mp:>4.1f} "
+                   f"{detection_time:>4.1f} "
                    f"{color_time_str:>6} "
                    f"{mask_time_str:>4} "
                    f"{inpaint_time_str:>5} "
-                   f"{timing['total_time']:>5.1f} "
-                   f"{timing['consensus_boxes_count']:>5d} "
+                   f"{total_time:>5.1f} "
+                   f"{consensus_boxes_count:>5d} "
                    f"{failover_marker:>4}\n")
             f.write(row)
         
         if len(detailed_timings) > 1:
             f.write("-" * 74 + "\n")
-            
-            # Statistics
-            det_times = [t['detection_time'] for t in detailed_timings]
-            col_times = [t['color_time'] for t in detailed_timings if t['color_time'] is not None] 
-            msk_times = [t['mask_time'] for t in detailed_timings if t['mask_time'] is not None]
-            inp_times = [t['inpaint_time'] for t in detailed_timings if t['inpaint_time'] is not None]
-            tot_times = [t['total_time'] for t in detailed_timings]
-            box_counts = [t['consensus_boxes_count'] for t in detailed_timings]
+
+            # Statistics (use .get() so template-match/skipped entries are included)
+            det_times = [t.get('detection_time', 0) for t in detailed_timings]
+            col_times = [t['color_time'] for t in detailed_timings if t.get('color_time') is not None]
+            msk_times = [t['mask_time'] for t in detailed_timings if t.get('mask_time') is not None]
+            inp_times = [t['inpaint_time'] for t in detailed_timings if t.get('inpaint_time') is not None]
+            tot_times = [t.get('total_time', 0) for t in detailed_timings]
+            box_counts = [t.get('consensus_boxes_count', 0) for t in detailed_timings]
             
             # Handle cases where all values might be None
             col_median = statistics.median(col_times) if col_times else 0.0
@@ -1290,18 +1300,24 @@ def _save_clean_timing_report(detailed_timings: list, total_time: float, avg_tim
         f.write(f"Images processed: {len(detailed_timings)}\n")
         
         # Consensus statistics
-        total_boxes = sum(t['consensus_boxes_count'] for t in detailed_timings)
-        images_with_consensus = sum(1 for t in detailed_timings if t['consensus_boxes_count'] > 0)
+        total_boxes = sum(t.get('consensus_boxes_count', 0) for t in detailed_timings)
+        images_with_consensus = sum(1 for t in detailed_timings if t.get('consensus_boxes_count', 0) > 0)
         f.write(f"Total consensus boxes: {total_boxes}\n")
         f.write(f"Images with consensus: {images_with_consensus}/{len(detailed_timings)} ({100*images_with_consensus/len(detailed_timings):.1f}%)\n")
         
         # Failover statistics
         failover_counts = {}
+        template_match_count = 0
         for timing in detailed_timings:
-            failover_type = timing.get('failover_type', 'none')
-            failover_counts[failover_type] = failover_counts.get(failover_type, 0) + 1
-        
+            if timing.get('matched_template'):
+                template_match_count += 1
+            else:
+                failover_type = timing.get('failover_type', 'none')
+                failover_counts[failover_type] = failover_counts.get(failover_type, 0) + 1
+
         f.write(f"\nFailover usage:\n")
+        if template_match_count > 0:
+            f.write(f"  Template match: {template_match_count}\n")
         f.write(f"  Normal consensus: {failover_counts.get('none', 0)}\n")
         f.write(f"  Rotation failover: {failover_counts.get('rotation', 0)}\n")
         f.write(f"  Target color enhancement: {failover_counts.get('target_color', 0)}\n")
