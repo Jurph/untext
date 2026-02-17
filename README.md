@@ -1,4 +1,4 @@
-[![CircleCI](https://dl.circleci.com/status-badge/img/gh/jurph/untextre/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/jurph/untextre/tree/main)
+[![CircleCI](https://dl.circleci.com/status-badge/img/gh/Jurph/untext/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/Jurph/untext/tree/main)
 
 # untextre
 
