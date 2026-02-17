@@ -1,3 +1,5 @@
+[![CircleCI](https://dl.circleci.com/status-badge/img/gh/jurph/untextre/tree/main.svg?style=shield)](https://dl.circleci.com/status-badge/redirect/gh/jurph/untextre/tree/main)
+
 # untextre
 
 A tool for removing watermarks from images using consensus detection, Figure of Merit color analysis, and GPU-accelerated inpainting. The tool's goal is to remove the bare minimum clutter from the image, and then use state-of-the-art inpainting to fill that information in so that it's almost as if nobody watermarked the image in the first place. 
