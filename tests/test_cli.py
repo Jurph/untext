@@ -26,7 +26,9 @@ import untextre.preprocessor as preprocessor_mod
 from untextre.cli import (
     _apply_color_enhancement,
     _save_clean_timing_report,
+    find_known_mask_in_image,
     load_watermark_templates,
+    main,
     parse_args,
     process_with_known_mask,
     process_single_image,
@@ -716,3 +718,534 @@ class TestProcessWithKnownMask:
         assert inpaint_calls["method"] == "telea"
         assert "photo_mask.png" in saved_paths
         assert "photo_clean.png" in saved_paths
+
+
+# =========================================================================
+# find_known_mask_in_image — validation guards
+# =========================================================================
+
+class TestFindKnownMaskValidation:
+    """Test guard clauses in find_known_mask_in_image() (lines 266-370)."""
+
+    def test_non_rgba_raises(self):
+        """A 3-channel image as the known mask must raise ValueError."""
+        target = np.zeros((100, 100, 3), dtype=np.uint8)
+        known_rgb = np.zeros((50, 50, 3), dtype=np.uint8)
+        with pytest.raises(ValueError, match="4 channels"):
+            find_known_mask_in_image(target, known_rgb)
+
+    def test_no_descriptors_returns_none(self):
+        """A solid-color image produces no ORB descriptors → None."""
+        target = np.ones((100, 100, 3), dtype=np.uint8) * 128
+        known = np.ones((50, 50, 4), dtype=np.uint8) * 128
+        known[:, :, 3] = 255
+        result = find_known_mask_in_image(target, known)
+        assert result is None
+
+    def test_insufficient_keypoints_returns_none(self):
+        """An image with fewer keypoints than min_matches → None."""
+        # Tiny image with minimal features
+        target = np.zeros((20, 20, 3), dtype=np.uint8)
+        target[5, 5] = [255, 255, 255]
+        known = np.zeros((10, 10, 4), dtype=np.uint8)
+        known[3, 3, :3] = 255
+        known[:, :, 3] = 255
+        # Use a very high min_matches to guarantee insufficient keypoints
+        result = find_known_mask_in_image(target, known, min_matches=500)
+        assert result is None
+
+    def test_insufficient_good_matches_returns_none(self):
+        """Images with features but poor match quality → None."""
+        # Two very different textured images — ORB features won't match well
+        rng = np.random.RandomState(42)
+        target = rng.randint(0, 256, (200, 200, 3), dtype=np.uint8)
+        known = rng.randint(0, 256, (100, 100, 4), dtype=np.uint8)
+        known[:, :, 3] = 255
+        # High min_matches ensures insufficient good matches
+        result = find_known_mask_in_image(target, known, min_matches=200)
+        assert result is None
+
+    def test_affine_transform_failure_returns_none(self, monkeypatch):
+        """cv2.estimateAffine2D returning None → None."""
+        monkeypatch.setattr(
+            cv2, "estimateAffine2D",
+            lambda *args, **kwargs: (None, None),
+        )
+        # Need images with enough features for ORB to find matches
+        rng = np.random.RandomState(99)
+        target = rng.randint(0, 256, (200, 200, 3), dtype=np.uint8)
+        known = target[:100, :100].copy()
+        known_rgba = np.zeros((100, 100, 4), dtype=np.uint8)
+        known_rgba[:, :, :3] = known
+        known_rgba[:, :, 3] = 255
+        result = find_known_mask_in_image(target, known_rgba, min_matches=3)
+        assert result is None
+
+    def test_scale_too_small_returns_none(self, monkeypatch):
+        """A transform with near-zero scale → None."""
+        # Matrix with scale ~0.01 in both axes
+        tiny_scale = np.array([[0.01, 0.0, 10.0],
+                               [0.0, 0.01, 10.0]], dtype=np.float64)
+        inlier_mask = np.ones((50, 1), dtype=np.uint8)
+        monkeypatch.setattr(
+            cv2, "estimateAffine2D",
+            lambda *args, **kwargs: (tiny_scale, inlier_mask),
+        )
+        rng = np.random.RandomState(10)
+        target = rng.randint(0, 256, (200, 200, 3), dtype=np.uint8)
+        known = target[:100, :100].copy()
+        known_rgba = np.zeros((100, 100, 4), dtype=np.uint8)
+        known_rgba[:, :, :3] = known
+        known_rgba[:, :, 3] = 255
+        result = find_known_mask_in_image(target, known_rgba, min_matches=3)
+        assert result is None
+
+    def test_scale_too_large_returns_none(self, monkeypatch):
+        """A transform with huge scale → None."""
+        huge_scale = np.array([[25.0, 0.0, 0.0],
+                               [0.0, 25.0, 0.0]], dtype=np.float64)
+        inlier_mask = np.ones((50, 1), dtype=np.uint8)
+        monkeypatch.setattr(
+            cv2, "estimateAffine2D",
+            lambda *args, **kwargs: (huge_scale, inlier_mask),
+        )
+        rng = np.random.RandomState(11)
+        target = rng.randint(0, 256, (200, 200, 3), dtype=np.uint8)
+        known = target[:100, :100].copy()
+        known_rgba = np.zeros((100, 100, 4), dtype=np.uint8)
+        known_rgba[:, :, :3] = known
+        known_rgba[:, :, 3] = 255
+        result = find_known_mask_in_image(target, known_rgba, min_matches=3)
+        assert result is None
+
+    def test_reflection_rejected(self, monkeypatch):
+        """A transform with negative determinant (reflection) → None."""
+        # det([[−1, 0], [0, 1]]) = −1 → reflection
+        reflect = np.array([[-1.0, 0.0, 50.0],
+                            [0.0, 1.0, 0.0]], dtype=np.float64)
+        inlier_mask = np.ones((50, 1), dtype=np.uint8)
+        monkeypatch.setattr(
+            cv2, "estimateAffine2D",
+            lambda *args, **kwargs: (reflect, inlier_mask),
+        )
+        rng = np.random.RandomState(12)
+        target = rng.randint(0, 256, (200, 200, 3), dtype=np.uint8)
+        known = target[:100, :100].copy()
+        known_rgba = np.zeros((100, 100, 4), dtype=np.uint8)
+        known_rgba[:, :, :3] = known
+        known_rgba[:, :, 3] = 255
+        result = find_known_mask_in_image(target, known_rgba, min_matches=3)
+        assert result is None
+
+    def test_excessive_stretch_rejected(self, monkeypatch):
+        """A transform with non-uniform scaling beyond MAX_STRETCH → None."""
+        # scale_major/scale_minor = 5.0/1.0 = 5.0 > MAX_STRETCH (1.25)
+        stretch = np.array([[5.0, 0.0, 0.0],
+                            [0.0, 1.0, 0.0]], dtype=np.float64)
+        inlier_mask = np.ones((50, 1), dtype=np.uint8)
+        monkeypatch.setattr(
+            cv2, "estimateAffine2D",
+            lambda *args, **kwargs: (stretch, inlier_mask),
+        )
+        rng = np.random.RandomState(13)
+        target = rng.randint(0, 256, (200, 200, 3), dtype=np.uint8)
+        known = target[:100, :100].copy()
+        known_rgba = np.zeros((100, 100, 4), dtype=np.uint8)
+        known_rgba[:, :, :3] = known
+        known_rgba[:, :, 3] = 255
+        result = find_known_mask_in_image(target, known_rgba, min_matches=3)
+        assert result is None
+
+
+# =========================================================================
+# main() — force-bbox parsing
+# =========================================================================
+
+class TestMainForceBbox:
+    """Test force-bbox validation inside main() (lines 584-600)."""
+
+    def _setup_main_mocks(self, monkeypatch, tmp_path, extra_argv=None):
+        """Set up argv and mock everything after bbox parsing to avoid model loading."""
+        img_path = tmp_path / "img.png"
+        cv2.imwrite(str(img_path), np.zeros((10, 10, 3), dtype=np.uint8))
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        argv = ["prog", "-i", str(img_path), "-o", str(out_dir), "-p", "telea"]
+        if extra_argv:
+            argv.extend(extra_argv)
+        monkeypatch.setattr(sys, "argv", argv)
+        return img_path, out_dir
+
+    def test_force_bbox_valid_parse(self, monkeypatch, tmp_path):
+        """Happy path: '10,20,30,40' parses without error."""
+        self._setup_main_mocks(monkeypatch, tmp_path, ["-f", "10,20,30,40"])
+        # Mock model init and processing to prevent actual execution
+        monkeypatch.setattr(cli_mod, "initialize_consensus_models", lambda *a, **kw: None)
+        monkeypatch.setattr(
+            cli_mod, "process_single_image",
+            lambda **kw: {"total_time": 0.1, "skipped": False},
+        )
+        # Should not raise SystemExit
+        main()
+
+    def test_force_bbox_wrong_count_exits(self, monkeypatch, tmp_path):
+        """'10,20,30' (3 values) → sys.exit(1)."""
+        self._setup_main_mocks(monkeypatch, tmp_path, ["-f", "10,20,30"])
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+    def test_force_bbox_negative_exits(self, monkeypatch, tmp_path):
+        """Negative coordinate → sys.exit(1)."""
+        # Use --force-bbox=VALUE to avoid argparse treating leading '-' as a flag
+        self._setup_main_mocks(monkeypatch, tmp_path, ["--force-bbox=-1,0,10,10"])
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+    def test_force_bbox_zero_dimension_exits(self, monkeypatch, tmp_path):
+        """'10,20,0,40' (zero width) → sys.exit(1)."""
+        self._setup_main_mocks(monkeypatch, tmp_path, ["-f", "10,20,0,40"])
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+
+# =========================================================================
+# main() — integration paths
+# =========================================================================
+
+class TestMainIntegrationPaths:
+    """Test main() orchestration logic (lines 602-800), heavily mocked."""
+
+    def _run_main(self, monkeypatch, tmp_path, extra_argv=None, create_image=True):
+        """Helper: set up a minimal main() invocation and return (img_path, out_dir)."""
+        img_path = tmp_path / "test_img.png"
+        if create_image:
+            cv2.imwrite(str(img_path), np.zeros((10, 10, 3), dtype=np.uint8))
+        out_dir = tmp_path / "out"
+        out_dir.mkdir(exist_ok=True)
+        argv = ["prog", "-i", str(img_path), "-o", str(out_dir), "-p", "telea"]
+        if extra_argv:
+            argv.extend(extra_argv)
+        monkeypatch.setattr(sys, "argv", argv)
+        monkeypatch.setattr(cli_mod, "initialize_consensus_models", lambda *a, **kw: None)
+        return img_path, out_dir
+
+    def test_verbose_enables_debug_logging(self, monkeypatch, tmp_path):
+        """--verbose should set root logger to DEBUG."""
+        import logging
+        self._run_main(monkeypatch, tmp_path, ["--verbose"])
+        monkeypatch.setattr(
+            cli_mod, "process_single_image",
+            lambda **kw: {"total_time": 0.1, "skipped": False},
+        )
+        main()
+        assert logging.getLogger().level == logging.DEBUG
+
+    def test_logfile_creates_file_handler(self, monkeypatch, tmp_path):
+        """--logfile should create a log file on disk."""
+        log_path = tmp_path / "logs" / "test.log"
+        self._run_main(monkeypatch, tmp_path, ["--logfile", str(log_path)])
+        monkeypatch.setattr(
+            cli_mod, "process_single_image",
+            lambda **kw: {"total_time": 0.1, "skipped": False},
+        )
+        main()
+        assert log_path.exists()
+
+    def test_nonexistent_input_exits(self, monkeypatch, tmp_path):
+        """Bad input path → sys.exit(1)."""
+        self._run_main(monkeypatch, tmp_path, create_image=False)
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+    def test_force_output_copies_original(self, monkeypatch, tmp_path):
+        """--force-output with skipped image copies original to output."""
+        self._run_main(monkeypatch, tmp_path, ["--force-output"])
+        monkeypatch.setattr(
+            cli_mod, "process_single_image",
+            lambda **kw: {"total_time": 0.1, "skipped": True},
+        )
+        saved = {}
+        original_save = cli_mod.save_image
+
+        def tracking_save(arr, path):
+            saved[str(path)] = arr
+
+        monkeypatch.setattr(cli_mod, "save_image", tracking_save)
+        main()
+        # Should have saved a "_clean" file (the original copied as-is)
+        assert any("_clean" in str(p) for p in saved.keys())
+
+    def test_timing_flag_saves_report(self, monkeypatch, tmp_path):
+        """--timing produces timing_report.txt."""
+        _, out_dir = self._run_main(monkeypatch, tmp_path, ["-t"])
+        monkeypatch.setattr(
+            cli_mod, "process_single_image",
+            lambda **kw: _make_timing(name="test_img.png"),
+        )
+        main()
+        assert (out_dir / "timing_report.txt").exists()
+
+    def test_timing_with_logfile_saves_both(self, monkeypatch, tmp_path):
+        """--timing + --logfile saves two timing reports."""
+        log_path = tmp_path / "run.log"
+        _, out_dir = self._run_main(monkeypatch, tmp_path, ["-t", "--logfile", str(log_path)])
+        monkeypatch.setattr(
+            cli_mod, "process_single_image",
+            lambda **kw: _make_timing(name="test_img.png"),
+        )
+        main()
+        assert (out_dir / "timing_report.txt").exists()
+        assert log_path.with_suffix(".timing.txt").exists()
+
+    def test_image_error_continues_batch(self, monkeypatch, tmp_path):
+        """Exception on one image doesn't stop batch processing."""
+        # Create two images
+        for name in ("a.png", "b.png"):
+            cv2.imwrite(
+                str(tmp_path / name),
+                np.zeros((10, 10, 3), dtype=np.uint8),
+            )
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        monkeypatch.setattr(
+            sys, "argv",
+            ["prog", "-i", str(tmp_path), "-o", str(out_dir), "-p", "telea"],
+        )
+        monkeypatch.setattr(cli_mod, "initialize_consensus_models", lambda *a, **kw: None)
+
+        calls = {"n": 0}
+
+        def process_or_raise(**kw):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("Simulated failure on first image")
+            return {"total_time": 0.1, "skipped": False}
+
+        monkeypatch.setattr(cli_mod, "process_single_image", process_or_raise)
+        # Also mock cleanup_vram (imported lazily in finally block)
+        import untextre.detector as detector_mod
+        monkeypatch.setattr(detector_mod, "cleanup_vram", lambda: None)
+        main()
+        assert calls["n"] == 2
+
+    def test_explicit_known_mask_no_fallback(self, monkeypatch, tmp_path):
+        """-K with no match warns but doesn't fall back to consensus detection."""
+        # Create a valid RGBA template
+        template_path = tmp_path / "template.png"
+        rgba = np.zeros((20, 20, 4), dtype=np.uint8)
+        rgba[:, :, 3] = 255
+        cv2.imwrite(str(template_path), rgba)
+
+        img_path = tmp_path / "photo.png"
+        cv2.imwrite(str(img_path), np.ones((50, 50, 3), dtype=np.uint8) * 128)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        monkeypatch.setattr(
+            sys, "argv",
+            ["prog", "-i", str(img_path), "-o", str(out_dir),
+             "-p", "telea", "-K", str(template_path)],
+        )
+
+        # Mock LaMa init to no-op
+        import untextre.inpaint as inpaint_mod
+        monkeypatch.setattr(inpaint_mod, "initialize_lama_model", lambda **kw: True)
+
+        # Make cascade return None (no match)
+        monkeypatch.setattr(cli_mod, "try_watermark_cascade", lambda *a, **kw: None)
+
+        # process_single_image should NOT be called (no fallback)
+        def fail_if_called(**kw):
+            raise AssertionError("Should not fall back to consensus detection with explicit -K")
+
+        monkeypatch.setattr(cli_mod, "process_single_image", fail_if_called)
+
+        import untextre.detector as detector_mod
+        monkeypatch.setattr(detector_mod, "cleanup_vram", lambda: None)
+
+        main()  # Should complete without calling process_single_image
+
+
+# =========================================================================
+# process_single_image — edge cases
+# =========================================================================
+
+class TestProcessSingleImageEdgeCases:
+    """Edge cases for process_single_image()."""
+
+    def _make_image(self, tmp_path, name="test.png", size=(100, 100)):
+        """Create a synthetic image and return its path."""
+        img = np.ones((*size, 3), dtype=np.uint8) * 200
+        path = tmp_path / name
+        cv2.imwrite(str(path), img)
+        return path
+
+    def test_preprocessing_failure_raises(self, monkeypatch, tmp_path):
+        """preprocess returning None → ValueError."""
+        img_path = self._make_image(tmp_path)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        monkeypatch.setattr(cli_mod, "load_image", lambda _p: np.zeros((50, 50, 3), dtype=np.uint8))
+        monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: None)
+        with pytest.raises(ValueError, match="preprocessing failed"):
+            process_single_image(
+                image_path=img_path, output_dir=out_dir, method="telea",
+                expand_bboxes=False, auto_retry=False,
+            )
+
+    def test_forced_bbox_clipped_to_bounds(self, monkeypatch, tmp_path):
+        """Oversized bbox gets clipped to image dimensions."""
+        img = np.ones((50, 80, 3), dtype=np.uint8) * 200
+        img_path = self._make_image(tmp_path, size=(50, 80))
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        monkeypatch.setattr(cli_mod, "load_image", lambda _p: img.copy())
+        monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: img.copy())
+        monkeypatch.setattr(metrics_mod, "needs_retry", lambda _region: False)
+
+        captured = {}
+
+        def fake_generate(image, boxes, _g, _method, _target):
+            captured["boxes"] = boxes
+            return np.zeros(image.shape[:2], dtype=np.uint8), image.copy()
+
+        monkeypatch.setattr(cli_mod, "_generate_masks_and_inpaint", fake_generate)
+
+        # Forced bbox extends beyond 80×50 image
+        timings = process_single_image(
+            image_path=img_path, output_dir=out_dir, method="telea",
+            forced_bbox=(70, 40, 30, 20),  # extends to (100, 60) vs image (80, 50)
+            expand_bboxes=False, auto_retry=False,
+        )
+        assert timings is not None
+        # The clipped bbox dimensions should be <= image dimensions
+        box = captured["boxes"][0]
+        x, y, w, h = box
+        assert x + w <= 80, f"Clipped bbox exceeds image width: {box}"
+        assert y + h <= 50, f"Clipped bbox exceeds image height: {box}"
+
+    def test_maskfile_not_found_raises(self, monkeypatch, tmp_path):
+        """Bad mask path → ValueError."""
+        img_path = self._make_image(tmp_path)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        img = np.zeros((50, 50, 3), dtype=np.uint8)
+        monkeypatch.setattr(cli_mod, "load_image", lambda _p: img.copy())
+        monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: img.copy())
+        with pytest.raises(ValueError, match="Mask file not found"):
+            process_single_image(
+                image_path=img_path, output_dir=out_dir, method="telea",
+                forced_bbox=(0, 0, 10, 10),
+                maskfile=str(tmp_path / "nonexistent_mask.png"),
+                expand_bboxes=False, auto_retry=False,
+            )
+
+    def test_maskfile_loads_and_converts(self, monkeypatch, tmp_path):
+        """Valid 3-channel mask is loaded, converted to grayscale, and used for inpainting."""
+        img = np.ones((50, 50, 3), dtype=np.uint8) * 200
+        img_path = self._make_image(tmp_path, size=(50, 50))
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        # Create a 3-channel mask file
+        mask_img = np.ones((50, 50, 3), dtype=np.uint8) * 255
+        mask_path = tmp_path / "mask.png"
+        cv2.imwrite(str(mask_path), mask_img)
+
+        load_calls = {}
+
+        def tracking_load(p):
+            path_str = str(p)
+            if "mask" in path_str:
+                load_calls["mask_loaded"] = True
+                return mask_img.copy()
+            return img.copy()
+
+        monkeypatch.setattr(cli_mod, "load_image", tracking_load)
+        monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: img.copy())
+
+        import untextre.inpaint as inpaint_mod
+        inpaint_calls = {}
+
+        def fake_inpaint(image, mask, bbox=None, method="lama"):
+            inpaint_calls["mask_shape"] = mask.shape
+            inpaint_calls["method"] = method
+            return image.copy()
+
+        monkeypatch.setattr(inpaint_mod, "inpaint_image", fake_inpaint)
+
+        timings = process_single_image(
+            image_path=img_path, output_dir=out_dir, method="telea",
+            forced_bbox=(0, 0, 10, 10),
+            maskfile=str(mask_path),
+            expand_bboxes=False, auto_retry=False,
+        )
+        assert timings is not None
+        assert load_calls.get("mask_loaded") is True
+        # Mask should have been converted from 3-channel to single-channel
+        assert len(inpaint_calls["mask_shape"]) == 2
+        assert inpaint_calls["method"] == "telea"
+
+    def test_auto_retry_triggers_g8(self, monkeypatch, tmp_path):
+        """Remnant detection triggers g=8 retry."""
+        img = np.ones((50, 50, 3), dtype=np.uint8) * 200
+        img_path = self._make_image(tmp_path, size=(50, 50))
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        monkeypatch.setattr(cli_mod, "load_image", lambda _p: img.copy())
+        monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: img.copy())
+        monkeypatch.setattr(consensus_mod, "run_consensus_detection", lambda *a, **kw: [(5, 5, 10, 10)])
+        monkeypatch.setattr(metrics_mod, "expand_bbox_along_long_axis", lambda _img, bbox: bbox)
+        monkeypatch.setattr(metrics_mod, "needs_retry", lambda _region: True)
+
+        generate_calls = []
+
+        def fake_generate(image, boxes, g, method, target):
+            generate_calls.append(g)
+            return np.zeros(image.shape[:2], dtype=np.uint8), image.copy()
+
+        monkeypatch.setattr(cli_mod, "_generate_masks_and_inpaint", fake_generate)
+
+        timings = process_single_image(
+            image_path=img_path, output_dir=out_dir, method="telea",
+            expand_bboxes=True, auto_retry=True,
+        )
+        assert timings is not None
+        assert timings["retried_with_g8"] is True
+        assert generate_calls == [4, 8]
+
+    def test_no_retry_flag_skips_g8(self, monkeypatch, tmp_path):
+        """auto_retry=False prevents g=8 retry even when remnants detected."""
+        img = np.ones((50, 50, 3), dtype=np.uint8) * 200
+        img_path = self._make_image(tmp_path, size=(50, 50))
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        monkeypatch.setattr(cli_mod, "load_image", lambda _p: img.copy())
+        monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: img.copy())
+        monkeypatch.setattr(consensus_mod, "run_consensus_detection", lambda *a, **kw: [(5, 5, 10, 10)])
+        monkeypatch.setattr(metrics_mod, "expand_bbox_along_long_axis", lambda _img, bbox: bbox)
+        # needs_retry would return True, but shouldn't be checked
+        monkeypatch.setattr(metrics_mod, "needs_retry", lambda _region: True)
+
+        generate_calls = []
+
+        def fake_generate(image, boxes, g, method, target):
+            generate_calls.append(g)
+            return np.zeros(image.shape[:2], dtype=np.uint8), image.copy()
+
+        monkeypatch.setattr(cli_mod, "_generate_masks_and_inpaint", fake_generate)
+
+        timings = process_single_image(
+            image_path=img_path, output_dir=out_dir, method="telea",
+            expand_bboxes=True, auto_retry=False,
+        )
+        assert timings is not None
+        assert timings["retried_with_g8"] is False
+        assert generate_calls == [4]

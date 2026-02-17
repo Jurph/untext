@@ -1001,6 +1001,8 @@ def process_single_image(
     
     # 3. Generate or load mask
     if maskfile:
+        from .inpaint import inpaint_image
+
         mask_start = time.time()
         logger.info(f"Loading mask from file: {maskfile}")
         mask_path = Path(maskfile)
@@ -1011,6 +1013,19 @@ def process_single_image(
         if len(mask.shape) > 2:
             mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
         timings['mask_time'] = time.time() - mask_start
+
+        # Inpaint using the loaded mask
+        inpaint_start = time.time()
+        if len(consensus_boxes) == 1:
+            inpaint_region = consensus_boxes[0]
+        else:
+            min_x = min(bbox[0] for bbox in consensus_boxes)
+            min_y = min(bbox[1] for bbox in consensus_boxes)
+            max_x = max(bbox[0] + bbox[2] for bbox in consensus_boxes)
+            max_y = max(bbox[1] + bbox[3] for bbox in consensus_boxes)
+            inpaint_region = (min_x, min_y, max_x - min_x, max_y - min_y)
+        result = inpaint_image(image, mask, bbox=inpaint_region, method=method)
+        timings['inpaint_time'] = time.time() - inpaint_start
     else:
         # Process each consensus box with spatial TF-IDF and combine masks
         color_start = time.time()

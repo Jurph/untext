@@ -27,8 +27,10 @@ from untextre.inpaint import (
     _inpaint_with_telea,
     is_lama_available,
     is_lama_initialized,
+    is_lama_healthy,
     get_lama_status,
     initialize_lama_model,
+    reset_lama_model,
 )
 
 
@@ -499,3 +501,246 @@ class TestComparativeInpainting:
         assert lama_ssim > baseline_ssim, (
             f"LaMa ({lama_ssim:.4f}) should beat stamped baseline ({baseline_ssim:.4f})"
         )
+
+
+# =========================================================================
+# LaMa health / status / reset — unit tests with mocked globals
+# =========================================================================
+
+class TestLamaHealthAndReset:
+    """Test is_lama_healthy, reset_lama_model, and edge cases in initialize."""
+
+    def test_healthy_returns_false_when_not_initialized(self, monkeypatch):
+        monkeypatch.setattr(inpaint_mod, "_lama_inpainter", None)
+        assert is_lama_healthy() is False
+
+    def test_healthy_returns_false_on_bad_result_shape(self, monkeypatch):
+        """Health check returns False when model returns wrong shape."""
+        class BadInpainter:
+            def inpaint(self, image, mask):
+                return np.zeros((10, 10, 3), dtype=np.uint8)  # Wrong size
+
+        monkeypatch.setattr(inpaint_mod, "_lama_inpainter", BadInpainter())
+        assert is_lama_healthy() is False
+
+    def test_healthy_returns_false_on_exception(self, monkeypatch):
+        """Health check returns False when model raises."""
+        class BrokenInpainter:
+            def inpaint(self, *_args, **_kwargs):
+                raise RuntimeError("model broken")
+
+        monkeypatch.setattr(inpaint_mod, "_lama_inpainter", BrokenInpainter())
+        assert is_lama_healthy() is False
+
+    def test_healthy_returns_true_on_good_result(self, monkeypatch):
+        """Health check returns True when model returns correct shape."""
+        class GoodInpainter:
+            def inpaint(self, image, mask):
+                return np.zeros_like(image)
+
+        monkeypatch.setattr(inpaint_mod, "_lama_inpainter", GoodInpainter())
+        assert is_lama_healthy() is True
+
+    def test_reset_clears_state(self, monkeypatch):
+        """reset_lama_model sets inpainter to None and clears failure flag."""
+        monkeypatch.setattr(inpaint_mod, "_lama_inpainter", "fake_model")
+        monkeypatch.setattr(inpaint_mod, "_lama_init_failed", True)
+        reset_lama_model()
+        assert inpaint_mod._lama_inpainter is None
+        assert inpaint_mod._lama_init_failed is False
+
+    def test_reset_handles_cuda_cleanup_error(self, monkeypatch):
+        """reset_lama_model handles exceptions during GPU cleanup gracefully."""
+        class CudaInpainter:
+            class device:
+                type = "cuda"
+
+        monkeypatch.setattr(inpaint_mod, "_lama_inpainter", CudaInpainter())
+        monkeypatch.setattr(inpaint_mod, "_lama_init_failed", False)
+        # Even if torch.cuda.empty_cache fails, reset should complete
+        import torch
+        original_empty_cache = torch.cuda.empty_cache
+        monkeypatch.setattr(torch.cuda, "empty_cache", lambda: (_ for _ in ()).throw(RuntimeError("cleanup boom")))
+        reset_lama_model()
+        assert inpaint_mod._lama_inpainter is None
+
+
+class TestInitializeLamaModel:
+    """Test initialize_lama_model edge cases."""
+
+    def test_unavailable_returns_false(self, monkeypatch):
+        """LamaInpainter is None → returns False."""
+        monkeypatch.setattr(inpaint_mod, "LamaInpainter", None)
+        monkeypatch.setattr(inpaint_mod, "_lama_inpainter", None)
+        monkeypatch.setattr(inpaint_mod, "_lama_init_failed", False)
+        assert initialize_lama_model() is False
+        assert inpaint_mod._lama_init_failed is True
+
+    def test_already_initialized_returns_true(self, monkeypatch):
+        """Already-initialized model returns True without reloading."""
+        monkeypatch.setattr(inpaint_mod, "_lama_inpainter", "already_loaded")
+        assert initialize_lama_model() is True
+
+    def test_force_reinit_calls_reset(self, monkeypatch):
+        """force_reinit=True resets and reinitializes."""
+        reset_called = {"n": 0}
+        original_reset = reset_lama_model
+
+        def tracking_reset():
+            reset_called["n"] += 1
+            # Actually clear the global so init proceeds
+            inpaint_mod._lama_inpainter = None
+            inpaint_mod._lama_init_failed = False
+
+        monkeypatch.setattr(inpaint_mod, "reset_lama_model", tracking_reset)
+        monkeypatch.setattr(inpaint_mod, "_lama_inpainter", "stale_model")
+
+        class FakeInpainter:
+            def inpaint(self, image, mask):
+                return np.zeros_like(image)
+
+        monkeypatch.setattr(inpaint_mod, "LamaInpainter", lambda **kw: FakeInpainter())
+
+        result = initialize_lama_model(force_reinit=True)
+        assert reset_called["n"] >= 1
+        assert result is True
+
+    def test_health_check_failure_resets(self, monkeypatch):
+        """Failed health check after construction → reset and return False."""
+        class UnhealthyInpainter:
+            def inpaint(self, image, mask):
+                raise RuntimeError("always broken")
+
+        monkeypatch.setattr(inpaint_mod, "_lama_inpainter", None)
+        monkeypatch.setattr(inpaint_mod, "_lama_init_failed", False)
+        monkeypatch.setattr(inpaint_mod, "LamaInpainter", lambda **kw: UnhealthyInpainter())
+
+        result = initialize_lama_model()
+        assert result is False
+
+    def test_constructor_exception_returns_false(self, monkeypatch):
+        """Exception during LamaInpainter() → returns False.
+
+        Note: the exception handler calls reset_lama_model() which clears
+        _lama_init_failed, so we only verify the return value here.
+        """
+        monkeypatch.setattr(inpaint_mod, "_lama_inpainter", None)
+        monkeypatch.setattr(inpaint_mod, "_lama_init_failed", False)
+
+        def kaboom(**kw):
+            raise RuntimeError("model download failed")
+
+        monkeypatch.setattr(inpaint_mod, "LamaInpainter", kaboom)
+
+        result = initialize_lama_model()
+        assert result is False
+
+
+# =========================================================================
+# _inpaint_with_lama — additional branch coverage
+# =========================================================================
+
+class TestInpaintWithLamaBranches:
+    """Cover remaining branches in _inpaint_with_lama."""
+
+    def test_lama_not_available_raises(self, monkeypatch):
+        """LamaInpainter is None → RuntimeError."""
+        monkeypatch.setattr(inpaint_mod, "LamaInpainter", None)
+        image = np.ones((32, 32, 3), dtype=np.uint8)
+        mask = np.zeros((32, 32), dtype=np.uint8)
+        mask[10:20, 10:20] = 255
+        with pytest.raises(RuntimeError, match="not available"):
+            _inpaint_with_lama(image, mask)
+
+    def test_auto_init_when_not_initialized(self, monkeypatch):
+        """When inpainter is None and auto_retry=True, auto-initializes."""
+        class MockInpainter:
+            def inpaint(self, image, mask, subregion=None):
+                return image.copy()
+
+        init_called = {"n": 0}
+
+        def fake_init(**kw):
+            init_called["n"] += 1
+            inpaint_mod._lama_inpainter = MockInpainter()
+            return True
+
+        monkeypatch.setattr(inpaint_mod, "LamaInpainter", object)
+        monkeypatch.setattr(inpaint_mod, "_lama_inpainter", None)
+        monkeypatch.setattr(inpaint_mod, "initialize_lama_model", fake_init)
+        monkeypatch.setattr(inpaint_mod, "get_lama_inpainter",
+                            lambda: inpaint_mod._lama_inpainter)
+
+        image = np.ones((40, 40, 3), dtype=np.uint8) * 128
+        mask = np.zeros((40, 40), dtype=np.uint8)
+        mask[10:20, 10:20] = 255
+
+        result = _inpaint_with_lama(image, mask, auto_retry=True)
+        assert init_called["n"] == 1
+        assert result.shape == image.shape
+
+    def test_auto_init_failure_raises(self, monkeypatch):
+        """Auto-init fails → RuntimeError."""
+        monkeypatch.setattr(inpaint_mod, "LamaInpainter", object)
+        monkeypatch.setattr(inpaint_mod, "_lama_inpainter", None)
+        monkeypatch.setattr(inpaint_mod, "get_lama_inpainter", lambda: None)
+        monkeypatch.setattr(inpaint_mod, "initialize_lama_model", lambda **kw: False)
+
+        image = np.ones((32, 32, 3), dtype=np.uint8)
+        mask = np.zeros((32, 32), dtype=np.uint8)
+        mask[10:20, 10:20] = 255
+        with pytest.raises(RuntimeError, match="Failed to auto-initialize"):
+            _inpaint_with_lama(image, mask, auto_retry=True)
+
+    def test_no_subregion_returns_copy(self, monkeypatch):
+        """Empty mask after subregion calc → returns original copy."""
+        monkeypatch.setattr(inpaint_mod, "LamaInpainter", object)
+
+        class MockInpainter:
+            pass
+
+        monkeypatch.setattr(inpaint_mod, "get_lama_inpainter", lambda: MockInpainter())
+        monkeypatch.setattr(inpaint_mod, "_calculate_inpainting_subregion", lambda *a, **kw: None)
+
+        image = np.ones((32, 32, 3), dtype=np.uint8) * 200
+        mask = np.zeros((32, 32), dtype=np.uint8)
+        mask[10:20, 10:20] = 255
+
+        result = _inpaint_with_lama(image, mask)
+        np.testing.assert_array_equal(result, image)
+        assert result is not image  # It's a copy
+
+    def test_retry_exception_raises_original(self, monkeypatch):
+        """When both primary and retry fail, raises RuntimeError."""
+        class AlwaysFailInpainter:
+            def inpaint(self, *_args, **_kwargs):
+                raise RuntimeError("always fails")
+
+        monkeypatch.setattr(inpaint_mod, "LamaInpainter", object)
+        monkeypatch.setattr(inpaint_mod, "get_lama_inpainter", lambda: AlwaysFailInpainter())
+        monkeypatch.setattr(inpaint_mod, "initialize_lama_model", lambda **kw: True)
+
+        image = np.ones((40, 40, 3), dtype=np.uint8) * 128
+        mask = np.zeros((40, 40), dtype=np.uint8)
+        mask[10:20, 10:20] = 255
+
+        with pytest.raises(RuntimeError, match="LaMa inpainting failed"):
+            _inpaint_with_lama(image, mask, auto_retry=True)
+
+
+# =========================================================================
+# _inpaint_with_telea — additional branch coverage
+# =========================================================================
+
+class TestInpaintWithTeleaBranches:
+    """Cover remaining branches in _inpaint_with_telea."""
+
+    def test_empty_processed_mask_returns_copy(self):
+        """Mask with all values <= 0 after processing returns original."""
+        image = np.ones((50, 50, 3), dtype=np.uint8) * 200
+        mask = np.zeros((50, 50), dtype=np.uint8)  # All zero
+        # _has_pixels_to_inpaint catches this at the dispatch level,
+        # but _inpaint_with_telea has its own check after mask processing.
+        result = _inpaint_with_telea(image, mask)
+        np.testing.assert_array_equal(result, image)
+        assert result is not image
