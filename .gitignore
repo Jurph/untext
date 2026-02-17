@@ -198,6 +198,10 @@ images/test1*
 images/test2*
 images/test3*
 
+# Debug and coverage output
+debug_output/
+coverage_report/
+
 # Experiment outputs
 experimental_output.csv
 *.experiment.csv
