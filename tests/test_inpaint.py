@@ -18,10 +18,12 @@ import numpy as np
 import pytest
 from skimage.metrics import structural_similarity as ssim
 
+import untextre.inpaint as inpaint_mod
 from untextre.inpaint import (
     inpaint_image,
     _has_pixels_to_inpaint,
     _calculate_inpainting_subregion,
+    _inpaint_with_lama,
     _inpaint_with_telea,
     is_lama_available,
     is_lama_initialized,
@@ -239,6 +241,89 @@ class TestInpaintWithTelea:
         # Should not raise — the function converts to single channel
         result = _inpaint_with_telea(white_200, mask_3ch)
         assert result.shape == white_200.shape
+
+
+class TestInpaintWithLamaRecovery:
+    """Branch tests for LaMa orchestration/retry behavior."""
+
+    def test_uninitialized_and_no_retry_raises(self):
+        image = np.ones((32, 32, 3), dtype=np.uint8) * 255
+        mask = np.zeros((32, 32), dtype=np.uint8)
+        mask[10:12, 10:12] = 255
+
+        original_lama_cls = inpaint_mod.LamaInpainter
+        inpaint_mod.LamaInpainter = object
+
+        try:
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setattr(inpaint_mod, "get_lama_inpainter", lambda: None)
+                with pytest.raises(RuntimeError, match="not initialized"):
+                    _inpaint_with_lama(image, mask, auto_retry=False)
+        finally:
+            inpaint_mod.LamaInpainter = original_lama_cls
+
+    def test_retry_reinitialize_then_succeeds(self):
+        image = np.ones((40, 40, 3), dtype=np.uint8) * 200
+        mask = np.zeros((40, 40), dtype=np.uint8)
+        mask[12:24, 14:28] = 255
+
+        class FailingInpainter:
+            def inpaint(self, *_args, **_kwargs):
+                raise RuntimeError("boom")
+
+        class RecoveredInpainter:
+            def inpaint(self, img, _mask, subregion=None):
+                assert subregion is not None
+                out = img.copy()
+                out[mask > 0] = 77
+                return out
+
+        state = {"reinitialized": False, "force_reinit": None}
+
+        def fake_get_lama_inpainter():
+            if state["reinitialized"]:
+                return RecoveredInpainter()
+            return FailingInpainter()
+
+        def fake_initialize(device="cuda", force_reinit=False):
+            state["reinitialized"] = True
+            state["force_reinit"] = force_reinit
+            return True
+
+        original_lama_cls = inpaint_mod.LamaInpainter
+        inpaint_mod.LamaInpainter = object
+
+        try:
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setattr(inpaint_mod, "get_lama_inpainter", fake_get_lama_inpainter)
+                mp.setattr(inpaint_mod, "initialize_lama_model", fake_initialize)
+                result = _inpaint_with_lama(image, mask, auto_retry=True)
+
+            assert state["force_reinit"] is True
+            assert np.all(result[mask > 0] == 77)
+        finally:
+            inpaint_mod.LamaInpainter = original_lama_cls
+
+    def test_retry_reinitialize_failure_raises(self):
+        image = np.ones((32, 32, 3), dtype=np.uint8) * 255
+        mask = np.zeros((32, 32), dtype=np.uint8)
+        mask[8:14, 8:14] = 255
+
+        class FailingInpainter:
+            def inpaint(self, *_args, **_kwargs):
+                raise RuntimeError("primary failure")
+
+        original_lama_cls = inpaint_mod.LamaInpainter
+        inpaint_mod.LamaInpainter = object
+
+        try:
+            with pytest.MonkeyPatch.context() as mp:
+                mp.setattr(inpaint_mod, "get_lama_inpainter", lambda: FailingInpainter())
+                mp.setattr(inpaint_mod, "initialize_lama_model", lambda **_kwargs: False)
+                with pytest.raises(RuntimeError, match="LaMa inpainting failed"):
+                    _inpaint_with_lama(image, mask, auto_retry=True)
+        finally:
+            inpaint_mod.LamaInpainter = original_lama_cls
 
 
 # =========================================================================
