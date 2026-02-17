@@ -209,3 +209,6 @@ experiments/
 # The directory is tracked but contents are not — see watermarks/.gitkeep
 watermarks/*
 !watermarks/.gitkeep
+
+# Claude Code project instructions (local only)
+CLAUDE.md

@@ -1,0 +1,6 @@
+---
+alwaysApply: true
+---
+Write excellent tests. Tests should be clear, idiomatic, and they should use the pytest and other testing features of whatever frameworks are in use. Tests should all have HIGH diagnostic value. That means we never write tests that test other people's code (e.g. testing that a call to random() generates a uniform distribution of outputs). We never write trivial tests (e.g. set a string and then read back whether the string was set). We never write tests that only check cosmetic features that are matters of artistic design choice (e.g. whether a greeting string contains 'Hi!' vs 'Hello!'). We do test whether setting an incorrect value generates the intended exceptions or failover cases; we test whether out-of-bounds values are handled gracefully; we test the intended functionality at the level where its failure will provide useful diagnostic value. 
+
+Tests should not multiply unnecessarily - always look for an existing test suite we can extend before writing a whole new chunk of tests. Consider the overall aesthetic of the code and architecture when making this decision; sometimes a new test suite is warranted! But often it fits more cleanly with existing tests. 
