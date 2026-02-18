@@ -2,7 +2,27 @@
 
 # untextre
 
-A tool for removing watermarks from images using consensus detection, Figure of Merit color analysis, and GPU-accelerated inpainting. The tool's goal is to remove the bare minimum clutter from the image, and then use state-of-the-art inpainting to fill that information in so that it's almost as if nobody watermarked the image in the first place. 
+A tool for removing watermarks from images using consensus detection, Figure of Merit color analysis, and GPU-accelerated inpainting. The tool's goal is to remove the bare minimum clutter from the image, and then use state-of-the-art inpainting to fill that information in so that it's almost as if nobody watermarked the image in the first place.
+
+## Example
+
+<table align="center">
+  <tr>
+    <th width="33%">Original</th>
+    <th width="34%">Watermarked</th>
+    <th width="33%">Cleaned</th>
+  </tr>
+  <tr>
+    <td><img src="docs/images/great-wave-original.jpg" alt="Original" /></td>
+    <td><img src="docs/images/great-wave-watermarked.jpg" alt="Watermarked" /></td>
+    <td><img src="docs/images/great-wave-cleaned.jpg" alt="Cleaned by untextre" /></td>
+  </tr>
+  <tr>
+    <td align="center"><em>Hokusai, 1831</em></td>
+    <td align="center"><em>"UkiyoEfans.jp"</em></td>
+    <td align="center"><em>untextre + LaMa</em></td>
+  </tr>
+</table>
 
 ## Key Features
 
