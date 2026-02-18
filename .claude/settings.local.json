@@ -9,7 +9,9 @@
       "Bash(git commit:*)",
       "Bash(git push:*)",
       "Bash(./venv/Scripts/python:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(./venv/Scripts/ruff check .)",
+      "Bash(./venv/Scripts/ruff check --fix --exclude run_web_interface.py .)"
     ]
   }
 }

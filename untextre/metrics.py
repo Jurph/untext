@@ -12,7 +12,7 @@ Thresholds are based on experimental data from experiments/granularity_experimen
 
 import cv2
 import numpy as np
-from typing import Tuple, Optional
+from typing import Tuple
 
 from .utils import setup_logger
 

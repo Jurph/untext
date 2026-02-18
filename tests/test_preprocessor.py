@@ -6,7 +6,6 @@ Covers:
 
 import cv2
 import numpy as np
-import pytest
 
 from untextre.preprocessor import preprocess_image
 

@@ -8,7 +8,6 @@ It has **no external dependencies** beyond OpenCV.
 """
 
 from typing import Optional, Tuple
-from pathlib import Path
 import logging
 
 import cv2

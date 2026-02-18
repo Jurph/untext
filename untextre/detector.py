@@ -19,7 +19,6 @@ from doctr.models.preprocessor.pytorch import PreProcessor
 import easyocr
 
 from .utils import ImageArray, BBox, setup_logger, CLI_DEFAULT_CONFIDENCE
-from .preprocessor import preprocess_image
 
 import warnings
 warnings.filterwarnings("ignore", message="defusedxml.cElementTree is deprecated")

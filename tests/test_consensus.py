@@ -11,10 +11,7 @@ High diagnostic value tests:
 - Boundary conditions and error cases
 """
 
-import numpy as np
-import cv2
 import pytest
-from typing import List, Tuple, Dict
 
 from untextre.consensus import (
     calculate_bbox_overlap,

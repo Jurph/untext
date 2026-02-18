@@ -371,7 +371,7 @@ def _calculate_inpainting_subregion(
     mask_area = mask_bbox[2] * mask_bbox[3]
     coverage_percent = (total_white_pixels / mask_area) * 100 if mask_area > 0 else 0
     
-    logger.info(f"Mask analysis:")
+    logger.info("Mask analysis:")
     logger.info(f"  White pixels found: {total_white_pixels:,}")
     logger.info(f"  Mask bounding box: ({mask_bbox[0]}, {mask_bbox[1]}) size {mask_bbox[2]}×{mask_bbox[3]}")
     logger.info(f"  Mask area: {mask_area:,} pixels")

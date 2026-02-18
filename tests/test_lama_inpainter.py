@@ -11,8 +11,8 @@ import cv2
 import numpy as np
 import pytest
 from pathlib import Path
-from typing import Tuple, Optional
-from unittest.mock import MagicMock, patch
+from typing import Tuple
+from unittest.mock import MagicMock
 
 from untextre.telea_inpainter import TeleaInpainter
 import untextre.lama_inpainter as lama_mod
@@ -298,7 +298,6 @@ def lama_inpainter(monkeypatch):
     monkeypatch.setattr(lama_mod, "SimpleLama", _FakeSimpleLama)
     monkeypatch.setattr(lama_mod, "select_device", lambda d: "cpu")
 
-    import torch
     inpainter = LamaInpainter(device="cpu")
     inpainter.model = fake
     return inpainter

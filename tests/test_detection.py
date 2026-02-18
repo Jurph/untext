@@ -15,7 +15,6 @@ import numpy as np
 import cv2
 import pytest
 from pathlib import Path
-from typing import List, Tuple, Dict
 
 # Every test in this module loads ML models (DocTR, EasyOCR, EAST).
 pytestmark = pytest.mark.slow
@@ -27,7 +26,6 @@ from untextre.consensus import (
     detect_with_east,
     run_consensus_detection,
     find_consensus_boxes,
-    initialize_consensus_models,
 )
 from untextre.cli import (
     initialize_consensus_models as init_all_models,

@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional, Tuple, Union, Dict, List
+from typing import Optional
 
 import numpy as np
 import cv2  # OpenCV for colour space conversions

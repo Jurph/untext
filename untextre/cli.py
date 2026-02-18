@@ -781,7 +781,7 @@ def main() -> None:
     total_time = time.time() - start_time
     avg_time = total_time / len(image_files) if image_files else 0
     
-    logger.info(f"\nProcessing complete:")
+    logger.info("\nProcessing complete:")
     logger.info(f"Total elapsed time: {total_time:.1f} seconds")
     logger.info(f"Average time per image: {avg_time:.1f} seconds")
     logger.info(f"Images processed: {len(image_files)}")
@@ -1214,7 +1214,7 @@ def _save_clean_timing_report(detailed_timings: list, total_time: float, avg_tim
         f.write("CONSENSUS DETECTION + SPATIAL TF-IDF TIMING REPORT\n")
         f.write("=" * 74 + "\n")
         f.write(f"Confidence threshold: {confidence_threshold}\n")
-        f.write(f"TF-IDF granularity: g=4 (auto-retry with g=8 if needed)\n")
+        f.write("TF-IDF granularity: g=4 (auto-retry with g=8 if needed)\n")
         f.write(f"Inpainting method: {method}\n")
         if target_color:
             f.write(f"Target color (deprecated): {target_color}\n")
@@ -1330,7 +1330,7 @@ def _save_clean_timing_report(detailed_timings: list, total_time: float, avg_tim
                 failover_type = timing.get('failover_type', 'none')
                 failover_counts[failover_type] = failover_counts.get(failover_type, 0) + 1
 
-        f.write(f"\nFailover usage:\n")
+        f.write("\nFailover usage:\n")
         if template_match_count > 0:
             f.write(f"  Template match: {template_match_count}\n")
         f.write(f"  Normal consensus: {failover_counts.get('none', 0)}\n")

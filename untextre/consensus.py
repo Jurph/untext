@@ -6,9 +6,7 @@ text regions where multiple detectors agree.
 """
 
 import cv2
-import gc
 import numpy as np
-import torch
 from typing import List, Tuple, Dict
 
 from .utils import setup_logger, pad_bbox_to_multiple, MODEL_CONFIDENCE_FLOOR, CLI_DEFAULT_CONFIDENCE
