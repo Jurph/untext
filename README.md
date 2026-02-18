@@ -2,7 +2,7 @@
 
 # untextre
 
-A tool for removing watermarks from images using consensus detection, Figure of Merit color analysis, and GPU-accelerated inpainting. The tool's goal is to remove the bare minimum clutter from the image, and then use state-of-the-art inpainting to fill that information in so that it's almost as if nobody watermarked the image in the first place.
+A tool for removing watermarks from images using consensus detection, Figure of Merit color analysis, and GPU-accelerated inpainting. The goal is to mask only the watermark pixels, then use inpainting to fill them in.
 
 ## Example
 
@@ -26,10 +26,10 @@ A tool for removing watermarks from images using consensus detection, Figure of 
 
 ## Key Features
 
-* **Text Detection via Three-Model Consensus**: Combines three text detection methods (EAST, DocTR, EasyOCR) to find regions where multiple detectors agree, ensuring high-confidence text detection
+* **Text Detection via Three-Model Consensus**: Combines three text detection methods ([EAST](https://arxiv.org/abs/1704.03155), [DocTR](https://github.com/mindee/doctr), [EasyOCR](https://github.com/JaidedAI/EasyOCR)) to find regions where multiple detectors agree, for higher-confidence text detection
 * **Figure of Merit (FOM) Analysis**: Within regions detected as containing text, identifies text-like color clusters using a weighted combination of TF-IDF distinctiveness, border underrepresentation, and connected-component fragmentation
-* **Known Watermark Detection via ORB feature matching**: If you have already isolated the watermark to an RGBA file in .PNG format, place it in the `/watermarks` directory and if it matches the watermark on an image, `untextre` will use that watermark's mask instead of the slower text-detection and color-estimation approach. Matching is done via ORB (Oriented FAST and Rotated BRIEF).   
-* **High-Quality Inpainting**: LaMa (default) or TELEA inpainting with optimized region processing
+* **Known Watermark Detection via [ORB](https://doi.org/10.1109/ICCV.2011.6126544) feature matching**: If you have already isolated the watermark to an RGBA file in .PNG format, place it in the `/watermarks` directory and if it matches the watermark on an image, `untextre` will use that watermark's mask instead of the slower text-detection and color-estimation approach. Matching is done via ORB (Oriented FAST and Rotated BRIEF).   
+* **Inpainting**: [LaMa](https://arxiv.org/abs/2109.07161) (default) or [TELEA](https://doi.org/10.1080/10867651.2004.10487596) inpainting, applied only to masked regions
 
 ## How It Works
 
@@ -40,7 +40,7 @@ A tool for removing watermarks from images using consensus detection, Figure of 
 3. **Figure of Merit Scoring**: Evaluates each cluster with a weighted FOM combining TF-IDF score (color distinctiveness vs. background), border ratio (text underrepresented at bbox edges), and connected-component fraction (text is fragmented, not one solid blob)
 4. **Adaptive Masking**: Accepts clusters whose FOM exceeds a threshold and whose largest connected component is below a guard value, then applies morphological cleanup
 6. **Regional Processing**: Each consensus region gets its own color analysis, allowing different text colors in different areas
-7. **Smart Inpainting**: Combines regional masks and applies LaMa or TELEA inpainting for seamless text removal 
+7. **Inpainting**: Combines regional masks and applies LaMa or TELEA inpainting to fill in the masked areas
 
 The underlying engine works as a command-line tool or as a web UI. I've tried to strike a careful balance between exposing all of the dials and creating a simple and fast user experience. 
 
@@ -276,8 +276,10 @@ If wrong colors are being masked:
 
 ## Technical Details
 
-### Consensus Detection
-The system runs three different text detection algorithms:
+### Watermark Detection
+
+The system runs **ORB** against the target image, testing all of the transparent PNG images found in the `watermarks/` subfolder. If a match is found, the image's alpha channel is used to construct a binary mask for the watermark. If no known watermarks are found, it runs three different text detection algorithms:
+
 - **EAST**: Fast OpenCV-based detection
 - **DocTR**: Deep learning document text recognition  
 - **EasyOCR**: OCR-based text detection
@@ -285,19 +287,31 @@ The system runs three different text detection algorithms:
 Regions where 2 or more detectors agree (with configurable overlap threshold) become "consensus regions" - areas of high confidence for containing text.
 
 ### Figure of Merit (FOM) Analysis
-This is the key innovation of **untextre**. In a region where text is known to exist, we identify the text color by scoring each color cluster on multiple axes:
 
-1. Generate a surrounding region outside the detection bbox, with roughly the same pixel count as the detection region  
+We did a little bit of research writing this part. In a region where text is known to exist, we identify the text color by scoring each color cluster on multiple axes:
+
+1. Generate a surrounding region outside the detection bbox, with roughly the same pixel count as the detection region (the "local background")  
 2. Cluster all colors in both regions using K-means (CLI: g=4 with auto-retry at g=8; Web UI: user-configurable 3-20)
 3. For each cluster, compute three signals:
-   - **TF-IDF score**: How distinctive is this color to the text region vs. background?
+   - **TF-IDF score**: How distinctive is this color to the detection region vs. local background?
    - **Border ratio**: Is this color underrepresented at the edges of the bbox? (Text tends to sit in the interior.)
    - **Connected-component fraction**: Is this color fragmented into many small shapes? (Text strokes are fragmented; solid backgrounds are not.)
-4. Combine these into a weighted Figure of Merit: `FOM = 0.07 * tf_idf + 0.63 * border + 0.30 * cc`
+4. After empirically sampling multiple text watermarks across multiple datasets, we derived coefficients for this Figure of Merit: `FOM = 0.07 * tf_idf + 0.63 * border + 0.30 * cc` 
 5. Accept clusters with FOM >= 0.30 and largest connected component < 85% of the cluster area
 6. The accepted clusters form the binary mask, cleaned up with morphological operations (closing, dilation, blur)
 
-The weights were determined empirically through systematic experimentation on a variety of watermarked images.
+### Inpainting 
+
+**LaMa** on GPU offers a good balance of speed and quality. Diffusion models produce better results but are much slower; CPU-bound methods like **Telea** (our fallback, via OpenCV) are faster but produce more visible artifacts. LaMa handles irregular mask shapes well and does a reasonable job continuing patterns like wood grain, paint textures, and stripes.
+
+### Bibliography
+
+1. Suvorov, R.; Logacheva, E.; Mashikhin, A.; Remizova, A.; Ashukha, A.; Silvestrov, A.; Kong, N.; Goka, H.; Park, K.; Lempitsky, V. "Resolution-robust Large Mask Inpainting with Fourier Convolutions." *WACV*, 2022. [arXiv:2109.07161](https://arxiv.org/abs/2109.07161) — **LaMa**
+2. Zhou, X.; Yao, C.; Wen, H.; Wang, Y.; Zhou, S.; He, W.; Liang, J. "EAST: An Efficient and Accurate Scene Text Detector." *CVPR*, 2017. [arXiv:1704.03155](https://arxiv.org/abs/1704.03155) — **EAST**
+3. Liao, M.; Wan, Z.; Yao, C.; Chen, K.; Bai, X. "Real-Time Scene Text Detection with Differentiable Binarization." *AAAI*, 2020. [arXiv:1911.08947](https://arxiv.org/abs/1911.08947) — **DBNet**, the detection backbone used by [DocTR](https://github.com/mindee/doctr)
+4. Baek, Y.; Lee, B.; Han, D.; Yun, S.; Lee, H. "Character Region Awareness for Text Detection." *CVPR*, 2019. [arXiv:1904.01941](https://arxiv.org/abs/1904.01941) — **CRAFT**, the detection model used by [EasyOCR](https://github.com/JaidedAI/EasyOCR)
+5. Rublee, E.; Rabaud, V.; Konolige, K.; Bradski, G. "ORB: An Efficient Alternative to SIFT or SURF." *ICCV*, 2011, pp. 2564–2571. [DOI:10.1109/ICCV.2011.6126544](https://doi.org/10.1109/ICCV.2011.6126544) — **ORB**
+6. Telea, A. "An Image Inpainting Technique Based on the Fast Marching Method." *Journal of Graphics Tools*, vol. 9, no. 1, 2004, pp. 23–34. [DOI:10.1080/10867651.2004.10487596](https://doi.org/10.1080/10867651.2004.10487596) — **TELEA**
 
 ### License
 
