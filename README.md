@@ -18,7 +18,7 @@ A tool for removing watermarks from images using consensus detection, Figure of 
     <td><img src="docs/images/great-wave-cleaned.jpg" alt="Cleaned by untextre" /></td>
   </tr>
   <tr>
-    <td align="center"><em>Hokusai, 1831</em></td>
+    <td align="center"><em>Hokusai, c. 1831</em></td>
     <td align="center"><em>"UkiyoEfans.jp"</em></td>
     <td align="center"><em>untextre + LaMa</em></td>
   </tr>
@@ -35,12 +35,12 @@ A tool for removing watermarks from images using consensus detection, Figure of 
 
 **untextre** uses the following approach: 
 
-1. **Consensus Detection**: Runs EAST, DocTR, and EasyOCR detectors simultaneously to find text regions where 2+ detectors agree; also runs ORB (Oriented FAST and Rotated BRIEF) against known watermarks that are stored in `/watermarks` to see if there's an obvious match  
+1. **Consensus Detection**: Runs EAST, DocTR, and EasyOCR detectors to find text regions where 2+ detectors agree; also runs ORB (Oriented FAST and Rotated BRIEF) against known watermarks that are stored in `/watermarks` to see if there's an obvious match
 2. **Color Clustering**: For each consensus region, clusters all colors (inside and surrounding) using K-means
 3. **Figure of Merit Scoring**: Evaluates each cluster with a weighted FOM combining TF-IDF score (color distinctiveness vs. background), border ratio (text underrepresented at bbox edges), and connected-component fraction (text is fragmented, not one solid blob)
 4. **Adaptive Masking**: Accepts clusters whose FOM exceeds a threshold and whose largest connected component is below a guard value, then applies morphological cleanup
-6. **Regional Processing**: Each consensus region gets its own color analysis, allowing different text colors in different areas
-7. **Inpainting**: Combines regional masks and applies LaMa or TELEA inpainting to fill in the masked areas
+5. **Regional Processing**: Each consensus region gets its own color analysis, allowing different text colors in different areas
+6. **Inpainting**: Combines regional masks and applies LaMa or TELEA inpainting to fill in the masked areas
 
 The underlying engine works as a command-line tool or as a web UI. I've tried to strike a careful balance between exposing all of the dials and creating a simple and fast user experience. 
 
@@ -98,7 +98,7 @@ pip install -r requirements_dev.txt
 
 ### Web Interface (Recommended for Beginners)
 
-The easiest way to use **untextre** is through the web interface - just drag and drop images in your browser!
+The easiest way to use **untextre** is through the web interface — drag and drop images in your browser.
 
 **Quick Start:**
 ```bash
@@ -157,7 +157,7 @@ python -m untextre.cli -i image.jpg -o results/ --keep-masks --verbose --timing
   - Lower values (0.1-0.2): More sensitive, may include false positives
   - Higher values (0.4-0.6): More conservative, may miss faint text
 
-* `-g`, `--granularity K` - Override TF-IDF cluster count (e.g. 4, 8). If set, uses this K only (no g=8 retry). Default: auto g=4 with retry at g=8.
+* `-g`, `--granularity K` - Override TF-IDF cluster count (e.g. 4, 8). If set, uses this K only (no retry). Defaults to 4, with an automatic second pass at 8 if remnants are detected.
 
 * `--no-expand` - Disable automatic bbox expansion along long axis
   - By default, detected bboxes are expanded to catch text that detectors may have missed
@@ -284,11 +284,11 @@ The system runs **ORB** against the target image, testing all of the transparent
 - **DocTR**: Deep learning document text recognition  
 - **EasyOCR**: OCR-based text detection
 
-Regions where 2 or more detectors agree (with configurable overlap threshold) become "consensus regions" - areas of high confidence for containing text.
+Regions where 2 or more detectors agree (with configurable overlap threshold) become "consensus regions" — areas likely to contain text.
 
 ### Figure of Merit (FOM) Analysis
 
-We did a little bit of research writing this part. In a region where text is known to exist, we identify the text color by scoring each color cluster on multiple axes:
+In a region where text is known to exist, we identify the text color by scoring each color cluster on multiple axes:
 
 1. Generate a surrounding region outside the detection bbox, with roughly the same pixel count as the detection region (the "local background")  
 2. Cluster all colors in both regions using K-means (CLI: g=4 with auto-retry at g=8; Web UI: user-configurable 3-20)
@@ -302,7 +302,7 @@ We did a little bit of research writing this part. In a region where text is kno
 
 ### Inpainting 
 
-**LaMa** on GPU offers a good balance of speed and quality. Diffusion models produce better results but are much slower; CPU-bound methods like **Telea** (our fallback, via OpenCV) are faster but produce more visible artifacts. LaMa handles irregular mask shapes well and does a reasonable job continuing patterns like wood grain, paint textures, and stripes.
+**LaMa** on GPU offers a good balance of speed and quality. Diffusion models can produce better results but are much slower; CPU-bound methods like **Telea** (our fallback, via OpenCV) are faster but produce more visible artifacts. LaMa handles irregular mask shapes well and does a reasonable job continuing patterns like wood grain, paint textures, and stripes.
 
 ### Bibliography
 
