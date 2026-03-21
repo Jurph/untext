@@ -86,14 +86,261 @@ def compute_cluster_fom(
     return 0.07 * tf_score + 0.63 * border_score + 0.30 * cc_score
 
 
+def grabcut_refine(
+    image_roi: ImageArray,
+    fom_mask: np.ndarray,
+    iterations: int = 5,
+    dilation_px: int = 21,
+    debug: bool = False,
+) -> np.ndarray:
+    """Refine a binary FOM mask using GrabCut for spatially coherent edges.
+
+    Seeds GrabCut with the FOM mask: high-confidence text pixels become
+    ``GC_FGD``, high-confidence background becomes ``GC_BGD``, and a
+    border of ambiguity around each is marked probable.
+
+    After GrabCut produces a tight glyph-level mask, an aggressive
+    dilation is applied so that the final mask gives LaMa plenty of
+    background context around each text stroke.
+
+    Args:
+        image_roi: The BGR image region (same dimensions as *fom_mask*).
+        fom_mask: Binary mask (uint8, 0/255) from FOM analysis.
+        iterations: Number of GrabCut iterations (default 5).
+        dilation_px: Diameter of the elliptical dilation kernel applied
+                    after GrabCut (default 21).  Larger values give the
+                    inpainter more surrounding context.
+        debug: If True, log diagnostic info.
+
+    Returns:
+        Refined binary mask (uint8, 0/255), same shape as *fom_mask*.
+    """
+    h, w = fom_mask.shape[:2]
+
+    # GrabCut needs at least a 3×3 region to be meaningful
+    if h < 3 or w < 3:
+        if debug:
+            logger.info("GrabCut: region too small, returning FOM mask unchanged")
+        return fom_mask
+
+    # Build the 4-value initialization mask that GrabCut expects:
+    #   GC_BGD (0)     — definite background
+    #   GC_FGD (1)     — definite foreground
+    #   GC_PR_BGD (2)  — probable background
+    #   GC_PR_FGD (3)  — probable foreground
+    #
+    # Strategy: erode the FOM foreground to get "definite foreground",
+    # erode the FOM background to get "definite background", and mark
+    # the remaining fringe as probable.
+    kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    fg_eroded = cv2.erode(fom_mask, kern, iterations=1)
+    bg_mask = cv2.bitwise_not(fom_mask)
+    bg_eroded = cv2.erode(bg_mask, kern, iterations=1)
+
+    gc_mask = np.full((h, w), cv2.GC_PR_BGD, dtype=np.uint8)
+    gc_mask[bg_eroded == 255] = cv2.GC_BGD
+    gc_mask[fom_mask == 255] = cv2.GC_PR_FGD
+    gc_mask[fg_eroded == 255] = cv2.GC_FGD
+
+    if debug:
+        counts = {
+            "GC_BGD": int(np.sum(gc_mask == cv2.GC_BGD)),
+            "GC_FGD": int(np.sum(gc_mask == cv2.GC_FGD)),
+            "GC_PR_BGD": int(np.sum(gc_mask == cv2.GC_PR_BGD)),
+            "GC_PR_FGD": int(np.sum(gc_mask == cv2.GC_PR_FGD)),
+        }
+        logger.info(f"GrabCut init mask: {counts}")
+
+    # GrabCut requires the image to be uint8 BGR (already is) and
+    # allocates two 13-component GMM arrays internally.
+    bgd_model = np.zeros((1, 65), np.float64)
+    fgd_model = np.zeros((1, 65), np.float64)
+
+    try:
+        cv2.grabCut(
+            image_roi,
+            gc_mask,
+            None,  # rect unused when mask is provided
+            bgd_model,
+            fgd_model,
+            iterations,
+            cv2.GC_INIT_WITH_MASK,
+        )
+    except cv2.error as e:
+        if debug:
+            logger.warning(f"GrabCut failed ({e}), returning FOM mask unchanged")
+        return fom_mask
+
+    # Extract foreground: definite + probable foreground
+    refined = np.where(
+        (gc_mask == cv2.GC_FGD) | (gc_mask == cv2.GC_PR_FGD), 255, 0
+    ).astype(np.uint8)
+
+    if debug:
+        fom_px = int(np.sum(fom_mask == 255))
+        gc_px = int(np.sum(refined == 255))
+        logger.info(f"GrabCut refinement: {fom_px} → {gc_px} foreground pixels "
+                    f"({gc_px - fom_px:+d})")
+
+    # Dilate the tight glyph mask so the inpainter gets generous
+    # background context around every text stroke.
+    if dilation_px > 0:
+        dilate_kern = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (dilation_px, dilation_px)
+        )
+        refined = cv2.dilate(refined, dilate_kern)
+        if debug:
+            dilated_px = int(np.sum(refined == 255))
+            logger.info(f"GrabCut post-dilation ({dilation_px}px): "
+                        f"{gc_px} → {dilated_px} foreground pixels")
+
+    return refined
+
+
+def color_guided_expand(
+    image: ImageArray,
+    bbox: BBox,
+    confirmed_mask: np.ndarray,
+    centers: np.ndarray,
+    top_id: int,
+    bot_id: int,
+    color_radius: float,
+    bg_radius: float,
+    expand_factor: float = 2.0,
+    min_cc_px: int = 10,
+    iterations: int = 5,
+    debug: bool = False,
+) -> np.ndarray:
+    """Expand a confirmed text mask using adaptive color matching and GrabCut.
+
+    Uses the bbox-derived K-means centroids to find pixels genuinely similar
+    to the watermark color — bounded to an expanded bbox, not the full image.
+
+    1. Expands the detection bbox by expand_factor (clamped to image bounds)
+    2. Within that ROI, measures each pixel's distance to the top-FOM centroid
+    3. Pixels within color_radius → GC_FGD; within bg_radius of bottom
+       centroid → GC_BGD; everything else → GC_PR_BGD
+    4. Applies morphological closing (3×3) + CC area filter to the FGD mask
+    5. Runs GrabCut on the expanded bbox ROI
+    6. Returns confirmed_mask OR'd with the GrabCut result
+
+    Args:
+        image: Full image (H×W×3 BGR uint8).
+        bbox: Original detection bounding box (x, y, w, h).
+        confirmed_mask: Full-image binary mask (H×W uint8, 0/255) from
+                        bbox FOM analysis. Returned unchanged on failure.
+        centers: K-means cluster centroids (K×3 float32, RGB order).
+        top_id: Index of the highest-FOM cluster → GC_FGD seed.
+        bot_id: Index of the lowest-FOM cluster → GC_BGD seed.
+        color_radius: Max distance (RGB) from top centroid for FGD candidates.
+                      Set adaptively to mean + 1σ of top-cluster bbox pixels.
+        bg_radius: Max distance (RGB) from bottom centroid for BGD pixels.
+        expand_factor: How much to expand the bbox (default 2.0).
+        min_cc_px: Minimum CC area to keep in FGD mask (default 10).
+        iterations: GrabCut iterations (default 5).
+        debug: If True, log diagnostic info.
+
+    Returns:
+        Updated full-image binary mask (H×W uint8, 0/255), superset of
+        confirmed_mask.
+    """
+    img_h, img_w = image.shape[:2]
+    x, y, w, h = bbox
+
+    # --- Expand bbox, clamped to image bounds ---
+    cx, cy = x + w // 2, y + h // 2
+    ew, eh = int(w * expand_factor), int(h * expand_factor)
+    x1 = max(0, cx - ew // 2)
+    y1 = max(0, cy - eh // 2)
+    x2 = min(img_w, x1 + ew)
+    y2 = min(img_h, y1 + eh)
+
+    if (x2 - x1) < 3 or (y2 - y1) < 3:
+        return confirmed_mask
+
+    roi = image[y1:y2, x1:x2]
+    roi_flat = roi.reshape(-1, 3).astype(np.float32)[:, [2, 1, 0]]  # BGR→RGB
+
+    # --- Distance-threshold color matching (not nearest-centroid) ---
+    d_top = np.sqrt(((roi_flat - centers[top_id]) ** 2).sum(axis=1))
+    d_bot = np.sqrt(((roi_flat - centers[bot_id]) ** 2).sum(axis=1))
+    roi_h, roi_w = roi.shape[:2]
+    d_top = d_top.reshape(roi_h, roi_w)
+    d_bot = d_bot.reshape(roi_h, roi_w)
+
+    # --- Build FGD mask; apply closing then CC filter ---
+    fgd_mask = (d_top <= color_radius).astype(np.uint8) * 255
+    kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    fgd_mask = cv2.morphologyEx(fgd_mask, cv2.MORPH_CLOSE, kern)
+    num_labels, cc_labels, stats, _ = cv2.connectedComponentsWithStats(
+        fgd_mask, connectivity=8
+    )
+    for cc_id in range(1, num_labels):
+        if stats[cc_id, cv2.CC_STAT_AREA] < min_cc_px:
+            fgd_mask[cc_labels == cc_id] = 0
+
+    if debug:
+        n_fgd = int(np.sum(fgd_mask == 255))
+        logger.info(
+            f"Color expand: ROI={roi_w}×{roi_h}, color_radius={color_radius:.1f}, "
+            f"{n_fgd} FGD pixels after closing+CC filter"
+        )
+
+    if int(np.sum(fgd_mask == 255)) == 0:
+        if debug:
+            logger.info("Color expand: no FGD pixels survived, returning confirmed_mask")
+        return confirmed_mask
+
+    # --- Build GrabCut init mask ---
+    #   Within color_radius of top centroid → GC_FGD
+    #   Within bg_radius of bottom centroid → GC_BGD
+    #   Everything else                     → GC_PR_BGD
+    #   FGD takes priority if both conditions hold
+    gc_init = np.full((roi_h, roi_w), cv2.GC_PR_BGD, dtype=np.uint8)
+    gc_init[d_bot <= bg_radius] = cv2.GC_BGD
+    gc_init[fgd_mask == 255] = cv2.GC_FGD  # FGD wins ties
+
+    if debug:
+        n_fgd_gc = int(np.sum(gc_init == cv2.GC_FGD))
+        n_bgd_gc = int(np.sum(gc_init == cv2.GC_BGD))
+        logger.info(f"Color expand: GC_FGD={n_fgd_gc}, GC_BGD={n_bgd_gc}")
+
+    bgd_model = np.zeros((1, 65), np.float64)
+    fgd_model = np.zeros((1, 65), np.float64)
+
+    try:
+        cv2.grabCut(roi, gc_init, None, bgd_model, fgd_model,
+                    iterations, cv2.GC_INIT_WITH_MASK)
+    except cv2.error as e:
+        if debug:
+            logger.warning(f"Color expand GrabCut failed ({e}), returning confirmed_mask")
+        return confirmed_mask
+
+    gc_result = np.where(
+        (gc_init == cv2.GC_FGD) | (gc_init == cv2.GC_PR_FGD), 255, 0
+    ).astype(np.uint8)
+
+    if debug:
+        orig_px = int(np.sum(confirmed_mask[y1:y2, x1:x2] == 255))
+        new_px = int(np.sum(gc_result == 255)) - orig_px
+        logger.info(f"Color expand: confirmed={orig_px} → +{max(new_px, 0)} new pixels")
+
+    # OR with confirmed_mask: refining, not replacing
+    result = confirmed_mask.copy()
+    result[y1:y2, x1:x2] = cv2.bitwise_or(result[y1:y2, x1:x2], gc_result)
+    return result
+
+
 def find_mask_by_spatial_tf_idf(
-    image: ImageArray, 
-    bbox: BBox, 
-    num_clusters: int = 4, 
-    debug: bool = False, 
+    image: ImageArray,
+    bbox: BBox,
+    num_clusters: int = 4,
+    debug: bool = False,
     target_color: Optional[Color] = None,
     fom_threshold: float = 0.30,
     cc_guard: float = 0.85,
+    use_grabcut: bool = False,
+    return_cluster_data: bool = False,
 ) -> np.ndarray:
     """Create a binary mask using Figure of Merit analysis.
     
@@ -125,9 +372,17 @@ def find_mask_by_spatial_tf_idf(
         fom_threshold: Minimum Figure of Merit to accept cluster (default: 0.30)
         cc_guard: Maximum largest_cc_fraction to accept (default: 0.85)
                  Rejects solid blobs that would over-mask for inpainting
-        
+        use_grabcut: If True, refine the FOM mask with cv2.grabCut before
+                    morphological cleanup (default: False)
+        return_cluster_data: If True, return a tuple (cleaned_mask, cluster_data)
+                    where cluster_data is a dict with keys 'centers', 'top_id',
+                    'bot_id' — the K-means centroids and the indices of the
+                    highest- and lowest-FOM clusters. Used to seed
+                    color_guided_expand. (default: False)
+
     Returns:
-        Binary mask (uint8) where 255 = likely text, 0 = likely background
+        cleaned_mask (uint8, 255=text) normally; or (cleaned_mask, cluster_data)
+        when return_cluster_data=True.
     """
     from .mask_generator import morph_clean_mask
     
@@ -382,14 +637,47 @@ def find_mask_by_spatial_tf_idf(
         mask_pixels_before_morph = np.sum(binary_mask == 255)
         total_pixels = binary_mask.size
         logger.info(f"Mask coverage before morphology: {mask_pixels_before_morph}/{total_pixels} pixels ({100*mask_pixels_before_morph/total_pixels:.1f}%)")
-    
+
+    # Optional GrabCut refinement: use FOM mask to seed GrabCut for
+    # spatially coherent edges before morphological cleanup.
+    if use_grabcut:
+        binary_mask = grabcut_refine(bbox_region, binary_mask, debug=debug)
+
     # Apply morphological operations to clean up the mask
     cleaned_mask = morph_clean_mask(binary_mask, bbox)
-    
+
     if debug:
         mask_pixels_after_morph = np.sum(cleaned_mask == 255)
         logger.info(f"Mask coverage after morphology: {mask_pixels_after_morph}/{total_pixels} pixels ({100*mask_pixels_after_morph/total_pixels:.1f}%)")
         pixel_change = mask_pixels_after_morph - mask_pixels_before_morph
         logger.info(f"Morphological operations changed mask by {pixel_change:+d} pixels ({100*pixel_change/total_pixels:+.1f}%)")
-    
+
+    if return_cluster_data:
+        accepted_ids = [cid for cid in range(num_clusters) if cluster_accepted[cid]]
+        top_id = max(accepted_ids, key=lambda cid: cluster_foms[cid]) if accepted_ids else int(np.argmax(cluster_foms))
+        bot_id = int(np.argmin(cluster_foms))
+
+        # Adaptive color radius: mean + 1σ of distances from bbox top-cluster
+        # pixels to their centroid. Captures the natural spread of that color.
+        bbox_pixels_rgb = bbox_pixels[:, [2, 1, 0]].astype(np.float32)
+        top_bbox_pixels = bbox_pixels_rgb[bbox_labels.flatten() == top_id]
+        bot_bbox_pixels = bbox_pixels_rgb[bbox_labels.flatten() == bot_id]
+        if len(top_bbox_pixels) > 0:
+            d = np.linalg.norm(top_bbox_pixels - centers[top_id], axis=1)
+            color_radius = float(np.mean(d) + np.std(d))
+        else:
+            color_radius = 30.0
+        if len(bot_bbox_pixels) > 0:
+            d = np.linalg.norm(bot_bbox_pixels - centers[bot_id], axis=1)
+            bg_radius = float(np.mean(d) + np.std(d))
+        else:
+            bg_radius = 30.0
+
+        return cleaned_mask, {
+            "centers": centers,
+            "top_id": top_id,
+            "bot_id": bot_id,
+            "color_radius": color_radius,
+            "bg_radius": bg_radius,
+        }
     return cleaned_mask 

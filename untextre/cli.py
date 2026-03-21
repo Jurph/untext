@@ -124,6 +124,8 @@ def _generate_masks_and_inpaint(
     g_value: int,
     method: str,
     target_color: Optional[tuple] = None,
+    use_grabcut: bool = False,
+    use_grabcut_expand: bool = False,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Run spatial TF-IDF masking and inpainting for each consensus region.
 
@@ -137,11 +139,15 @@ def _generate_masks_and_inpaint(
         g_value: Number of K-means colour clusters for spatial TF-IDF.
         method: Inpainting method (``"lama"`` or ``"telea"``).
         target_color: Optional BGR tuple for forced colour-cluster inclusion.
+        use_grabcut: If True, refine FOM masks with GrabCut before morphology.
+        use_grabcut_expand: If True, extend each region mask using global color
+                            matching and GrabCut seeded by the highest- and
+                            lowest-FOM clusters found in the bbox analysis.
 
     Returns:
         ``(combined_mask, inpainted_image)`` — both same shape as *image*.
     """
-    from .find_text_colors import find_mask_by_spatial_tf_idf
+    from .find_text_colors import find_mask_by_spatial_tf_idf, color_guided_expand
     from .inpaint import inpaint_image
 
     h, w = image.shape[:2]
@@ -152,19 +158,37 @@ def _generate_masks_and_inpaint(
         logger.info(f"Processing region {i}/{len(consensus_boxes)} with g={g_value}: {bbox}")
 
         try:
-            region_mask = find_mask_by_spatial_tf_idf(
-                image, bbox, num_clusters=g_value, debug=True, target_color=target_color
+            mask_result = find_mask_by_spatial_tf_idf(
+                image, bbox, num_clusters=g_value, debug=True,
+                target_color=target_color, use_grabcut=use_grabcut,
+                return_cluster_data=use_grabcut_expand,
             )
+            if use_grabcut_expand:
+                region_mask, cluster_data = mask_result
+            else:
+                region_mask = mask_result
 
             if np.sum(region_mask == 255) > 0:
                 full_mask = np.zeros((h, w), dtype=np.uint8)
                 x, y, box_w, box_h = bbox
                 actual_h, actual_w = region_mask.shape[:2]
                 full_mask[y:y + actual_h, x:x + actual_w] = region_mask
+
+                if use_grabcut_expand:
+                    full_mask = color_guided_expand(
+                        image, bbox, full_mask,
+                        cluster_data["centers"],
+                        cluster_data["top_id"],
+                        cluster_data["bot_id"],
+                        cluster_data["color_radius"],
+                        cluster_data["bg_radius"],
+                        debug=True,
+                    )
+
                 combined_mask = cv2.bitwise_or(combined_mask, full_mask)
                 regions_processed += 1
 
-                mask_pixels = np.sum(region_mask == 255)
+                mask_pixels = np.sum(full_mask == 255)
                 logger.info(f"Region {i}: Generated {mask_pixels} mask pixels")
             else:
                 logger.warning(f"Region {i}: Generated empty mask")
@@ -672,7 +696,9 @@ def main() -> None:
     else:
         logger.info(f"Using consensus detection with confidence threshold: {args.confidence_threshold}")
         logger.info(f"Using spatial TF-IDF with g=4 (auto-retry with g=8 if needed: {not args.no_retry})")
-        logger.info(f"Bbox expansion enabled: {not args.no_expand}")
+        bbox_expansion_on = not args.no_expand and not args.grabcut_expand
+        logger.info(f"Bbox expansion enabled: {bbox_expansion_on}"
+                    + (" (suppressed by --grabcut-expand)" if args.grabcut_expand else ""))
     
     # Initialize models once for persistent loading.
     # If -K was given (explicit override), we ONLY try templates — no detection fallback.
@@ -745,8 +771,10 @@ def main() -> None:
                     confidence_threshold=args.confidence_threshold,
                     granularity=args.granularity,
                     forced_bbox=forced_bbox,
-                    expand_bboxes=not args.no_expand,
+                    expand_bboxes=not (args.no_expand or args.grabcut_expand),
                     auto_retry=not args.no_retry,
+                    use_grabcut=args.grabcut,
+                    use_grabcut_expand=args.grabcut_expand,
                 )
             
             # ── Handle skipped images ──────────────────────────────────
@@ -812,12 +840,14 @@ def process_single_image(
     color_sensitivity: int = 3,
     expand_bboxes: bool = True,
     auto_retry: bool = True,
+    use_grabcut: bool = False,
+    use_grabcut_expand: bool = False,
 ) -> Optional[dict]:
     """Process a single image through the consensus-based spatial TF-IDF pipeline.
-    
+
     For CLI (automated detection): Uses g=4 by default with auto-retry at g=8.
     For Web UI (user-controlled): User specifies granularity, no auto-retry.
-    
+
     Args:
         image_path: Path to input image
         output_dir: Directory to save outputs
@@ -836,7 +866,11 @@ def process_single_image(
                       Automatically disabled when forced_bbox is set.
         auto_retry: Whether to automatically retry with g=8 if g=4 fails (default: True).
                    Automatically disabled when granularity is explicitly specified.
-        
+        use_grabcut: Whether to refine FOM masks with GrabCut (default: False).
+        use_grabcut_expand: Whether to extend masks using global color matching
+                           and GrabCut seeded by the highest- and lowest-FOM
+                           clusters from the bbox analysis (default: False).
+
     Returns:
         Dictionary with timing details, or None if processing failed
     """
@@ -1039,7 +1073,9 @@ def process_single_image(
         
         # First pass with initial granularity
         mask, result = _generate_masks_and_inpaint(
-            image, consensus_boxes, initial_g, method, target_color
+            image, consensus_boxes, initial_g, method, target_color,
+            use_grabcut=use_grabcut,
+            use_grabcut_expand=use_grabcut_expand,
         )
         
         timings['color_time'] = time.time() - color_start
@@ -1064,7 +1100,9 @@ def process_single_image(
                 logger.info("Text remnants detected, retrying with granularity=8...")
                 retry_start = time.time()
                 mask, result = _generate_masks_and_inpaint(
-                    image, consensus_boxes, 8, method, target_color
+                    image, consensus_boxes, 8, method, target_color,
+                    use_grabcut=use_grabcut,
+                    use_grabcut_expand=use_grabcut_expand,
                 )
                 timings['retried_with_g8'] = True
                 timings['color_time'] += time.time() - retry_start
@@ -1198,6 +1236,23 @@ def parse_args() -> argparse.Namespace:
              "defines the mask. Skips consensus detection when used."
     )
     
+    parser.add_argument(
+        "--grabcut",
+        action="store_true",
+        help="Refine FOM masks with GrabCut for spatially coherent edges. "
+             "Adds ~50-200ms per region but may produce cleaner mask boundaries."
+    )
+
+    parser.add_argument(
+        "--grabcut-expand",
+        action="store_true",
+        help="Extend masks beyond detected bboxes using color-guided GrabCut. "
+             "Within an expanded ROI, seeds GrabCut with the highest-FOM color cluster "
+             "as foreground and the lowest-FOM cluster as background. Automatically "
+             "disables long-axis bbox expansion (--no-expand) since color_guided_expand "
+             "handles the outward search itself. Useful for partially-detected watermarks."
+    )
+
     parser.add_argument(
         "--force-output",
         action="store_true",

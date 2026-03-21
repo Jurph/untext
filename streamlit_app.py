@@ -520,6 +520,8 @@ def display_lama_status():
 def process_image_streamlit(
     image_bytes, confidence_threshold, granularity, method, keep_masks,
     target_color=None, color_sensitivity=3, forced_bbox=None,
+    use_grabcut=False,
+    use_grabcut_expand=False,
 ):
     """Process an uploaded image via consensus detection and return the result.
 
@@ -580,6 +582,8 @@ def process_image_streamlit(
                 color_sensitivity=color_sensitivity,
                 expand_bboxes=False,
                 auto_retry=False,
+                use_grabcut=use_grabcut,
+                use_grabcut_expand=use_grabcut_expand,
             )
             
             # Load the result
@@ -740,7 +744,20 @@ def main():
             # Show current target if valid
             if target_color:
                 st.success(f"🎨 Target: {target_color} ±{color_sensitivity}")
-        
+
+        use_grabcut = st.checkbox(
+            "GrabCut mask refinement",
+            value=False,
+            help="Refine text masks with GrabCut for smoother, spatially coherent edges. "
+                 "Adds ~50-200ms per region. Try this if masks look ragged or grab stray pixels."
+        )
+
+        use_grabcut_expand = st.checkbox(
+            "GrabCut mask expansion",
+            value=False,
+            help="Extend masks beyond detected bboxes using GrabCut seeded with confirmed "
+                 "text pixels. Useful for partially-detected watermarks."
+        )
         st.divider()
         
         # Manual coordinate input (only used in manual mode) - reactive inputs, no button needed
@@ -1368,6 +1385,8 @@ def main():
                             image_bytes, confidence_threshold, granularity, method, keep_masks,
                             target_color=final_target_color, color_sensitivity=color_sensitivity,
                             forced_bbox=force_bbox_coords,
+                            use_grabcut=use_grabcut,
+                            use_grabcut_expand=use_grabcut_expand,
                         )
                     
                     processing_time = time.time() - start_time
