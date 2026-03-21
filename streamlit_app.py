@@ -50,6 +50,7 @@ from PIL import ImageDraw, ImageFont
 # Detection mode radio options — used in st.radio and equality checks.
 # Changing the label here automatically updates the widget and all comparisons.
 MODE_AUTO_DETECT = "🤖 Auto-detect"
+MODE_GRABCUT_EXPAND = "🔬 Color-guided expand"
 MODE_DRAW_MANUALLY = "✏️ Draw manually"
 
 # Color input method radio options
@@ -657,20 +658,28 @@ def main():
         st.subheader("🎯 Detection Mode")
         
         # Check for mode override (when user draws on canvas in auto mode)
+        _all_modes = [MODE_AUTO_DETECT, MODE_GRABCUT_EXPAND, MODE_DRAW_MANUALLY]
         if hasattr(st.session_state, 'detection_mode_override'):
             override_mode = st.session_state.detection_mode_override
-            mode_index = 1 if override_mode == MODE_DRAW_MANUALLY else 0
+            mode_index = _all_modes.index(override_mode) if override_mode in _all_modes else 0
             # Clear the override after using it
             del st.session_state.detection_mode_override
         else:
             mode_index = 0
-        
+
         detection_mode = st.radio(
             "How to select region:",
-            options=[MODE_AUTO_DETECT, MODE_DRAW_MANUALLY],
+            options=_all_modes,
             index=mode_index,
-            help="Auto-detect: Let AI find text regions\nDraw manually: Specify exact coordinates"
+            help=(
+                "Auto-detect: Let AI find text regions\n"
+                "Color-guided expand: Auto-detect then extend the mask using the "
+                "watermark's color cluster and GrabCut (good for partial detections)\n"
+                "Draw manually: Specify exact coordinates"
+            )
         )
+        is_auto_mode = detection_mode != MODE_DRAW_MANUALLY
+        use_grabcut_expand = detection_mode == MODE_GRABCUT_EXPAND
         
         st.divider()
         
@@ -752,12 +761,6 @@ def main():
                  "Adds ~50-200ms per region. Try this if masks look ragged or grab stray pixels."
         )
 
-        use_grabcut_expand = st.checkbox(
-            "GrabCut mask expansion",
-            value=False,
-            help="Extend masks beyond detected bboxes using GrabCut seeded with confirmed "
-                 "text pixels. Useful for partially-detected watermarks."
-        )
         st.divider()
         
         # Manual coordinate input (only used in manual mode) - reactive inputs, no button needed
@@ -1128,7 +1131,7 @@ def main():
                         )
             
             # ── Auto-detect or manual canvas ─────────────────────────────
-            if not watermark_handled and detection_mode == MODE_AUTO_DETECT:
+            if not watermark_handled and is_auto_mode:
                 # Run detections immediately
                 with st.spinner("🔍 Running consensus detection..."):
                     auto_detections = run_detections_cached(
@@ -1300,7 +1303,7 @@ def main():
             # Get sorted detections from session state (sorted by consensus score)
             sorted_detections = st.session_state.get('sorted_detections', [])
             
-            if detection_mode == MODE_AUTO_DETECT and sorted_detections:
+            if is_auto_mode and sorted_detections:
                 if use_superset and superset_bbox:
                     # Use superset box
                     force_bbox_coords = superset_bbox
@@ -1370,7 +1373,7 @@ def main():
 
                 # ── Consensus detection path ──────────────────────────
                 else:
-                    if detection_mode == MODE_AUTO_DETECT:
+                    if is_auto_mode:
                         if not selected_detection_indices:
                             st.error("❌ Please select at least one region to process")
                             st.stop()
@@ -1442,7 +1445,7 @@ def main():
                             # Watermark template path — show template name
                             st.metric("Method", "Template Match")
                             st.caption(f"Matched: {matched_tmpl}")
-                        elif detection_mode == MODE_AUTO_DETECT and sorted_detections:
+                        elif is_auto_mode and sorted_detections:
                             st.metric("Detection Time", "Cached ✨", help="Detection ran when image was uploaded")
                             st.metric("Consensus Boxes", timing.get('consensus_boxes_count', 0))
                         else:
