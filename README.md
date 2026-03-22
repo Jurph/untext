@@ -28,7 +28,8 @@ A tool for removing watermarks from images using consensus detection, Figure of 
 
 * **Text Detection via Three-Model Consensus**: Combines three text detection methods ([EAST](https://arxiv.org/abs/1704.03155), [DocTR](https://github.com/mindee/doctr), [EasyOCR](https://github.com/JaidedAI/EasyOCR)) to find regions where multiple detectors agree, for higher-confidence text detection
 * **Figure of Merit (FOM) Analysis**: Within regions detected as containing text, identifies text-like color clusters using a weighted combination of TF-IDF distinctiveness, border underrepresentation, and connected-component fragmentation
-* **Known Watermark Detection via [ORB](https://doi.org/10.1109/ICCV.2011.6126544) feature matching**: If you have already isolated the watermark to an RGBA file in .PNG format, place it in the `/watermarks` directory and if it matches the watermark on an image, `untextre` will use that watermark's mask instead of the slower text-detection and color-estimation approach. Matching is done via ORB (Oriented FAST and Rotated BRIEF).   
+* **Known Watermark Detection via [ORB](https://doi.org/10.1109/ICCV.2011.6126544) feature matching** (`-K`): If you have already isolated the watermark to an RGBA file in .PNG format, place it in the `/watermarks` directory and if it matches the watermark on an image, `untextre` will use that watermark's mask instead of the slower text-detection and color-estimation approach. Matching is done via ORB (Oriented FAST and Rotated BRIEF).
+* **Automatic Watermark Discovery** (`-U`): Given a directory of at least 3 same-resolution images that all carry the same watermark, automatically discovers the template by finding pixels with near-zero population variance across the full image stack. Discovered templates are saved as RGBA PNGs for future reuse with `-K`. Works best with large, consistent image sets.
 * **Inpainting**: [LaMa](https://arxiv.org/abs/2109.07161) (default) or [TELEA](https://doi.org/10.1080/10867651.2004.10487596) inpainting, applied only to masked regions
 
 ## How It Works
@@ -172,8 +173,17 @@ python -m untextre.cli -i image.jpg -o results/ --keep-masks --verbose --timing
 * `-K`, `--known-mask PATH` - Path to RGBA PNG of a known watermark/logo template
   - Uses ORB feature matching to find the template at any scale/position
   - The alpha channel defines which pixels to mask
-  - **Skips consensus detection** - about 10x faster for consistent watermarks
+  - **Skips consensus detection** — about 10x faster for consistent watermarks
   - Example: `--known-mask logo_template.png`
+
+* `-U`, `--unknown-watermark` - Auto-discover the watermark from the input directory, then process all images with the discovered template
+  - **Requires a directory input** (not a single file)
+  - Needs at least **3 images at the same resolution** to perform discovery; buckets with fewer than 3 images are skipped
+  - Works best with **10 or more congruent images** — more images mean tighter variance and a cleaner template
+  - All images should carry the **same watermark**; mixing watermarked and unwatermarked images degrades discovery quality
+  - Saves the discovered template as `watermark_candidate.png` (and `watermark_candidate_2.png` etc. for multiple distinct marks) in the output directory for future reuse with `-K`
+  - Mutually exclusive with `-K`
+  - Example: `--unknown-watermark` (requires `-i` to be a directory)
 
 * `-c`, `--color COLOR` - Target text color as hex (#FF0000) or HTML name (red). Text colors are normally detected automatically via FOM analysis. This flag triggers immediate color enhancement if consensus detection finds no regions. Use for subtle watermarks that standard detection misses.
 
@@ -226,6 +236,12 @@ python -m untextre.cli -i logo.png -o clean.png --force-bbox 50,100,200,30
 ```bash
 python -m untextre.cli -i photos/ -o cleaned/ -K watermark_template.png
 ```
+
+**Auto-discover watermark from a batch of consistently-watermarked images:**
+```bash
+python -m untextre.cli -i watermarked_photos/ -o cleaned/ -U
+```
+This scans the directory, identifies pixels that are identical across all same-resolution images, and saves the discovered template as `cleaned/watermark_candidate.png`. All images are then processed against that template. On the next batch from the same source, you can skip discovery entirely with `-K cleaned/watermark_candidate.png`.
 
 **Override granularity:**
 ```bash
@@ -285,6 +301,19 @@ The system runs **ORB** against the target image, testing all of the transparent
 - **EasyOCR**: OCR-based text detection
 
 Regions where 2 or more detectors agree (with configurable overlap threshold) become "consensus regions" — areas likely to contain text.
+
+### Auto-Discovery (`-U`)
+
+When the source of a watermark is unknown, `-U` finds it automatically using population variance across the image stack:
+
+1. **Bucketing**: Images are grouped by exact pixel dimensions. Any bucket with fewer than 3 images is skipped for self-discovery (too few samples to separate watermark from content).
+2. **Variance stacking**: For each qualifying bucket, every image is converted to grayscale and the per-pixel population variance is computed incrementally using Welford's algorithm — one image loaded at a time, so memory scales with image size rather than batch size.
+3. **Thresholding**: Pixels with variance ≤ 3×10⁻⁴ are marked as candidates. The variance distribution has three natural regions: a near-zero peak (byte-identical watermark core), a foothill (JPEG-compressed watermark edges, captured by the threshold), and a floor (normal image content) that jumps sharply above ~10⁻³.
+4. **Blob extraction**: Connected-component analysis discards isolated specks (< 0.05% of image area), leaving only meaningful blobs. Each blob is assigned to one of six grid zones (long edge ÷ 3, short edge ÷ 2) so that watermarks in different corners of the image are treated as separate candidates.
+5. **Template crop**: For each zone, a tight BGRA crop is taken from the pixel-wise mean of all images in the bucket, with an 8-pixel transparent border. The alpha channel is the blob mask.
+6. **Cross-bucket validation**: If images at multiple resolutions all carry the same watermark (scaled), their candidate crops are compared by IoU on the alpha channel. Crops with IoU ≥ 0.5 are merged into one family; the largest crop (most ORB keypoints) is kept as the canonical template.
+
+The discovered template is saved to the output directory and immediately used to process every image in the batch via the standard ORB pipeline. Save it and pass it to `-K` on future batches to skip the discovery step.
 
 ### Figure of Merit (FOM) Analysis
 
