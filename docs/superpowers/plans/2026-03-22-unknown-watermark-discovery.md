@@ -1067,7 +1067,9 @@ if args.unknown_watermark:
 
 - [ ] **Step 5: Add `-U` handling in the main processing block**
 
-In `cli.py`, after the image file list is gathered (but before any processing loop), add the discovery call. The image file list must be frozen before candidates are written. Find the block around line 676 (`logger.info(f"Found {len(image_files)} image(s) to process")`) and insert:
+In `cli.py`, after the image file list is gathered (but before any processing loop), add the discovery call. The image file list must be frozen before candidates are written. Find the block around line 676 (`logger.info(f"Found {len(image_files)} image(s) to process")`) and insert.
+
+**Important:** also set `explicit_known_mask = True` when `-U` is active. The existing code at lines ~707 and ~757 uses `explicit_known_mask` to decide (a) which models to load (inpainting-only vs. full consensus stack) and (b) whether to fall back to consensus detection when no template matches. `-U` behaves like `-K` in both respects: load only the inpainting model, and skip (not fall back) when ORB finds no match. Without this, `-U` will load consensus-detection models it never uses and silently fall through to full consensus detection on no-match images.
 
 ```python
 # ── -U: auto-discover watermark templates ────────────────────────────
@@ -1077,6 +1079,8 @@ if args.unknown_watermark:
         sys.exit(1)
     from .discovery import discover_watermark_candidates
 
+    # Treat -U like -K for model loading and fallback decisions
+    explicit_known_mask = True
     logger.info("Running watermark discovery (-U mode)...")
     # image_files list is already frozen above this point
     candidates = discover_watermark_candidates(image_files)
@@ -1200,5 +1204,7 @@ git commit -m "test: add slow end-to-end discovery integration test"
 - `load_image` raises `ValueError` on failure — wrap all calls in try/except in discovery code
 - `IMAGE_EXTENSIONS` is already defined in `utils.py` — import it, don't redefine
 - The `-K` / `-U` mutually exclusive group: check whether the existing parser already has a group for `-K` or if it's a standalone `add_argument`. If standalone, you'll need to replace it with the group version.
-- JPEG compression artifacts in real images may raise effective variance; the 0.01 threshold was chosen for PNG/lossless. If JPEG batches fail to converge, investigate whether the threshold needs adjusting.
-- The `watermark_templates` variable in `cli.py` is a `List[Tuple[str, np.ndarray]]` matching the format that `try_watermark_cascade` expects — `(filename_string, rgba_array)`. The discovery code hands off in exactly this format.
+- JPEG compression artifacts may raise effective variance; the 0.01 threshold was chosen for near-lossless inputs. If the slow end-to-end test is flaky, switch it from `.jpg` to `.png` before adjusting the threshold constant.
+- The `watermark_templates` variable in `cli.py` is a `List[Tuple[str, np.ndarray]]` matching the format that `try_watermark_cascade` expects — `(filename_string, bgra_array)`. The discovery code hands off in exactly this format.
+- `discover_zones` loads all images into memory; `discover_watermark_candidates` then loads them again to compute the mean. For large batches this doubles disk reads. This is intentional for now (keeps the functions independently testable); cache at the bucket level if performance is a concern in the future.
+- `-f` is already taken by `--force-bbox`. Do not add `-f` as a short form for `--force`.
