@@ -16,7 +16,12 @@ where:
 import cv2
 import numpy as np
 import pytest
-from untextre.find_text_colors import compute_cluster_fom, find_mask_by_spatial_tf_idf
+from untextre.find_text_colors import (
+    color_guided_expand,
+    compute_cluster_fom,
+    find_mask_by_spatial_tf_idf,
+    grabcut_refine,
+)
 
 
 class TestComputeClusterFom:
@@ -179,3 +184,116 @@ class TestFindMaskDebugAndClusterData:
         bbox = (10, 10, 80, 80)
         result = find_mask_by_spatial_tf_idf(flat, bbox, num_clusters=4)
         assert isinstance(result, np.ndarray), "Should return mask without raising"
+
+
+class TestGrabcutRefine:
+    """Cover grabcut_refine branches — pure cv2/numpy, no ML."""
+
+    @pytest.fixture
+    def roi(self):
+        """50×50 BGR ROI: red block on grey background."""
+        img = np.full((50, 50, 3), (128, 128, 128), dtype=np.uint8)
+        img[10:40, 10:40] = (0, 0, 220)
+        return img
+
+    @pytest.fixture
+    def fom_mask(self):
+        """Binary mask matching roi: foreground where the red block is."""
+        mask = np.zeros((50, 50), dtype=np.uint8)
+        mask[10:40, 10:40] = 255
+        return mask
+
+    def test_normal_path(self, roi, fom_mask):
+        """Standard refinement returns uint8 ndarray of same shape."""
+        result = grabcut_refine(roi, fom_mask)
+        assert isinstance(result, np.ndarray)
+        assert result.dtype == np.uint8
+        assert result.shape == fom_mask.shape
+
+    def test_too_small_returns_unchanged(self):
+        """2×2 ROI is below the 3×3 minimum — returns fom_mask unchanged."""
+        tiny_roi = np.zeros((2, 2, 3), dtype=np.uint8)
+        tiny_mask = np.zeros((2, 2), dtype=np.uint8)
+        result = grabcut_refine(tiny_roi, tiny_mask)
+        np.testing.assert_array_equal(result, tiny_mask)
+
+    def test_no_dilation(self, roi, fom_mask):
+        """dilation_px=0 skips the post-GrabCut dilation step."""
+        result = grabcut_refine(roi, fom_mask, dilation_px=0)
+        assert isinstance(result, np.ndarray)
+        assert result.shape == fom_mask.shape
+
+    def test_debug_paths(self, roi, fom_mask):
+        """debug=True exercises all GrabCut debug logging branches."""
+        result = grabcut_refine(roi, fom_mask, debug=True)
+        assert isinstance(result, np.ndarray)
+        assert result.shape == fom_mask.shape
+
+
+class TestColorGuidedExpand:
+    """Cover color_guided_expand branches — pure cv2/numpy, no ML."""
+
+    @pytest.fixture
+    def expand_setup(self):
+        """Full 100×100 image + confirmed_mask + real K-means cluster data."""
+        img = np.full((100, 100, 3), (128, 128, 128), dtype=np.uint8)
+        cv2.putText(img, "TEST TEXT", (5, 65), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7, (0, 0, 220), 2)
+        bbox = (0, 0, 100, 75)
+        region_mask, cluster_data = find_mask_by_spatial_tf_idf(
+            img, bbox, num_clusters=4, return_cluster_data=True
+        )
+        full_mask = np.zeros((100, 100), dtype=np.uint8)
+        full_mask[0:region_mask.shape[0], 0:region_mask.shape[1]] = region_mask
+        return img, bbox, full_mask, cluster_data
+
+    def test_normal_path(self, expand_setup):
+        """Returns a mask that is a superset of confirmed_mask."""
+        img, bbox, full_mask, cd = expand_setup
+        result = color_guided_expand(
+            img, bbox, full_mask,
+            cd["centers"], cd["top_id"], cd["bot_id"],
+            cd["color_radius"], cd["bg_radius"],
+        )
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (100, 100)
+        assert result.dtype == np.uint8
+        assert np.all(result[full_mask == 255] == 255), "Result must include all confirmed pixels"
+
+    def test_tiny_bbox_returns_unchanged(self, expand_setup):
+        """1×1 bbox expands to 2×2 which is below the 3px minimum — returns confirmed_mask."""
+        img, _, full_mask, cd = expand_setup
+        tiny_bbox = (50, 50, 1, 1)
+        result = color_guided_expand(
+            img, tiny_bbox, full_mask,
+            cd["centers"], cd["top_id"], cd["bot_id"],
+            cd["color_radius"], cd["bg_radius"],
+        )
+        np.testing.assert_array_equal(result, full_mask)
+
+    def test_no_fgd_pixels_returns_unchanged(self, expand_setup):
+        """Impossible centroid → no pixels within color_radius → returns confirmed_mask."""
+        img, bbox, full_mask, cd = expand_setup
+        # Centroid far outside the 0-255 gamut so no pixel is within color_radius
+        impossible_centers = np.array(
+            [[300.0, 300.0, 300.0], [128.0, 128.0, 128.0]], dtype=np.float32
+        )
+        result = color_guided_expand(
+            img, bbox, full_mask,
+            impossible_centers, 0, 1,
+            color_radius=10.0,
+            bg_radius=30.0,
+        )
+        np.testing.assert_array_equal(result, full_mask)
+
+    def test_debug_paths(self, expand_setup):
+        """debug=True exercises all color-expand debug logging branches."""
+        img, bbox, full_mask, cd = expand_setup
+        result = color_guided_expand(
+            img, bbox, full_mask,
+            cd["centers"], cd["top_id"], cd["bot_id"],
+            cd["color_radius"], cd["bg_radius"],
+            debug=True,
+        )
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (100, 100)
