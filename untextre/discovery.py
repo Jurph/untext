@@ -66,8 +66,8 @@ def extract_blobs(
 ) -> List[Tuple[int, int]]:
     """Extract 8-connected low-variance blobs from a variance map.
 
-    Applies morphological closing then dilation (no blur — smooth edges
-    are not needed for bounding-box extraction).
+    Applies morphological closing then dilation to the full binary map
+    (no blur — smooth edges are not needed for bounding-box extraction).
 
     Args:
         variance_map: Per-pixel variance (H×W float32).
@@ -78,50 +78,30 @@ def extract_blobs(
     """
     min_area = max(1, int(image_area * MIN_BLOB_AREA_FRACTION))
 
-    # Threshold: 1 where variance is LOW (candidate watermark pixels)
+    # Threshold: 255 where variance is LOW (candidate watermark pixels)
     binary = (variance_map < VARIANCE_THRESHOLD).astype(np.uint8) * 255
 
-    # Find 8-connected contiguous blobs in the thresholded map
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-        binary, connectivity=8
-    )
-
-    # Filter out blobs smaller than min_area before morphological processing
-    # to avoid noise expansion
-    valid_blobs = []
-    for label in range(1, num_labels):  # skip background (label 0)
-        area = stats[label, cv2.CC_STAT_AREA]
-        if area >= min_area:
-            valid_blobs.append(label)
-
-    if not valid_blobs:
-        return []
-
-    # Create binary mask of only the valid blobs
-    valid_binary = np.zeros_like(binary)
-    for label in valid_blobs:
-        valid_binary[labels == label] = 255
-
-    # Morphological closing then dilation (no blur)
+    # Morphological closing then dilation applied to FULL binary map
     kernel_close = cv2.getStructuringElement(
         cv2.MORPH_RECT, (CLOSE_KERNEL_SIZE, CLOSE_KERNEL_SIZE)
     )
     kernel_dilate = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (DILATE_SIZE, DILATE_SIZE)
     )
-    valid_binary = cv2.morphologyEx(valid_binary, cv2.MORPH_CLOSE, kernel_close)
-    valid_binary = cv2.dilate(valid_binary, kernel_dilate)
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel_close)
+    binary = cv2.dilate(binary, kernel_dilate)
 
-    # Re-extract blobs after morphology
-    num_labels_post, labels_post, stats_post, centroids_post = cv2.connectedComponentsWithStats(
-        valid_binary, connectivity=8
+    # Find 8-connected contiguous blobs on the processed map
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        binary, connectivity=8
     )
 
     result = []
-    for label in range(1, num_labels_post):  # skip background
-        cx, cy = int(centroids_post[label][0]), int(centroids_post[label][1])
-        result.append((cx, cy))
-
+    for label in range(1, num_labels):  # skip background (label 0)
+        area = stats[label, cv2.CC_STAT_AREA]
+        if area >= min_area:
+            cx, cy = int(centroids[label][0]), int(centroids[label][1])
+            result.append((cx, cy))
     return result
 
 
