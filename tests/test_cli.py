@@ -13,6 +13,7 @@ Covers:
 """
 
 import sys
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -1307,13 +1308,11 @@ class TestCliErrorPaths:
 
     def test_load_watermark_templates_missing_path(self):
         """Non-existent path → load_watermark_templates returns []."""
-        from pathlib import Path
         result = load_watermark_templates(Path("definitely_does_not_exist_xyz"))
         assert result == []
 
     def test_save_timing_report(self, tmp_path):
         """_save_clean_timing_report writes a file containing expected headers."""
-        from pathlib import Path
         timing_file = tmp_path / "timing.txt"
         detailed = [{"file": "a.jpg", "time": 1.2}]
         _save_clean_timing_report(

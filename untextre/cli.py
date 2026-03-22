@@ -526,7 +526,7 @@ def process_with_known_mask(
     load_start = time.time()
     try:
         image = load_image(image_path)
-    except (ValueError, Exception):
+    except ValueError:
         logger.error(f"Failed to load image: {image_path}")
         return None
     timings['load_time'] = time.time() - load_start
