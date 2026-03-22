@@ -340,3 +340,129 @@ def bucket_images_by_size(
         except (IOError, cv2.error, ValueError) as e:
             logger.warning(f"Skipping unreadable image {path.name}: {e}")
     return buckets
+
+
+def _make_zone_mask(
+    shape: Tuple[int, int],
+    zone: Tuple[int, int],
+    img_w: int,
+    img_h: int,
+) -> np.ndarray:
+    """Return a binary mask (255) for the pixels belonging to a given zone."""
+    h, w = shape
+    col, row = zone
+
+    if img_w >= img_h:
+        col_divs, row_divs = ZONE_LONG_DIVISIONS, ZONE_SHORT_DIVISIONS
+    else:
+        col_divs, row_divs = ZONE_SHORT_DIVISIONS, ZONE_LONG_DIVISIONS
+
+    x0 = int(w * col / col_divs)
+    x1 = int(w * (col + 1) / col_divs)
+    y0 = int(h * row / row_divs)
+    y1 = int(h * (row + 1) / row_divs)
+
+    mask = np.zeros((h, w), dtype=np.uint8)
+    mask[y0:y1, x0:x1] = 255
+    return mask
+
+
+def discover_watermark_candidates(
+    image_paths: List[Path],
+) -> List[np.ndarray]:
+    """Discover watermark template(s) from a batch of consistently-watermarked images.
+
+    Buckets images by exact dimensions, runs the pair-stacking convergence loop
+    per qualifying bucket (≥ 3 images), crops BGRA candidates, cross-validates
+    across buckets, and returns one representative BGRA crop per watermark family
+    in descending pixel-area order.
+
+    Args:
+        image_paths: All image paths in the input directory (pre-frozen list).
+
+    Returns:
+        List of BGRA crops (H×W×4 uint8), largest family first.
+        Empty list if no candidates discovered.
+    """
+    buckets = bucket_images_by_size(image_paths)
+    if not buckets:
+        logger.warning("No loadable images found for discovery")
+        return []
+
+    all_candidates: List[np.ndarray] = []
+
+    for (img_w, img_h), paths in buckets.items():
+        if len(paths) < 3:
+            logger.info(
+                f"Bucket {img_w}×{img_h}: only {len(paths)} image(s) — "
+                f"skipping self-discovery, will use cross-bucket template if available"
+            )
+            continue
+
+        logger.info(f"Discovering watermark in bucket {img_w}×{img_h} ({len(paths)} images)")
+        zone_maps = discover_zones(paths, img_w, img_h)
+
+        if not zone_maps:
+            logger.warning(f"Bucket {img_w}×{img_h}: no low-variance blobs found")
+            continue
+
+        # Compute mean image once per bucket (used for all zone crops)
+        loaded = []
+        for p in paths:
+            try:
+                loaded.append(load_image(p).astype(np.float32))
+            except Exception:
+                pass
+        if not loaded:
+            continue
+        mean_img = np.mean(loaded, axis=0).astype(np.uint8)
+
+        for zone, var_maps in zone_maps.items():
+            # Build union blob mask from all variance maps for this zone
+            union_low_var = np.zeros(mean_img.shape[:2], dtype=np.uint8)
+            for vmap in var_maps:
+                binary = (vmap < VARIANCE_THRESHOLD).astype(np.uint8) * 255
+                union_low_var = cv2.bitwise_or(union_low_var, binary)
+
+            # Restrict to the blob's grid zone for clean cropping.
+            # No morphological operations — the union of low-variance pixels
+            # across draws IS the signal. Do not inflate or connect blobs.
+            zone_mask = _make_zone_mask(union_low_var.shape, zone, img_w, img_h)
+            zoned_mask = cv2.bitwise_and(union_low_var, zone_mask)
+
+            bgra = crop_zone_to_bgra(mean_img, zoned_mask)
+            if bgra is not None:
+                all_candidates.append(bgra)
+                logger.info(
+                    f"Bucket {img_w}×{img_h} zone {zone}: "
+                    f"candidate {bgra.shape[1]}×{bgra.shape[0]} px"
+                )
+
+    if not all_candidates:
+        logger.warning("No watermark candidates discovered across all buckets")
+        return []
+
+    # Per-bucket aspect-ratio dedup (spec Phase 2 Step 5):
+    # If multiple candidates have similar aspect ratios (symmetric relative
+    # difference < 10%), keep only the largest.
+    def _aspect_ratio(c: np.ndarray) -> float:
+        h, w = c.shape[:2]
+        return w / h if h > 0 else 1.0
+
+    deduped: List[np.ndarray] = []
+    for crop in sorted(all_candidates, key=lambda c: c.shape[0] * c.shape[1], reverse=True):
+        r1 = _aspect_ratio(crop)
+        if not any(
+            2 * abs(r1 - _aspect_ratio(kept)) / (r1 + _aspect_ratio(kept)) < 0.10
+            for kept in deduped
+        ):
+            deduped.append(crop)
+    all_candidates = deduped
+
+    qualifying_count = sum(1 for paths in buckets.values() if len(paths) >= 3)
+    if qualifying_count <= 1:
+        logger.info("Only one qualifying bucket — cross-validation unavailable")
+
+    families = select_best_family(all_candidates)
+    logger.info(f"Discovery complete: {len(families)} watermark family/families found")
+    return families
