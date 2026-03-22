@@ -13,8 +13,10 @@ where:
     cc_score     = max(0.0, 1.0 - largest_cc_fraction)
 """
 
+import cv2
+import numpy as np
 import pytest
-from untextre.find_text_colors import compute_cluster_fom
+from untextre.find_text_colors import compute_cluster_fom, find_mask_by_spatial_tf_idf
 
 
 class TestComputeClusterFom:
@@ -121,3 +123,49 @@ class TestComputeClusterFom:
         fom = compute_cluster_fom(128.0, 0.5, 2.0)
         expected = 0.07 * (128 / 255) + 0.63 * 0.5 + 0.30 * 0.0
         assert fom == pytest.approx(expected, abs=1e-6)
+
+
+class TestFindMaskDebugAndClusterData:
+    """Cover the debug-logging branches and return_cluster_data path
+    of find_mask_by_spatial_tf_idf — reachable without mocks."""
+
+    @pytest.fixture
+    def text_image(self):
+        """100×100 BGR image: vibrant red text on grey background."""
+        img = np.full((100, 100, 3), (128, 128, 128), dtype=np.uint8)
+        cv2.putText(img, "TEST TEXT", (5, 65), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7, (0, 0, 220), 2)
+        return img
+
+    @pytest.fixture
+    def text_bbox(self):
+        """(x, y, width, height) covering the text region."""
+        return (5, 35, 90, 40)
+
+    def test_find_mask_debug_paths(self, text_image, text_bbox):
+        """debug=True exercises all if-debug logger.info branches."""
+        result = find_mask_by_spatial_tf_idf(
+            text_image, text_bbox, num_clusters=4, debug=True
+        )
+        assert isinstance(result, np.ndarray), "Expected ndarray mask"
+        assert result.dtype == np.uint8
+
+    def test_find_mask_returns_cluster_data(self, text_image, text_bbox):
+        """return_cluster_data=True exercises the dict-construction path."""
+        result = find_mask_by_spatial_tf_idf(
+            text_image, text_bbox, num_clusters=4, return_cluster_data=True
+        )
+        assert isinstance(result, tuple), "Expected (mask, cluster_data) tuple"
+        mask, cluster_data = result
+        assert isinstance(mask, np.ndarray)
+        assert isinstance(cluster_data, dict)
+        for key in ("centers", "top_id", "bot_id", "color_radius", "bg_radius"):
+            assert key in cluster_data, f"Missing key: {key}"
+        assert cluster_data["centers"].shape == (4, 3)
+
+    def test_find_mask_flat_image_normalization(self):
+        """Solid-color image exercises the max_score==min_score guard (line 492)."""
+        flat = np.full((100, 100, 3), (100, 100, 100), dtype=np.uint8)
+        bbox = (10, 10, 80, 80)
+        result = find_mask_by_spatial_tf_idf(flat, bbox, num_clusters=4)
+        assert isinstance(result, np.ndarray), "Should return mask without raising"
