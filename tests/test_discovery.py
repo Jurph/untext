@@ -119,17 +119,25 @@ def test_crop_zone_to_bgra_shape_and_alpha():
 def test_crop_zone_to_bgra_alpha_channel():
     mean_img = np.full((100, 100, 3), 200, dtype=np.uint8)
     blob_mask = np.zeros((100, 100), dtype=np.uint8)
-    blob_mask[40:60, 40:60] = 255
+    # L-shaped blob: right column and bottom row of a 20x20 region
+    blob_mask[40:60, 58:60] = 255  # right edge column of blob bbox
+    blob_mask[58:60, 40:60] = 255  # bottom edge row of blob bbox
 
     bgra = crop_zone_to_bgra(mean_img, blob_mask)
-    h, w = bgra.shape[:2]
     from untextre.discovery import CROP_BORDER_PX
     b = CROP_BORDER_PX
-    # Interior of crop (excluding border) should be alpha=255
-    assert np.all(bgra[b:h-b, b:w-b, 3] == 255)
-    # Corners (pure border) should be alpha=0
+    # A pixel in the L — alpha=255
+    # The L occupies rows 40-59, cols 40-59 in the original image.
+    # After crop, that maps to rows b..b+20, cols b..b+20.
+    # The bottom-right corner of the L (row 58-59, col 58-59 in original)
+    # maps to approximately row (b + 18), col (b + 18) in the crop.
+    h, w = bgra.shape[:2]
+    assert bgra[b + 18, b + 18, 3] == 255   # inside the L
+    # A pixel in the interior gap of the L — alpha=0
+    assert bgra[b + 5, b + 5, 3] == 0       # top-left interior of bbox, not in L
+    # Border corners — alpha=0
     assert bgra[0, 0, 3] == 0
-    assert bgra[h-1, w-1, 3] == 0
+    assert bgra[h - 1, w - 1, 3] == 0
 
 def test_crop_zone_to_bgra_returns_none_for_empty_mask():
     mean_img = np.full((100, 100, 3), 128, dtype=np.uint8)
@@ -150,3 +158,19 @@ def test_crop_zone_to_bgra_channel_order():
     # Channel 0 should be 255 (blue), channel 2 should be 0 (red) — BGRA order
     assert bgra[b, b, 0] == 255  # B channel
     assert bgra[b, b, 2] == 0    # R channel
+
+def test_crop_zone_to_bgra_blob_at_edge_clamps_border():
+    # Blob touching top-left corner — border cannot extend beyond (0,0)
+    mean_img = np.full((50, 50, 3), 100, dtype=np.uint8)
+    blob_mask = np.zeros((50, 50), dtype=np.uint8)
+    blob_mask[0:10, 0:10] = 255  # blob flush with top-left edge
+
+    bgra = crop_zone_to_bgra(mean_img, blob_mask)
+
+    # Border is clamped: crop starts at (0,0), not at (-CROP_BORDER_PX, -CROP_BORDER_PX)
+    from untextre.discovery import CROP_BORDER_PX
+    expected_h = min(50, 10 + CROP_BORDER_PX)   # clamped — no top border possible
+    expected_w = min(50, 10 + CROP_BORDER_PX)
+    assert bgra.shape == (expected_h, expected_w, 4)
+    # Top-left pixel is inside the blob, so alpha should be 255
+    assert bgra[0, 0, 3] == 255
