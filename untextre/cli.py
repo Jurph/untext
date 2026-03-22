@@ -264,22 +264,22 @@ def find_known_mask_in_image(
     target_image: np.ndarray,
     known_mask_rgba: np.ndarray,
     min_matches: int = 6,
-    dilation_pixels: int = 7,
+    dilation_pixels: int = 15,
 ) -> Optional[Tuple[np.ndarray, Tuple[int, int, int, int]]]:
     """Find a known watermark/logo in target image using ORB feature matching.
-    
+
     Uses ORB (Oriented FAST and Rotated BRIEF) to detect keypoints and match
     the known watermark template to the target image. Fits a partial affine
     transform (scale + rotation + translation) for precise alignment.
-    
+
     Out-of-bounds handling: If the matched location extends beyond image edges,
     the mask is automatically clipped to the image bounds (spillover ignored).
-    
+
     Args:
         target_image: Target image to search (H×W×3 BGR)
         known_mask_rgba: Known watermark as RGBA image (H×W×4, alpha channel is mask)
         min_matches: Minimum number of good matches required (default: 6)
-        dilation_pixels: Pixels to dilate the mask for safety margin (default: 7)
+        dilation_pixels: Pixels to dilate the mask for safety margin (default: 15)
         
     Returns:
         Tuple of (warped_mask, bbox) where:
@@ -454,7 +454,7 @@ def try_watermark_cascade(
     image: np.ndarray,
     templates: List[Tuple[str, np.ndarray]],
     min_matches: int = 6,
-    dilation_pixels: int = 7,
+    dilation_pixels: int = 15,
 ) -> Optional[Tuple[np.ndarray, Tuple[int, int, int, int], str]]:
     """Try each watermark template against a loaded image. First match wins.
 
@@ -493,7 +493,7 @@ def process_with_known_mask(
     keep_masks: bool = False,
     method: str = "lama",
     min_matches: int = 6,
-    dilation_pixels: int = 7,
+    dilation_pixels: int = 15,
 ) -> Optional[dict]:
     """Process a single image using known-mask ORB feature matching.
     
