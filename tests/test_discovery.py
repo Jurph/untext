@@ -98,3 +98,55 @@ def test_discover_zones_returns_consistent_zone(tmp_path):
     assert len(zones) >= 1
     # The watermark is in the right-third, bottom-half → zone (2, 1)
     assert (2, 1) in zones
+
+
+from untextre.discovery import crop_zone_to_bgra
+
+def test_crop_zone_to_bgra_shape_and_alpha():
+    # 100x100 mean image, blob occupying rows 30-60, cols 40-70
+    mean_img = np.full((100, 100, 3), 128, dtype=np.uint8)
+    blob_mask = np.zeros((100, 100), dtype=np.uint8)
+    blob_mask[30:60, 40:70] = 255
+
+    bgra = crop_zone_to_bgra(mean_img, blob_mask)
+
+    # Crop should be blob bounding box + CROP_BORDER_PX on each side
+    from untextre.discovery import CROP_BORDER_PX
+    expected_h = (60 - 30) + 2 * CROP_BORDER_PX
+    expected_w = (70 - 40) + 2 * CROP_BORDER_PX
+    assert bgra.shape == (expected_h, expected_w, 4)
+
+def test_crop_zone_to_bgra_alpha_channel():
+    mean_img = np.full((100, 100, 3), 200, dtype=np.uint8)
+    blob_mask = np.zeros((100, 100), dtype=np.uint8)
+    blob_mask[40:60, 40:60] = 255
+
+    bgra = crop_zone_to_bgra(mean_img, blob_mask)
+    h, w = bgra.shape[:2]
+    from untextre.discovery import CROP_BORDER_PX
+    b = CROP_BORDER_PX
+    # Interior of crop (excluding border) should be alpha=255
+    assert np.all(bgra[b:h-b, b:w-b, 3] == 255)
+    # Corners (pure border) should be alpha=0
+    assert bgra[0, 0, 3] == 0
+    assert bgra[h-1, w-1, 3] == 0
+
+def test_crop_zone_to_bgra_returns_none_for_empty_mask():
+    mean_img = np.full((100, 100, 3), 128, dtype=np.uint8)
+    blob_mask = np.zeros((100, 100), dtype=np.uint8)
+    result = crop_zone_to_bgra(mean_img, blob_mask)
+    assert result is None
+
+def test_crop_zone_to_bgra_channel_order():
+    # Verify output is BGRA (not RGBA): blue channel should be preserved
+    mean_img = np.zeros((100, 100, 3), dtype=np.uint8)
+    mean_img[:, :] = [255, 0, 0]  # Pure blue in BGR
+    blob_mask = np.zeros((100, 100), dtype=np.uint8)
+    blob_mask[40:60, 40:60] = 255
+
+    bgra = crop_zone_to_bgra(mean_img, blob_mask)
+    from untextre.discovery import CROP_BORDER_PX
+    b = CROP_BORDER_PX
+    # Channel 0 should be 255 (blue), channel 2 should be 0 (red) — BGRA order
+    assert bgra[b, b, 0] == 255  # B channel
+    assert bgra[b, b, 2] == 0    # R channel

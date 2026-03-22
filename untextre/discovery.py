@@ -198,6 +198,52 @@ def discover_zones(
     return zone_variance_maps
 
 
+def crop_zone_to_bgra(
+    mean_image: np.ndarray,
+    blob_mask: np.ndarray,
+) -> Optional[np.ndarray]:
+    """Crop a blob region from the mean image and produce a tight BGRA array.
+
+    The alpha channel is 255 inside the blob and 0 in the transparent border.
+    Channel order is BGRA to match cv2's native format and what
+    find_known_mask_in_image expects.
+
+    Note on disk I/O: cv2.imwrite handles BGRA→PNG correctly.
+    Use cv2.imread(..., cv2.IMREAD_UNCHANGED) to reload; do NOT use
+    load_image() from utils (it drops the alpha channel).
+
+    Args:
+        mean_image: Pixel-wise mean of all images in the bucket (H×W×3 BGR).
+        blob_mask: Binary mask (H×W uint8, 255 = blob).
+
+    Returns:
+        BGRA crop (H'×W'×4 uint8) with transparent border, or None if
+        blob_mask is empty.
+    """
+    ys, xs = np.where(blob_mask == 255)
+    if len(ys) == 0:
+        return None
+
+    y0, y1 = int(ys.min()), int(ys.max()) + 1
+    x0, x1 = int(xs.min()), int(xs.max()) + 1
+
+    # Crop with border, clamped to image bounds
+    h, w = mean_image.shape[:2]
+    cy0 = max(0, y0 - CROP_BORDER_PX)
+    cy1 = min(h, y1 + CROP_BORDER_PX)
+    cx0 = max(0, x0 - CROP_BORDER_PX)
+    cx1 = min(w, x1 + CROP_BORDER_PX)
+
+    bgr_crop = mean_image[cy0:cy1, cx0:cx1].copy()
+    mask_crop = blob_mask[cy0:cy1, cx0:cx1].copy()
+
+    # Produce BGRA — keep BGR channel order from source image so that
+    # find_known_mask_in_image (which expects BGRA) gets the correct order.
+    b_ch, g_ch, r_ch = cv2.split(bgr_crop)
+    bgra = cv2.merge([b_ch, g_ch, r_ch, mask_crop])
+    return bgra
+
+
 def bucket_images_by_size(
     image_paths: List[Path],
 ) -> Dict[Tuple[int, int], List[Path]]:
