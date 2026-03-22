@@ -205,6 +205,9 @@ def test_select_best_family_merges_similar():
     small[5:25, 5:25, 3] = 255
     large = np.zeros((60, 60, 4), dtype=np.uint8)
     large[10:50, 10:50, 3] = 255
+    from untextre.discovery import CROSS_BUCKET_IOU_THRESHOLD
+    assert compute_alpha_iou(small, large) >= CROSS_BUCKET_IOU_THRESHOLD, \
+        "fixture IoU too low — test geometry is broken"
     families = select_best_family([small, large])
     assert len(families) == 1
     assert families[0].shape == large.shape
@@ -215,5 +218,24 @@ def test_select_best_family_keeps_distinct():
     a[0:10, 0:10, 3] = 255
     b = np.zeros((40, 40, 4), dtype=np.uint8)
     b[30:40, 30:40, 3] = 255
+    from untextre.discovery import CROSS_BUCKET_IOU_THRESHOLD
+    assert compute_alpha_iou(a, b) < CROSS_BUCKET_IOU_THRESHOLD, \
+        "fixture IoU too high — test geometry is broken"
     families = select_best_family([a, b])
     assert len(families) == 2
+
+def test_compute_alpha_iou_different_sizes():
+    # Exercises the resize path: small crop vs large crop with same watermark shape
+    small = np.zeros((25, 25, 4), dtype=np.uint8)
+    small[5:20, 5:20, 3] = 255
+    large = np.zeros((50, 50, 4), dtype=np.uint8)
+    large[10:40, 10:40, 3] = 255  # same fractional position as small
+    iou = compute_alpha_iou(small, large)
+    assert iou >= 0.5  # same watermark at different scales
+
+def test_compute_alpha_iou_all_transparent():
+    # Both crops fully transparent → union=0 → returns 0.0
+    a = np.zeros((20, 20, 4), dtype=np.uint8)  # all alpha=0
+    b = np.zeros((20, 20, 4), dtype=np.uint8)
+    iou = compute_alpha_iou(a, b)
+    assert iou == 0.0

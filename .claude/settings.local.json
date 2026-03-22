@@ -11,7 +11,26 @@
       "Bash(./venv/Scripts/python:*)",
       "WebSearch",
       "Bash(./venv/Scripts/ruff check .)",
-      "Bash(./venv/Scripts/ruff check --fix --exclude run_web_interface.py .)"
+      "Bash(./venv/Scripts/ruff check --fix --exclude run_web_interface.py .)",
+      "Bash(python -c \"from untextre.find_text_colors import grabcut_refine, find_mask_by_spatial_tf_idf; print\\(''imports OK''\\)\")",
+      "Bash(python -c \"from untextre.cli import parse_args; print\\(''cli imports OK''\\)\")",
+      "Bash(python -m pytest tests/test_find_text_colors.py -x -q)",
+      "Bash(python -m pytest tests/test_cli.py -x -q)",
+      "Bash(python -c \":*)",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''streamlit_app.py''\\).read\\(\\)\\); print\\(''syntax OK''\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\(''streamlit_app.py'', encoding=''utf-8''\\).read\\(\\)\\); print\\(''syntax OK''\\)\")",
+      "Bash(python -m pytest tests/test_streamlit_helpers.py -x -q)",
+      "Bash(python experiments/grabcut-ab/screen_images.py)",
+      "Bash(PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python python experiments/grabcut-ab/screen_images.py)",
+      "Bash(PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python venv/Scripts/python.exe experiments/grabcut-ab/screen_images.py)",
+      "Bash(shuf --random-source=/dev/urandom)",
+      "Bash(PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python venv/Scripts/python.exe -m untextre.cli -i experiments/grabcut-ab/source -o experiments/grabcut-ab/output-baseline -g 16 -k -p lama --no-expand --no-retry -t)",
+      "Bash(PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python venv/Scripts/python.exe -m untextre.cli -i experiments/grabcut-ab/source -o experiments/grabcut-ab/output-grabcut -g 16 -k -p lama --no-expand --no-retry --grabcut -t)",
+      "Bash(venv/Scripts/python.exe -c \":*)",
+      "Bash(python -c \"from untextre.find_text_colors import grabcut_refine; print\\(''OK''\\)\")",
+      "Bash(mkdir -p experiments/grabcut-ab/output2-baseline experiments/grabcut-ab/output2-grabcut)",
+      "Bash(PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python venv/Scripts/python.exe -m untextre.cli -i experiments/grabcut-ab/source2 -o experiments/grabcut-ab/output2-baseline -g 16 -k -p lama --no-expand --no-retry -t)",
+      "Bash(PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python venv/Scripts/python.exe -m untextre.cli -i experiments/grabcut-ab/source2 -o experiments/grabcut-ab/output2-grabcut -g 16 -k -p lama --no-expand --no-retry --grabcut -t)"
     ]
   }
 }

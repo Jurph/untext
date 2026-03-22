@@ -99,11 +99,7 @@ VARIANCE_THRESHOLD = 0.01
 # Minimum blob area as a fraction of total image area.
 MIN_BLOB_AREA_FRACTION = 0.0005  # 0.05%
 
-# Morphological kernel sizes (match morph_clean_mask for consistency).
-CLOSE_KERNEL_SIZE = 11
-DILATE_SIZE = 13
-
-# Border added around each RGBA crop (pixels).
+# Border added around each BGRA crop (pixels).
 CROP_BORDER_PX = 8
 
 # Zone grid: long edge into thirds, short edge into halves → 6 zones.
@@ -247,20 +243,13 @@ def extract_blobs(
     """
     min_area = max(1, int(image_area * MIN_BLOB_AREA_FRACTION))
 
-    # Threshold: 1 where variance is LOW (candidate watermark pixels)
+    # Threshold: 255 where variance is LOW (candidate watermark pixels).
+    # No morphological operations — the variance map IS the signal.
+    # The convergence loop (blobs appearing in the same zone across many draws)
+    # is the noise filter. Do not add morphology here.
     binary = (variance_map < VARIANCE_THRESHOLD).astype(np.uint8) * 255
 
-    # Morphological closing then dilation (no blur)
-    kernel_close = cv2.getStructuringElement(
-        cv2.MORPH_RECT, (CLOSE_KERNEL_SIZE, CLOSE_KERNEL_SIZE)
-    )
-    kernel_dilate = cv2.getStructuringElement(
-        cv2.MORPH_ELLIPSE, (DILATE_SIZE, DILATE_SIZE)
-    )
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel_close)
-    binary = cv2.dilate(binary, kernel_dilate)
-
-    # Find 8-connected contiguous blobs
+    # Find 8-connected contiguous blobs directly
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
         binary, connectivity=8
     )
@@ -867,19 +856,11 @@ def discover_watermark_candidates(
                 binary = (vmap < VARIANCE_THRESHOLD).astype(np.uint8) * 255
                 union_low_var = cv2.bitwise_or(union_low_var, binary)
 
-            # Restrict to the blob's grid zone for clean cropping
+            # Restrict to the blob's grid zone for clean cropping.
+            # No morphological operations — the union of low-variance pixels
+            # across draws IS the signal. Do not inflate or connect blobs.
             zone_mask = _make_zone_mask(union_low_var.shape, zone, img_w, img_h)
             zoned_mask = cv2.bitwise_and(union_low_var, zone_mask)
-
-            # Clean up
-            kernel_close = cv2.getStructuringElement(
-                cv2.MORPH_RECT, (CLOSE_KERNEL_SIZE, CLOSE_KERNEL_SIZE)
-            )
-            kernel_dilate = cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (DILATE_SIZE, DILATE_SIZE)
-            )
-            zoned_mask = cv2.morphologyEx(zoned_mask, cv2.MORPH_CLOSE, kernel_close)
-            zoned_mask = cv2.dilate(zoned_mask, kernel_dilate)
 
             rgba = crop_zone_to_rgba(mean_img, zoned_mask)
             if rgba is not None:

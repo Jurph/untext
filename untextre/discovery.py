@@ -266,7 +266,7 @@ def compute_alpha_iou(crop_a: np.ndarray, crop_b: np.ndarray) -> float:
 
     target_h, target_w = large.shape[:2]
     small_resized = cv2.resize(
-        small, (target_w, target_h), interpolation=cv2.INTER_CUBIC
+        small, (target_w, target_h), interpolation=cv2.INTER_LINEAR
     )
 
     alpha_large = (large[:, :, 3] > 127).astype(np.uint8)
@@ -297,7 +297,8 @@ def select_best_family(candidates: List[np.ndarray]) -> List[np.ndarray]:
 
     families: List[List[np.ndarray]] = []
 
-    for crop in candidates:
+    sorted_candidates = sorted(candidates, key=lambda c: c.shape[0] * c.shape[1], reverse=True)
+    for crop in sorted_candidates:
         assigned = False
         for family in families:
             rep = max(family, key=lambda c: c.shape[0] * c.shape[1])
