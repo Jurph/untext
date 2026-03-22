@@ -24,6 +24,11 @@ MIN_BLOB_AREA_FRACTION = 0.0005  # 0.05%
 # Border added around each BGRA crop (pixels).
 CROP_BORDER_PX = 8
 
+# Dilation applied to zone masks before cropping.  Expands the confirmed
+# zero-variance core outward to capture JPEG-fringed watermark edges.
+# An elliptical kernel avoids blocky corners.
+MASK_DILATION_PX = 9
+
 # Zone grid: long edge into thirds, short edge into halves → 6 zones.
 ZONE_LONG_DIVISIONS = 3
 ZONE_SHORT_DIVISIONS = 2
@@ -310,6 +315,17 @@ def discover_watermark_candidates(
         if not zone_masks:
             logger.warning(f"Bucket {img_w}×{img_h}: no consistent blobs found above minimum size")
             continue
+
+        # Dilate each zone mask to capture JPEG-compressed watermark edges.
+        # We grow from the confirmed zero-variance core, so we stay grounded
+        # in real watermark pixels rather than loosening the threshold globally.
+        dilation_kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (MASK_DILATION_PX * 2 + 1, MASK_DILATION_PX * 2 + 1)
+        )
+        zone_masks = {
+            zone: cv2.dilate(mask, dilation_kernel)
+            for zone, mask in zone_masks.items()
+        }
 
         for zone, zone_mask in zone_masks.items():
             bgra = crop_zone_to_bgra(mean_img, zone_mask)
