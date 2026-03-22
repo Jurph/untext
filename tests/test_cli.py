@@ -537,7 +537,7 @@ class TestProcessSingleImageFailovers:
         monkeypatch.setattr(
             cli_mod,
             "_generate_masks_and_inpaint",
-            lambda img, _boxes, _g, _method, _target: (
+            lambda img, _boxes, _g, _method, _target, **_kw: (
                 np.zeros(img.shape[:2], dtype=np.uint8),
                 img.copy(),
             ),
@@ -584,7 +584,7 @@ class TestProcessSingleImageFailovers:
 
         captured = {}
 
-        def fake_generate(img, boxes, _g, _method, _target):
+        def fake_generate(img, boxes, _g, _method, _target, **_kw):
             captured["boxes"] = boxes
             return np.zeros(img.shape[:2], dtype=np.uint8), img.copy()
 
@@ -1109,7 +1109,7 @@ class TestProcessSingleImageEdgeCases:
 
         captured = {}
 
-        def fake_generate(image, boxes, _g, _method, _target):
+        def fake_generate(image, boxes, _g, _method, _target, **_kw):
             captured["boxes"] = boxes
             return np.zeros(image.shape[:2], dtype=np.uint8), image.copy()
 
@@ -1205,7 +1205,7 @@ class TestProcessSingleImageEdgeCases:
 
         generate_calls = []
 
-        def fake_generate(image, boxes, g, method, target):
+        def fake_generate(image, boxes, g, method, target, **_kw):
             generate_calls.append(g)
             return np.zeros(image.shape[:2], dtype=np.uint8), image.copy()
 
@@ -1235,7 +1235,7 @@ class TestProcessSingleImageEdgeCases:
 
         generate_calls = []
 
-        def fake_generate(image, boxes, g, method, target):
+        def fake_generate(image, boxes, g, method, target, **_kw):
             generate_calls.append(g)
             return np.zeros(image.shape[:2], dtype=np.uint8), image.copy()
 
