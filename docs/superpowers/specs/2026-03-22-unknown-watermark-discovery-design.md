@@ -92,7 +92,7 @@ If buckets disagree (IoU < 0.50), each becomes its own family and produces its o
 |---|---|
 | No bucket reaches 3 images | Warn and exit cleanly; suggest `-K` with a manually-identified template |
 | A bucket's blob extraction yields no blobs | Warn; skip that bucket; continue with remaining buckets |
-| All qualifying buckets yield no blobs | Warn and exit cleanly; suggest lowering `--variance-threshold` or using `-K` |
+| All qualifying buckets yield no blobs | Warn and exit cleanly; suggest using `-K` with a manually-identified template |
 | Single bucket, no cross-validation possible | Proceed; log that cross-validation was unavailable |
 | Buckets yield disagreeing candidates (IoU < 0.50) | Write multiple candidate PNGs; log which template matched each image |
 | Image matches no candidate | Skip and log (consistent with `-K` behavior) |
@@ -119,7 +119,6 @@ If buckets disagree (IoU < 0.50), each becomes its own family and produces its o
 - Flag: `-U` / `--unknown-watermark`
 - Mutually exclusive with `-K`
 - Requires directory input; single-image use is not supported (use the web UI instead)
-- Optional tuning parameter: `--variance-threshold FLOAT` (default 0.01)
 
 ---
 
