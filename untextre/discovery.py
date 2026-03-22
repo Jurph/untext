@@ -269,27 +269,44 @@ def discover_watermark_candidates(
 
         logger.info(f"Discovering watermark in bucket {img_w}×{img_h} ({len(paths)} images)")
 
-        # Load all images once: grayscale for variance, BGR for mean crop
-        gray_stack: List[np.ndarray] = []
-        bgr_stack: List[np.ndarray] = []
+        # Welford's online algorithm: compute population variance and mean
+        # one image at a time so we never hold the full N×H×W stack in memory.
+        # Memory cost: three H×W float32 accumulators (~3× one grayscale frame)
+        # regardless of N, vs N×H×W×3 float32 for the stack approach.
+        n_loaded: int = 0
+        gray_mean: Optional[np.ndarray] = None  # running grayscale mean
+        gray_M2: Optional[np.ndarray] = None    # running sum of squared deviations
+        bgr_mean: Optional[np.ndarray] = None   # running BGR mean
+
         for p in paths:
             try:
                 img = load_image(p)
-                bgr_stack.append(img.astype(np.float32))
                 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-                gray_stack.append(gray)
+                bgr = img.astype(np.float32)
             except Exception as e:
                 logger.warning(f"Could not load {p.name}: {e}")
+                continue
 
-        if len(gray_stack) < 3:
+            n_loaded += 1
+            if gray_mean is None:
+                gray_mean = gray.copy()
+                gray_M2 = np.zeros_like(gray)
+                bgr_mean = bgr.copy()
+            else:
+                delta = gray - gray_mean
+                gray_mean += delta / n_loaded
+                gray_M2 += delta * (gray - gray_mean)   # uses updated mean
+                bgr_mean += (bgr - bgr_mean) / n_loaded
+
+        if n_loaded < 3:
             logger.warning(f"Bucket {img_w}×{img_h}: fewer than 3 loadable images, skipping")
             continue
 
-        # Population variance across all N images.  A watermark pixel — stamped
-        # identically onto every image — has near-zero variance.  Varying image
-        # content produces nonzero variance even when visually similar.
-        pop_variance = np.var(np.stack(gray_stack, axis=0), axis=0).astype(np.float32)
-        mean_img = np.mean(np.stack(bgr_stack, axis=0), axis=0).astype(np.uint8)
+        # Population variance = M2 / N  (matches np.var default ddof=0)
+        # A watermark pixel — stamped identically onto every image — has
+        # near-zero variance.  Varying image content produces nonzero variance.
+        pop_variance = (gray_M2 / n_loaded).astype(np.float32)
+        mean_img = bgr_mean.astype(np.uint8)
 
         # Threshold: keep only pixels that are effectively identical across all images
         image_area = img_w * img_h
