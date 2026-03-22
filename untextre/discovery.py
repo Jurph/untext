@@ -1,11 +1,9 @@
 """Watermark auto-discovery for -U mode.
 
 Discovers a watermark template from a directory of consistently-watermarked
-images and returns RGBA crop(s) suitable for the -K / ORB pipeline.
+images and returns BGRA crop(s) suitable for the -K / ORB pipeline.
 """
 
-import logging
-import random
 import cv2
 import numpy as np
 from pathlib import Path
@@ -15,9 +13,10 @@ from .utils import load_image, setup_logger, IMAGE_EXTENSIONS
 
 logger = setup_logger(__name__)
 
-# Variance threshold: population variance of a pair in [0,1] luminance space.
-# Corresponds to ~20% per-pixel luminance difference.
-VARIANCE_THRESHOLD = 0.01
+# Population variance threshold: pixels at or below this value are considered
+# identical across the full image stack.  Near-zero (rather than exactly zero)
+# handles tiny floating-point rounding differences in float32 arithmetic.
+POPULATION_VARIANCE_THRESHOLD = 1e-6
 
 # Minimum blob area as a fraction of total image area.
 MIN_BLOB_AREA_FRACTION = 0.0005  # 0.05%
@@ -29,68 +28,8 @@ CROP_BORDER_PX = 8
 ZONE_LONG_DIVISIONS = 3
 ZONE_SHORT_DIVISIONS = 2
 
-# Convergence parameters.
-MAX_DRAWS = 50
-STABLE_STREAK_REQUIRED = 10
-
 # Cross-bucket IoU threshold for family membership.
 CROSS_BUCKET_IOU_THRESHOLD = 0.50
-
-
-def compute_pair_variance(img_a: np.ndarray, img_b: np.ndarray) -> np.ndarray:
-    """Compute per-pixel population variance of a 2-image luminance pair.
-
-    Uses np.var(stack, axis=0) where stack shape is (2, H, W).
-    Population variance of two values equals ((a - b) / 2)^2.
-
-    Args:
-        img_a: First image (H×W×3 BGR uint8).
-        img_b: Second image (H×W×3 BGR uint8), same shape as img_a.
-
-    Returns:
-        Per-pixel variance map (H×W float32), values in [0, 0.25].
-    """
-    gray_a = cv2.cvtColor(img_a, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-    gray_b = cv2.cvtColor(img_b, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
-    stack = np.stack([gray_a, gray_b], axis=0)
-    return np.var(stack, axis=0).astype(np.float32)
-
-
-def extract_blobs(
-    variance_map: np.ndarray,
-    image_area: int,
-) -> List[Tuple[int, int]]:
-    """Extract 8-connected low-variance blobs from a variance map.
-
-    The variance map is the signal: pixels below VARIANCE_THRESHOLD are
-    watermark candidates. No morphological operations are applied — the
-    convergence loop (requiring blobs to appear across multiple independent
-    draws) is the noise filter.
-
-    Args:
-        variance_map: Per-pixel variance (H×W float32).
-        image_area: Total image area in pixels (H * W), used for min-area check.
-
-    Returns:
-        List of (cx, cy) blob centroids for blobs that exceed the minimum area.
-    """
-    min_area = max(1, int(image_area * MIN_BLOB_AREA_FRACTION))
-
-    # Threshold: 255 where variance is LOW (candidate watermark pixels)
-    binary = (variance_map < VARIANCE_THRESHOLD).astype(np.uint8) * 255
-
-    # Find 8-connected contiguous blobs directly — no morphological expansion
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
-        binary, connectivity=8
-    )
-
-    result = []
-    for label in range(1, num_labels):  # skip background (label 0)
-        area = stats[label, cv2.CC_STAT_AREA]
-        if area >= min_area:
-            cx, cy = int(centroids[label][0]), int(centroids[label][1])
-            result.append((cx, cy))
-    return result
 
 
 def assign_zone(
@@ -115,87 +54,6 @@ def assign_zone(
     col = min(int(cx / img_w * col_divs), col_divs - 1)
     row = min(int(cy / img_h * row_divs), row_divs - 1)
     return (col, row)
-
-
-def discover_zones(
-    bucket_paths: List[Path],
-    img_w: int,
-    img_h: int,
-) -> Dict[Tuple[int, int], List[np.ndarray]]:
-    """Run the random-pair convergence loop to find occupied zones.
-
-    Draws random pairs with replacement, computes variance, extracts blobs,
-    assigns them to zones.  Stops when the occupied zone set is stable for
-    STABLE_STREAK_REQUIRED consecutive draws, or after MAX_DRAWS total.
-
-    Zero-blob draws count toward the stability streak (they do not change the
-    set, so they count as stable).
-
-    Convergence is tracked globally across the full set of occupied zones
-    (not per-zone).
-
-    At MAX_DRAWS without convergence, accepts current occupied set and logs
-    a warning.
-
-    Args:
-        bucket_paths: Paths to all images in this bucket (≥ 3 required).
-        img_w: Image width (all images in bucket are this size).
-        img_h: Image height.
-
-    Returns:
-        Dict mapping zone (col, row) → list of variance maps that contributed
-        a blob to that zone.  Empty dict if no blobs found at all.
-    """
-    image_area = img_w * img_h
-    # Cache loaded images to avoid repeated disk reads
-    images: Dict[Path, np.ndarray] = {}
-    for p in bucket_paths:
-        try:
-            images[p] = load_image(p)
-        except Exception as e:
-            logger.warning(f"Could not load {p.name} for discovery: {e}")
-
-    paths = list(images.keys())
-    if len(paths) < 2:
-        logger.warning("Not enough loadable images for pair stacking")
-        return {}
-
-    zone_variance_maps: Dict[Tuple[int, int], List[np.ndarray]] = {}
-    occupied: set = set()
-    stable_streak = 0
-    draw_count = 0
-
-    while draw_count < MAX_DRAWS:
-        # Draw pair with replacement
-        a_path, b_path = random.choices(paths, k=2)
-        img_a, img_b = images[a_path], images[b_path]
-
-        var_map = compute_pair_variance(img_a, img_b)
-        centroids = extract_blobs(var_map, image_area)
-
-        prev_occupied = frozenset(occupied)
-        for (cx, cy) in centroids:
-            zone = assign_zone(cx, cy, img_w, img_h)
-            occupied.add(zone)
-            zone_variance_maps.setdefault(zone, []).append(var_map)
-
-        draw_count += 1
-        if frozenset(occupied) == prev_occupied:
-            stable_streak += 1
-        else:
-            stable_streak = 0
-
-        if stable_streak >= STABLE_STREAK_REQUIRED:
-            logger.debug(f"Zone convergence after {draw_count} draws")
-            break
-    else:
-        if occupied:
-            logger.warning(
-                f"Zone set did not converge after {MAX_DRAWS} draws; "
-                f"accepting current set: {occupied}"
-            )
-
-    return zone_variance_maps
 
 
 def crop_zone_to_bgra(
@@ -376,10 +234,10 @@ def discover_watermark_candidates(
 ) -> List[np.ndarray]:
     """Discover watermark template(s) from a batch of consistently-watermarked images.
 
-    Buckets images by exact dimensions, runs the pair-stacking convergence loop
-    per qualifying bucket (≥ 3 images), crops BGRA candidates, cross-validates
-    across buckets, and returns one representative BGRA crop per watermark family
-    in descending pixel-area order.
+    Buckets images by exact dimensions, computes population variance across all
+    images in each qualifying bucket (≥ 3), finds near-zero-variance blobs
+    (pixels identical across the full stack), assigns them to zones, and returns
+    one representative BGRA crop per watermark family in descending pixel-area order.
 
     Args:
         image_paths: All image paths in the input directory (pre-frozen list).
@@ -404,37 +262,57 @@ def discover_watermark_candidates(
             continue
 
         logger.info(f"Discovering watermark in bucket {img_w}×{img_h} ({len(paths)} images)")
-        zone_maps = discover_zones(paths, img_w, img_h)
 
-        if not zone_maps:
-            logger.warning(f"Bucket {img_w}×{img_h}: no low-variance blobs found")
-            continue
-
-        # Compute mean image once per bucket (used for all zone crops)
-        loaded = []
+        # Load all images once: grayscale for variance, BGR for mean crop
+        gray_stack: List[np.ndarray] = []
+        bgr_stack: List[np.ndarray] = []
         for p in paths:
             try:
-                loaded.append(load_image(p).astype(np.float32))
+                img = load_image(p)
+                bgr_stack.append(img.astype(np.float32))
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+                gray_stack.append(gray)
             except Exception as e:
-                logger.warning(f"Could not reload {p.name} for mean image: {e}")
-        if not loaded:
+                logger.warning(f"Could not load {p.name}: {e}")
+
+        if len(gray_stack) < 3:
+            logger.warning(f"Bucket {img_w}×{img_h}: fewer than 3 loadable images, skipping")
             continue
-        mean_img = np.mean(loaded, axis=0).astype(np.uint8)
 
-        for zone, var_maps in zone_maps.items():
-            # Build union blob mask from all variance maps for this zone
-            union_low_var = np.zeros(mean_img.shape[:2], dtype=np.uint8)
-            for vmap in var_maps:
-                binary = (vmap < VARIANCE_THRESHOLD).astype(np.uint8) * 255
-                union_low_var = cv2.bitwise_or(union_low_var, binary)
+        # Population variance across all N images.  A watermark pixel — stamped
+        # identically onto every image — has near-zero variance.  Varying image
+        # content produces nonzero variance even when visually similar.
+        pop_variance = np.var(np.stack(gray_stack, axis=0), axis=0).astype(np.float32)
+        mean_img = np.mean(np.stack(bgr_stack, axis=0), axis=0).astype(np.uint8)
 
-            # Restrict to the blob's grid zone for clean cropping.
-            # No morphological operations — the union of low-variance pixels
-            # across draws IS the signal. Do not inflate or connect blobs.
-            zone_mask = _make_zone_mask(union_low_var.shape, zone)
-            zoned_mask = cv2.bitwise_and(union_low_var, zone_mask)
+        # Threshold: keep only pixels that are effectively identical across all images
+        image_area = img_w * img_h
+        min_area = max(1, int(image_area * MIN_BLOB_AREA_FRACTION))
+        binary = (pop_variance <= POPULATION_VARIANCE_THRESHOLD).astype(np.uint8) * 255
 
-            bgra = crop_zone_to_bgra(mean_img, zoned_mask)
+        num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+            binary, connectivity=8
+        )
+
+        # Assign qualifying blobs to zones; accumulate per-zone pixel masks
+        zone_masks: Dict[Tuple[int, int], np.ndarray] = {}
+        for label in range(1, num_labels):
+            area = stats[label, cv2.CC_STAT_AREA]
+            if area < min_area:
+                continue
+            cx = int(centroids[label][0])
+            cy = int(centroids[label][1])
+            zone = assign_zone(cx, cy, img_w, img_h)
+            if zone not in zone_masks:
+                zone_masks[zone] = np.zeros((img_h, img_w), dtype=np.uint8)
+            zone_masks[zone][labels == label] = 255
+
+        if not zone_masks:
+            logger.warning(f"Bucket {img_w}×{img_h}: no consistent blobs found above minimum size")
+            continue
+
+        for zone, zone_mask in zone_masks.items():
+            bgra = crop_zone_to_bgra(mean_img, zone_mask)
             if bgra is not None:
                 all_candidates.append(bgra)
                 logger.info(
@@ -446,9 +324,8 @@ def discover_watermark_candidates(
         logger.warning("No watermark candidates discovered across all buckets")
         return []
 
-    # Per-bucket aspect-ratio dedup (spec Phase 2 Step 5):
-    # If multiple candidates have similar aspect ratios (symmetric relative
-    # difference < 10%), keep only the largest.
+    # Aspect-ratio dedup: if multiple candidates have similar aspect ratios
+    # (symmetric relative difference < 10%), keep only the largest.
     deduped: List[np.ndarray] = []
     for crop in sorted(all_candidates, key=lambda c: c.shape[0] * c.shape[1], reverse=True):
         r1 = _aspect_ratio(crop)
@@ -459,7 +336,7 @@ def discover_watermark_candidates(
             deduped.append(crop)
     all_candidates = deduped
 
-    qualifying_count = sum(1 for paths in buckets.values() if len(paths) >= 3)
+    qualifying_count = sum(1 for p in buckets.values() if len(p) >= 3)
     if qualifying_count <= 1:
         logger.info("Only one qualifying bucket — cross-validation unavailable")
 

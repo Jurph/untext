@@ -5,7 +5,7 @@ import random
 import cv2
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-from untextre.discovery import bucket_images_by_size, compute_pair_variance, extract_blobs, assign_zone, discover_zones
+from untextre.discovery import bucket_images_by_size, assign_zone
 
 def test_bucket_images_by_size_groups_correctly(tmp_path):
     # Create fake image files with known sizes
@@ -39,33 +39,6 @@ def test_bucket_images_skips_unreadable(tmp_path, caplog):
     assert buckets == {}
     assert any("bad.png" in msg for msg in caplog.messages)
 
-def test_compute_pair_variance_low_for_identical():
-    img = np.full((100, 100, 3), 128, dtype=np.uint8)
-    var = compute_pair_variance(img, img)
-    assert var.max() < 0.001
-
-def test_compute_pair_variance_high_for_different():
-    a = np.zeros((100, 100, 3), dtype=np.uint8)
-    b = np.full((100, 100, 3), 255, dtype=np.uint8)
-    var = compute_pair_variance(a, b)
-    assert var.mean() > 0.1
-
-def test_extract_blobs_finds_dark_region():
-    # Build a variance map that is low everywhere except a 50x50 block
-    var_map = np.ones((200, 300), dtype=np.float32) * 0.5  # high variance
-    var_map[75:125, 125:175] = 0.0  # low-variance blob
-    blobs = extract_blobs(var_map, image_area=200 * 300)
-    assert len(blobs) == 1
-    cx, cy = blobs[0]
-    assert 125 <= cx <= 175 and 75 <= cy <= 125
-
-def test_extract_blobs_ignores_tiny_noise():
-    # 4px blob in a 200x300 image: min_area = int(60000 * 0.0005) = 30px
-    # Without morphology, 4px < 30px → filtered out
-    var_map = np.ones((200, 300), dtype=np.float32) * 0.5
-    var_map[10:12, 10:12] = 0.0  # 4 px — below min_area threshold
-    blobs = extract_blobs(var_map, image_area=200 * 300)
-    assert len(blobs) == 0
 
 def test_assign_zone_landscape():
     # 300w x 200h → long=width(3 cols), short=height(2 rows) → 6 zones
@@ -78,27 +51,6 @@ def test_assign_zone_portrait():
     # centroid at (50, 250) → col 0 (left half), row 2 (bottom third)
     zone = assign_zone(cx=50, cy=250, img_w=200, img_h=300)
     assert zone == (0, 2)
-
-def test_discover_zones_returns_consistent_zone(tmp_path):
-    # All images have a watermark blob in the same position → one stable zone.
-    # Watermark is constant; background varies significantly between images.
-    wm_color = np.array([200, 200, 200], dtype=np.uint8)
-
-    paths = []
-    np.random.seed(42)  # for reproducibility
-    for i in range(5):
-        # Highly varying background (0-255 range) to create high variance
-        img = np.random.randint(0, 255, (200, 300, 3), dtype=np.uint8)
-        # Constant watermark: 50x50 block bottom-right
-        img[140:190, 240:290] = wm_color
-        p = tmp_path / f"img{i}.png"
-        cv2.imwrite(str(p), img)
-        paths.append(p)
-
-    zones = discover_zones(paths, img_w=300, img_h=200)
-    assert len(zones) >= 1
-    # The watermark is in the right-third, bottom-half → zone (2, 1)
-    assert (2, 1) in zones
 
 
 from untextre.discovery import crop_zone_to_bgra
