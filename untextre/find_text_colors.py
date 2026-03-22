@@ -376,9 +376,10 @@ def find_mask_by_spatial_tf_idf(
                     morphological cleanup (default: False)
         return_cluster_data: If True, return a tuple (cleaned_mask, cluster_data)
                     where cluster_data is a dict with keys 'centers', 'top_id',
-                    'bot_id' — the K-means centroids and the indices of the
-                    highest- and lowest-FOM clusters. Used to seed
-                    color_guided_expand. (default: False)
+                    'bot_id', 'color_radius', 'bg_radius' — the K-means centroids,
+                    the highest- and lowest-FOM cluster indices, and the adaptive
+                    color radii for each. Used to seed color_guided_expand.
+                    (default: False)
 
     Returns:
         cleaned_mask (uint8, 255=text) normally; or (cleaned_mask, cluster_data)
