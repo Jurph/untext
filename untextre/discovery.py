@@ -41,6 +41,90 @@ STABLE_STREAK_REQUIRED = 10
 CROSS_BUCKET_IOU_THRESHOLD = 0.50
 
 
+def compute_pair_variance(img_a: np.ndarray, img_b: np.ndarray) -> np.ndarray:
+    """Compute per-pixel population variance of a 2-image luminance pair.
+
+    Uses np.var(stack, axis=0) where stack shape is (2, H, W).
+    Population variance of two values equals ((a - b) / 2)^2.
+
+    Args:
+        img_a: First image (H×W×3 BGR uint8).
+        img_b: Second image (H×W×3 BGR uint8), same shape as img_a.
+
+    Returns:
+        Per-pixel variance map (H×W float32), values in [0, 0.25].
+    """
+    gray_a = cv2.cvtColor(img_a, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+    gray_b = cv2.cvtColor(img_b, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+    stack = np.stack([gray_a, gray_b], axis=0)
+    return np.var(stack, axis=0).astype(np.float32)
+
+
+def extract_blobs(
+    variance_map: np.ndarray,
+    image_area: int,
+) -> List[Tuple[int, int]]:
+    """Extract 8-connected low-variance blobs from a variance map.
+
+    Applies morphological closing then dilation (no blur — smooth edges
+    are not needed for bounding-box extraction).
+
+    Args:
+        variance_map: Per-pixel variance (H×W float32).
+        image_area: Total image area in pixels (H * W), used for min-area check.
+
+    Returns:
+        List of (cx, cy) blob centroids for blobs that exceed the minimum area.
+    """
+    min_area = max(1, int(image_area * MIN_BLOB_AREA_FRACTION))
+
+    # Threshold: 1 where variance is LOW (candidate watermark pixels)
+    binary = (variance_map < VARIANCE_THRESHOLD).astype(np.uint8) * 255
+
+    # Find 8-connected contiguous blobs in the thresholded map
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        binary, connectivity=8
+    )
+
+    # Filter out blobs smaller than min_area before morphological processing
+    # to avoid noise expansion
+    valid_blobs = []
+    for label in range(1, num_labels):  # skip background (label 0)
+        area = stats[label, cv2.CC_STAT_AREA]
+        if area >= min_area:
+            valid_blobs.append(label)
+
+    if not valid_blobs:
+        return []
+
+    # Create binary mask of only the valid blobs
+    valid_binary = np.zeros_like(binary)
+    for label in valid_blobs:
+        valid_binary[labels == label] = 255
+
+    # Morphological closing then dilation (no blur)
+    kernel_close = cv2.getStructuringElement(
+        cv2.MORPH_RECT, (CLOSE_KERNEL_SIZE, CLOSE_KERNEL_SIZE)
+    )
+    kernel_dilate = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (DILATE_SIZE, DILATE_SIZE)
+    )
+    valid_binary = cv2.morphologyEx(valid_binary, cv2.MORPH_CLOSE, kernel_close)
+    valid_binary = cv2.dilate(valid_binary, kernel_dilate)
+
+    # Re-extract blobs after morphology
+    num_labels_post, labels_post, stats_post, centroids_post = cv2.connectedComponentsWithStats(
+        valid_binary, connectivity=8
+    )
+
+    result = []
+    for label in range(1, num_labels_post):  # skip background
+        cx, cy = int(centroids_post[label][0]), int(centroids_post[label][1])
+        result.append((cx, cy))
+
+    return result
+
+
 def bucket_images_by_size(
     image_paths: List[Path],
 ) -> Dict[Tuple[int, int], List[Path]]:
