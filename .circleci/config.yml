@@ -21,7 +21,7 @@ jobs:
             - ~/.cache/pip
       - run:
           name: Run fast tests
-          command: pytest -m "not slow" --tb=short
+          command: python -m pytest -m "not slow" --tb=short
 
 workflows:
   build-and-test:
