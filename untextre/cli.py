@@ -702,7 +702,6 @@ def main() -> None:
             sys.exit(1)
 
         # Write candidates to output dir before processing
-        output_path.mkdir(parents=True, exist_ok=True)
         watermark_templates = []
         for i, bgra in enumerate(candidates):
             suffix = "" if i == 0 else f"_{i + 1}"
