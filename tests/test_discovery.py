@@ -174,3 +174,46 @@ def test_crop_zone_to_bgra_blob_at_edge_clamps_border():
     assert bgra.shape == (expected_h, expected_w, 4)
     # Top-left pixel is inside the blob, so alpha should be 255
     assert bgra[0, 0, 3] == 255
+
+
+from untextre.discovery import compute_alpha_iou, select_best_family
+
+def test_compute_alpha_iou_identical():
+    crop = np.zeros((50, 50, 4), dtype=np.uint8)
+    crop[10:40, 10:40, 3] = 255
+    iou = compute_alpha_iou(crop, crop)
+    assert abs(iou - 1.0) < 0.01
+
+def test_compute_alpha_iou_no_overlap():
+    a = np.zeros((50, 50, 4), dtype=np.uint8)
+    a[0:10, 0:10, 3] = 255
+    b = np.zeros((50, 50, 4), dtype=np.uint8)
+    b[40:50, 40:50, 3] = 255
+    iou = compute_alpha_iou(a, b)
+    assert iou < 0.01
+
+def test_select_best_family_single_crop():
+    crop = np.zeros((60, 80, 4), dtype=np.uint8)
+    crop[:, :, 3] = 255
+    families = select_best_family([crop])
+    assert len(families) == 1
+    assert families[0] is crop
+
+def test_select_best_family_merges_similar():
+    # Two crops with high IoU → same family, largest returned
+    small = np.zeros((30, 30, 4), dtype=np.uint8)
+    small[5:25, 5:25, 3] = 255
+    large = np.zeros((60, 60, 4), dtype=np.uint8)
+    large[10:50, 10:50, 3] = 255
+    families = select_best_family([small, large])
+    assert len(families) == 1
+    assert families[0].shape == large.shape
+
+def test_select_best_family_keeps_distinct():
+    # Two crops with low IoU → different families
+    a = np.zeros((40, 40, 4), dtype=np.uint8)
+    a[0:10, 0:10, 3] = 255
+    b = np.zeros((40, 40, 4), dtype=np.uint8)
+    b[30:40, 30:40, 3] = 255
+    families = select_best_family([a, b])
+    assert len(families) == 2

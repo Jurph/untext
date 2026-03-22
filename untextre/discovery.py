@@ -244,6 +244,78 @@ def crop_zone_to_bgra(
     return bgra
 
 
+def compute_alpha_iou(crop_a: np.ndarray, crop_b: np.ndarray) -> float:
+    """Compute IoU on alpha channels after resizing the smaller crop to the larger.
+
+    "Larger" is defined by pixel area (H * W).
+
+    Args:
+        crop_a: BGRA array (H×W×4).
+        crop_b: BGRA array (H×W×4).
+
+    Returns:
+        IoU float in [0, 1].
+    """
+    area_a = crop_a.shape[0] * crop_a.shape[1]
+    area_b = crop_b.shape[0] * crop_b.shape[1]
+
+    if area_a >= area_b:
+        large, small = crop_a, crop_b
+    else:
+        large, small = crop_b, crop_a
+
+    target_h, target_w = large.shape[:2]
+    small_resized = cv2.resize(
+        small, (target_w, target_h), interpolation=cv2.INTER_CUBIC
+    )
+
+    alpha_large = (large[:, :, 3] > 127).astype(np.uint8)
+    alpha_small = (small_resized[:, :, 3] > 127).astype(np.uint8)
+
+    intersection = np.sum(alpha_large & alpha_small)
+    union = np.sum(alpha_large | alpha_small)
+    if union == 0:
+        return 0.0
+    return float(intersection) / float(union)
+
+
+def select_best_family(candidates: List[np.ndarray]) -> List[np.ndarray]:
+    """Group candidates into families by IoU similarity; return one rep per family.
+
+    Within each family, the largest crop (by pixel area) is the representative.
+    Families are ordered by descending pixel area of their representative
+    (largest first, for Phase 4 processing order).
+
+    Args:
+        candidates: List of BGRA crops.
+
+    Returns:
+        List of representative BGRA crops, one per family, largest first.
+    """
+    if not candidates:
+        return []
+
+    families: List[List[np.ndarray]] = []
+
+    for crop in candidates:
+        assigned = False
+        for family in families:
+            rep = max(family, key=lambda c: c.shape[0] * c.shape[1])
+            if compute_alpha_iou(crop, rep) >= CROSS_BUCKET_IOU_THRESHOLD:
+                family.append(crop)
+                assigned = True
+                break
+        if not assigned:
+            families.append([crop])
+
+    representatives = [
+        max(family, key=lambda c: c.shape[0] * c.shape[1])
+        for family in families
+    ]
+    representatives.sort(key=lambda c: c.shape[0] * c.shape[1], reverse=True)
+    return representatives
+
+
 def bucket_images_by_size(
     image_paths: List[Path],
 ) -> Dict[Tuple[int, int], List[Path]]:
