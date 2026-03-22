@@ -22,10 +22,6 @@ VARIANCE_THRESHOLD = 0.01
 # Minimum blob area as a fraction of total image area.
 MIN_BLOB_AREA_FRACTION = 0.0005  # 0.05%
 
-# Morphological kernel sizes (match morph_clean_mask for consistency).
-CLOSE_KERNEL_SIZE = 11
-DILATE_SIZE = 13
-
 # Border added around each BGRA crop (pixels).
 CROP_BORDER_PX = 8
 
