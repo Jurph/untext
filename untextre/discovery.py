@@ -345,14 +345,12 @@ def bucket_images_by_size(
 def _make_zone_mask(
     shape: Tuple[int, int],
     zone: Tuple[int, int],
-    img_w: int,
-    img_h: int,
 ) -> np.ndarray:
     """Return a binary mask (255) for the pixels belonging to a given zone."""
     h, w = shape
     col, row = zone
 
-    if img_w >= img_h:
+    if w >= h:
         col_divs, row_divs = ZONE_LONG_DIVISIONS, ZONE_SHORT_DIVISIONS
     else:
         col_divs, row_divs = ZONE_SHORT_DIVISIONS, ZONE_LONG_DIVISIONS
@@ -365,6 +363,12 @@ def _make_zone_mask(
     mask = np.zeros((h, w), dtype=np.uint8)
     mask[y0:y1, x0:x1] = 255
     return mask
+
+
+def _aspect_ratio(crop: np.ndarray) -> float:
+    """Return width/height ratio of a crop array (H×W×4)."""
+    h, w = crop.shape[:2]
+    return w / h if h > 0 else 1.0
 
 
 def discover_watermark_candidates(
@@ -411,8 +415,8 @@ def discover_watermark_candidates(
         for p in paths:
             try:
                 loaded.append(load_image(p).astype(np.float32))
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"Could not reload {p.name} for mean image: {e}")
         if not loaded:
             continue
         mean_img = np.mean(loaded, axis=0).astype(np.uint8)
@@ -427,7 +431,7 @@ def discover_watermark_candidates(
             # Restrict to the blob's grid zone for clean cropping.
             # No morphological operations — the union of low-variance pixels
             # across draws IS the signal. Do not inflate or connect blobs.
-            zone_mask = _make_zone_mask(union_low_var.shape, zone, img_w, img_h)
+            zone_mask = _make_zone_mask(union_low_var.shape, zone)
             zoned_mask = cv2.bitwise_and(union_low_var, zone_mask)
 
             bgra = crop_zone_to_bgra(mean_img, zoned_mask)
@@ -445,10 +449,6 @@ def discover_watermark_candidates(
     # Per-bucket aspect-ratio dedup (spec Phase 2 Step 5):
     # If multiple candidates have similar aspect ratios (symmetric relative
     # difference < 10%), keep only the largest.
-    def _aspect_ratio(c: np.ndarray) -> float:
-        h, w = c.shape[:2]
-        return w / h if h > 0 else 1.0
-
     deduped: List[np.ndarray] = []
     for crop in sorted(all_candidates, key=lambda c: c.shape[0] * c.shape[1], reverse=True):
         r1 = _aspect_ratio(crop)

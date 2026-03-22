@@ -1,6 +1,7 @@
 import numpy as np
 import pytest
 import logging
+import random
 import cv2
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -248,6 +249,7 @@ def test_discover_finds_watermark_in_homogeneous_batch(tmp_path):
     wm = np.array([220, 220, 220], dtype=np.uint8)
     paths = []
     np.random.seed(0)
+    random.seed(0)
     for i in range(6):
         img = np.random.randint(30, 180, (300, 400, 3), dtype=np.uint8)
         # Fixed watermark: 50x30 block at bottom-right corner
@@ -294,3 +296,21 @@ def test_discover_returns_empty_for_no_common_pixels(tmp_path):
     # May or may not find blobs; if it does they'll be noise — just ensure no crash
     candidates = discover_watermark_candidates(paths)
     assert isinstance(candidates, list)
+    # Noise images should produce 0 or very few candidates (not a crash)
+    assert len(candidates) <= 2  # allow occasional noise blobs but not many
+
+def test_discover_skips_bucket_with_fewer_than_3_images(tmp_path):
+    """Bucket with < 3 images is skipped for self-discovery."""
+    wm = np.array([220, 220, 220], dtype=np.uint8)
+    paths = []
+    np.random.seed(3)
+    for i in range(2):  # Only 2 images — below the 3-image threshold
+        img = np.random.randint(30, 180, (200, 300, 3), dtype=np.uint8)
+        img[170:195, 250:290] = wm
+        p = tmp_path / f"small_{i}.png"
+        cv2.imwrite(str(p), img)
+        paths.append(p)
+
+    # With only 2 images in the bucket, discovery is skipped — returns empty
+    candidates = discover_watermark_candidates(paths)
+    assert candidates == []
