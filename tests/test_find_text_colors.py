@@ -139,13 +139,23 @@ class TestFindMaskDebugAndClusterData:
 
     @pytest.fixture
     def text_bbox(self):
-        """(x, y, width, height) covering the text region."""
-        return (5, 35, 90, 40)
+        """(x, y, width, height) covering the text region — touches left+top edges
+        so the border-exclusion debug branch (lines 528-537) fires."""
+        return (0, 0, 100, 75)
 
     def test_find_mask_debug_paths(self, text_image, text_bbox):
         """debug=True exercises all if-debug logger.info branches."""
         result = find_mask_by_spatial_tf_idf(
             text_image, text_bbox, num_clusters=4, debug=True
+        )
+        assert isinstance(result, np.ndarray), "Expected ndarray mask"
+        assert result.dtype == np.uint8
+
+    def test_find_mask_debug_with_target_color(self, text_image, text_bbox):
+        """debug=True + target_color exercises the target-color debug branches."""
+        result = find_mask_by_spatial_tf_idf(
+            text_image, text_bbox, num_clusters=4, debug=True,
+            target_color=(0, 0, 220),
         )
         assert isinstance(result, np.ndarray), "Expected ndarray mask"
         assert result.dtype == np.uint8

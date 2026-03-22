@@ -1279,16 +1279,16 @@ class TestCliErrorPaths:
     """Cover error/guard paths in cli.py — no mocks, pure logic paths."""
 
     def test_process_with_known_mask_bad_image(self, tmp_path):
-        """Zero-byte image file → load_image raises ValueError."""
+        """Zero-byte image file → process_with_known_mask returns None."""
         bad_path = tmp_path / "bad.jpg"
         bad_path.write_bytes(b"")  # zero-byte file
         template = np.zeros((50, 50, 4), dtype=np.uint8)
-        with pytest.raises(ValueError, match="Could not load image"):
-            process_with_known_mask(
-                image_path=bad_path,
-                output_dir=tmp_path,
-                known_mask_rgba=template,
-            )
+        result = process_with_known_mask(
+            image_path=bad_path,
+            output_dir=tmp_path,
+            known_mask_rgba=template,
+        )
+        assert result is None
 
     def test_main_same_dir_guard(self, tmp_path, monkeypatch):
         """main() with -U and same input/output dir exits with code 1."""
