@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+import logging
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 from untextre.discovery import bucket_images_by_size
@@ -23,11 +24,15 @@ def test_bucket_images_by_size_groups_correctly(tmp_path):
     assert (200, 100) in buckets
     assert len(buckets[(200, 100)]) == 2
     assert (400, 300) in buckets
+    assert len(buckets[(400, 300)]) == 1
     assert (100, 200) in buckets  # portrait is a separate bucket
+    assert len(buckets[(100, 200)]) == 1
 
-def test_bucket_images_skips_unreadable(tmp_path):
+def test_bucket_images_skips_unreadable(tmp_path, caplog):
     paths = [tmp_path / "bad.png"]
     paths[0].touch()
     with patch("untextre.discovery.load_image", side_effect=ValueError("bad")):
-        buckets = bucket_images_by_size(paths)
+        with caplog.at_level(logging.WARNING):
+            buckets = bucket_images_by_size(paths)
     assert buckets == {}
+    assert any("bad.png" in msg for msg in caplog.messages)

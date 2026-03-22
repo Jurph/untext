@@ -61,6 +61,6 @@ def bucket_images_by_size(
             h, w = img.shape[:2]
             key = (w, h)
             buckets.setdefault(key, []).append(path)
-        except Exception as e:
+        except (IOError, cv2.error, ValueError) as e:
             logger.warning(f"Skipping unreadable image {path.name}: {e}")
     return buckets
