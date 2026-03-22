@@ -314,3 +314,31 @@ def test_discover_skips_bucket_with_fewer_than_3_images(tmp_path):
     # With only 2 images in the bucket, discovery is skipped — returns empty
     candidates = discover_watermark_candidates(paths)
     assert candidates == []
+
+
+@pytest.mark.slow
+def test_discovery_end_to_end_with_real_images(tmp_path):
+    """
+    Create a batch of 6 synthetic images with a consistent watermark,
+    run discover_watermark_candidates, confirm we get at least 1 BGRA crop,
+    and that it has nonzero alpha pixels.
+    """
+    np.random.seed(42)
+    random.seed(42)
+    wm_patch = np.full((40, 80, 3), 210, dtype=np.uint8)
+    paths = []
+    for i in range(6):
+        # Randomize background to simulate real photos
+        img = np.random.randint(20, 200, (400, 600, 3), dtype=np.uint8)
+        # Place identical watermark bottom-right
+        img[350:390, 510:590] = wm_patch
+        p = tmp_path / f"photo_{i:02d}.png"  # PNG to avoid JPEG compression artifacts
+        cv2.imwrite(str(p), img)
+        paths.append(p)
+
+    candidates = discover_watermark_candidates(paths)
+
+    assert len(candidates) >= 1
+    best = candidates[0]
+    assert best.shape[2] == 4, "Expected 4-channel BGRA output"
+    assert np.any(best[:, :, 3] > 127), "Expected nonzero alpha in best candidate"
