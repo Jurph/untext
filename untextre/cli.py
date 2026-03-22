@@ -602,7 +602,7 @@ def initialize_consensus_models(confidence_threshold: float = MODEL_CONFIDENCE_F
 
 def main() -> None:
     """Main entry point for the consensus-based text watermark removal tool."""
-    args = parse_args()
+    args = create_parser().parse_args()
     
     # Parse forced bounding box if provided
     forced_bbox = None
@@ -674,21 +674,73 @@ def main() -> None:
         logger.info(f"Using target color for immediate enhancement: {target_hex} (BGR: {target_color})")
     
     logger.info(f"Found {len(image_files)} image(s) to process")
-    
-    # ── Load watermark templates ─────────────────────────────────────
-    # Priority: explicit -K flag > auto-check watermarks/ directory
-    watermark_templates: List[Tuple[str, np.ndarray]] = []
 
-    if args.known_mask:
-        known_mask_path = Path(args.known_mask)
-        watermark_templates = load_watermark_templates(known_mask_path)
-        if not watermark_templates:
-            logger.error(f"No valid RGBA templates found at: {args.known_mask}")
+    # ── -U: same-directory guard ──────────────────────────────────────────
+    if args.unknown_watermark:
+        if input_path.resolve() == output_path.resolve() and not args.force:
+            logger.error(
+                "Input and output directories are the same. "
+                "This would overwrite originals. Use --force to proceed."
+            )
             sys.exit(1)
-    else:
-        # Auto-check the watermarks/ directory next to the package root
-        default_watermarks_dir = Path(__file__).resolve().parent.parent / "watermarks"
-        watermark_templates = load_watermark_templates(default_watermarks_dir)
+
+    # ── -U: auto-discover watermark templates ─────────────────────────────
+    if args.unknown_watermark:
+        if not input_path.is_dir():
+            logger.error("-U requires a directory input, not a single file")
+            sys.exit(1)
+        from .discovery import discover_watermark_candidates
+
+        logger.info("Running watermark discovery (-U mode)...")
+        candidates = discover_watermark_candidates(image_files)
+
+        if not candidates:
+            logger.error(
+                "No watermark candidates discovered. "
+                "Try -K with a manually-identified template."
+            )
+            sys.exit(1)
+
+        # Write candidates to output dir before processing
+        output_path.mkdir(parents=True, exist_ok=True)
+        watermark_templates = []
+        for i, bgra in enumerate(candidates):
+            suffix = "" if i == 0 else f"_{i + 1}"
+            candidate_path = output_path / f"watermark_candidate{suffix}.png"
+            if candidate_path.exists():
+                logger.warning(f"Overwriting existing candidate: {candidate_path.name}")
+            # Array is BGRA — cv2.imwrite saves channel 3 as alpha automatically
+            cv2.imwrite(str(candidate_path), bgra)
+            logger.info(f"Saved watermark candidate: {candidate_path.name}")
+            watermark_templates.append((candidate_path.name, bgra))
+
+        # Warn about stale candidates from prior runs
+        written_names = {
+            f"watermark_candidate{'' if j == 0 else f'_{j+1}'}.png"
+            for j in range(len(candidates))
+        }
+        stale = [p for p in sorted(output_path.glob("watermark_candidate*.png"))
+                 if p.name not in written_names]
+        if stale:
+            logger.warning(
+                "Stale candidate file(s) from prior run still present: "
+                + ", ".join(p.name for p in stale)
+            )
+
+    # ── Load watermark templates ─────────────────────────────────────
+    # Priority: -U (already loaded above) > -K flag > auto-check watermarks/ dir
+    if not args.unknown_watermark:
+        watermark_templates: List[Tuple[str, np.ndarray]] = []
+        if args.known_mask:
+            known_mask_path = Path(args.known_mask)
+            watermark_templates = load_watermark_templates(known_mask_path)
+            if not watermark_templates:
+                logger.error(f"No valid RGBA templates found at: {args.known_mask}")
+                sys.exit(1)
+        else:
+            # Auto-check the watermarks/ directory next to the package root
+            default_watermarks_dir = Path(__file__).resolve().parent.parent / "watermarks"
+            watermark_templates = load_watermark_templates(default_watermarks_dir)
 
     if watermark_templates:
         names = ", ".join(name for name, _ in watermark_templates)
@@ -704,7 +756,7 @@ def main() -> None:
     # If -K was given (explicit override), we ONLY try templates — no detection fallback.
     # If templates came from auto-check of watermarks/, we try them first but fall
     # back to consensus detection, so we need detection models loaded too.
-    explicit_known_mask = bool(args.known_mask)
+    explicit_known_mask = bool(args.known_mask) or bool(args.unknown_watermark)
     model_init_start = time.time()
 
     if explicit_known_mask:
@@ -1127,8 +1179,8 @@ def process_single_image(
     timings['total_time'] = time.time() - start_time
     return timings
 
-def parse_args() -> argparse.Namespace:
-    """Parse command line arguments."""
+def create_parser() -> argparse.ArgumentParser:
+    """Build and return the argument parser (without parsing sys.argv)."""
     parser = argparse.ArgumentParser(
         description="Remove text watermarks from images using consensus detection and color-based inpainting."
     )
@@ -1228,14 +1280,31 @@ def parse_args() -> argparse.Namespace:
              "(e.g., 593,1013,105,39 selects a 105×39 region starting at top-left (593,1013))"
     )
     
-    parser.add_argument(
+    mask_group = parser.add_mutually_exclusive_group()
+    mask_group.add_argument(
         "-K", "--known-mask",
         help="Path to RGBA image (PNG with transparency) of a known watermark/logo, "
              "or a directory of such images. Uses ORB feature matching to find and mask "
              "the watermark at any scale/position (first match wins). The alpha channel "
              "defines the mask. Skips consensus detection when used."
     )
-    
+    mask_group.add_argument(
+        "-U", "--unknown-watermark",
+        action="store_true",
+        default=False,
+        help="Auto-discover watermark from input directory via low-variance stacking, "
+             "save candidate BGRA template(s) to output dir, then process with ORB matching. "
+             "Requires directory input. Mutually exclusive with -K."
+    )
+
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        default=False,
+        help="Allow output directory to be the same as input directory. "
+             "WARNING: cleaned images will overwrite originals."
+    )
+
     parser.add_argument(
         "--grabcut",
         action="store_true",
@@ -1260,7 +1329,13 @@ def parse_args() -> argparse.Namespace:
              "(copies original to output directory unchanged)"
     )
     
-    return parser.parse_args()
+    return parser
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments (thin wrapper around create_parser)."""
+    return create_parser().parse_args()
+
 
 def _save_clean_timing_report(detailed_timings: list, total_time: float, avg_time: float, timing_file: Path, method: str, confidence_threshold: float, target_color: Optional[tuple], forced_bbox: Optional[tuple]) -> None:
     """Save a clean timing report to file without duplicate logging."""

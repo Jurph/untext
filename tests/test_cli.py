@@ -1248,3 +1248,23 @@ class TestProcessSingleImageEdgeCases:
         assert timings is not None
         assert timings["retried_with_g8"] is False
         assert generate_calls == [4]
+
+
+# =========================================================================
+# -U / --unknown-watermark flag
+# =========================================================================
+
+def test_unknown_watermark_flag_exists():
+    """Smoke test: -U flag is registered and mutually exclusive with -K."""
+    from untextre.cli import create_parser
+    parser = create_parser()
+    args = parser.parse_args(["-U", "-i", "some/dir", "-o", "out/dir"])
+    assert args.unknown_watermark is True
+
+
+def test_unknown_watermark_and_known_mask_are_mutually_exclusive():
+    from untextre.cli import create_parser
+    import pytest
+    parser = create_parser()
+    with pytest.raises(SystemExit):
+        parser.parse_args(["-U", "-K", "template.png", "-i", "some/dir", "-o", "out/dir"])
