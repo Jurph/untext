@@ -93,6 +93,111 @@ def extract_blobs(
     return result
 
 
+def assign_zone(
+    cx: int, cy: int, img_w: int, img_h: int
+) -> Tuple[int, int]:
+    """Assign a blob centroid to a grid zone.
+
+    The long image edge is divided into ZONE_LONG_DIVISIONS (3) segments;
+    the short edge into ZONE_SHORT_DIVISIONS (2) segments.  This yields
+    6 zones that capture typical corner-marking strategies.
+
+    Returns:
+        (col, row) zero-indexed zone coordinates.
+        For landscape (w >= h): col is along width (0-2), row along height (0-1).
+        For portrait (h > w):   col is along width (0-1), row along height (0-2).
+    """
+    if img_w >= img_h:  # landscape or square
+        col_divs, row_divs = ZONE_LONG_DIVISIONS, ZONE_SHORT_DIVISIONS
+    else:               # portrait
+        col_divs, row_divs = ZONE_SHORT_DIVISIONS, ZONE_LONG_DIVISIONS
+
+    col = min(int(cx / img_w * col_divs), col_divs - 1)
+    row = min(int(cy / img_h * row_divs), row_divs - 1)
+    return (col, row)
+
+
+def discover_zones(
+    bucket_paths: List[Path],
+    img_w: int,
+    img_h: int,
+) -> Dict[Tuple[int, int], List[np.ndarray]]:
+    """Run the random-pair convergence loop to find occupied zones.
+
+    Draws random pairs with replacement, computes variance, extracts blobs,
+    assigns them to zones.  Stops when the occupied zone set is stable for
+    STABLE_STREAK_REQUIRED consecutive draws, or after MAX_DRAWS total.
+
+    Zero-blob draws count toward the stability streak (they do not change the
+    set, so they count as stable).
+
+    Convergence is tracked globally across the full set of occupied zones
+    (not per-zone).
+
+    At MAX_DRAWS without convergence, accepts current occupied set and logs
+    a warning.
+
+    Args:
+        bucket_paths: Paths to all images in this bucket (≥ 3 required).
+        img_w: Image width (all images in bucket are this size).
+        img_h: Image height.
+
+    Returns:
+        Dict mapping zone (col, row) → list of variance maps that contributed
+        a blob to that zone.  Empty dict if no blobs found at all.
+    """
+    image_area = img_w * img_h
+    # Cache loaded images to avoid repeated disk reads
+    images: Dict[Path, np.ndarray] = {}
+    for p in bucket_paths:
+        try:
+            images[p] = load_image(p)
+        except Exception as e:
+            logger.warning(f"Could not load {p.name} for discovery: {e}")
+
+    paths = list(images.keys())
+    if len(paths) < 2:
+        logger.warning("Not enough loadable images for pair stacking")
+        return {}
+
+    zone_variance_maps: Dict[Tuple[int, int], List[np.ndarray]] = {}
+    occupied: set = set()
+    stable_streak = 0
+    draw_count = 0
+
+    while draw_count < MAX_DRAWS:
+        # Draw pair with replacement
+        a_path, b_path = random.choices(paths, k=2)
+        img_a, img_b = images[a_path], images[b_path]
+
+        var_map = compute_pair_variance(img_a, img_b)
+        centroids = extract_blobs(var_map, image_area)
+
+        prev_occupied = frozenset(occupied)
+        for (cx, cy) in centroids:
+            zone = assign_zone(cx, cy, img_w, img_h)
+            occupied.add(zone)
+            zone_variance_maps.setdefault(zone, []).append(var_map)
+
+        draw_count += 1
+        if frozenset(occupied) == prev_occupied:
+            stable_streak += 1
+        else:
+            stable_streak = 0
+
+        if stable_streak >= STABLE_STREAK_REQUIRED:
+            logger.debug(f"Zone convergence after {draw_count} draws")
+            break
+    else:
+        if occupied:
+            logger.warning(
+                f"Zone set did not converge after {MAX_DRAWS} draws; "
+                f"accepting current set: {occupied}"
+            )
+
+    return zone_variance_maps
+
+
 def bucket_images_by_size(
     image_paths: List[Path],
 ) -> Dict[Tuple[int, int], List[Path]]:

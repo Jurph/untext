@@ -1,9 +1,10 @@
 import numpy as np
 import pytest
 import logging
+import cv2
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-from untextre.discovery import bucket_images_by_size, compute_pair_variance, extract_blobs
+from untextre.discovery import bucket_images_by_size, compute_pair_variance, extract_blobs, assign_zone, discover_zones
 
 def test_bucket_images_by_size_groups_correctly(tmp_path):
     # Create fake image files with known sizes
@@ -64,3 +65,36 @@ def test_extract_blobs_ignores_tiny_noise():
     var_map[10:12, 10:12] = 0.0  # 4 px — below min_area threshold
     blobs = extract_blobs(var_map, image_area=200 * 300)
     assert len(blobs) == 0
+
+def test_assign_zone_landscape():
+    # 300w x 200h → long=width(3 cols), short=height(2 rows) → 6 zones
+    # centroid at (250, 50) → col 2 (right third), row 0 (top half)
+    zone = assign_zone(cx=250, cy=50, img_w=300, img_h=200)
+    assert zone == (2, 0)
+
+def test_assign_zone_portrait():
+    # 200w x 300h → long=height(3 rows), short=width(2 cols) → 6 zones
+    # centroid at (50, 250) → col 0 (left half), row 2 (bottom third)
+    zone = assign_zone(cx=50, cy=250, img_w=200, img_h=300)
+    assert zone == (0, 2)
+
+def test_discover_zones_returns_consistent_zone(tmp_path):
+    # All images have a watermark blob in the same position → one stable zone.
+    # Watermark is constant; background varies significantly between images.
+    wm_color = np.array([200, 200, 200], dtype=np.uint8)
+
+    paths = []
+    np.random.seed(42)  # for reproducibility
+    for i in range(5):
+        # Highly varying background (0-255 range) to create high variance
+        img = np.random.randint(0, 255, (200, 300, 3), dtype=np.uint8)
+        # Constant watermark: 50x50 block bottom-right
+        img[140:190, 240:290] = wm_color
+        p = tmp_path / f"img{i}.png"
+        cv2.imwrite(str(p), img)
+        paths.append(p)
+
+    zones = discover_zones(paths, img_w=300, img_h=200)
+    assert len(zones) >= 1
+    # The watermark is in the right-third, bottom-half → zone (2, 1)
+    assert (2, 1) in zones
