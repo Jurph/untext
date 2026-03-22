@@ -18,6 +18,7 @@ import cv2
 import numpy as np
 import pytest
 
+import untextre
 import untextre.cli as cli_mod
 import untextre.consensus as consensus_mod
 import untextre.metrics as metrics_mod
@@ -1268,3 +1269,73 @@ def test_unknown_watermark_and_known_mask_are_mutually_exclusive():
     parser = create_parser()
     with pytest.raises(SystemExit):
         parser.parse_args(["-U", "-K", "template.png", "-i", "some/dir", "-o", "out/dir"])
+
+
+# =========================================================================
+# Error paths and lazy-loader coverage
+# =========================================================================
+
+class TestCliErrorPaths:
+    """Cover error/guard paths in cli.py — no mocks, pure logic paths."""
+
+    def test_process_with_known_mask_bad_image(self, tmp_path):
+        """Zero-byte image file → load_image raises ValueError."""
+        bad_path = tmp_path / "bad.jpg"
+        bad_path.write_bytes(b"")  # zero-byte file
+        template = np.zeros((50, 50, 4), dtype=np.uint8)
+        with pytest.raises(ValueError, match="Could not load image"):
+            process_with_known_mask(
+                image_path=bad_path,
+                output_dir=tmp_path,
+                known_mask_rgba=template,
+            )
+
+    def test_main_same_dir_guard(self, tmp_path, monkeypatch):
+        """main() with -U and same input/output dir exits with code 1."""
+        monkeypatch.setattr(
+            sys, "argv", ["untextre", "-i", str(tmp_path), "-o", str(tmp_path), "-U"]
+        )
+        # Return a non-empty file list so the empty-list guard (line 654) doesn't
+        # fire before we reach the same-dir guard (line 679).
+        monkeypatch.setattr(
+            "untextre.cli.get_image_files",
+            lambda _path: [tmp_path / "fake.jpg"],
+        )
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+        assert exc_info.value.code == 1
+
+    def test_load_watermark_templates_missing_path(self):
+        """Non-existent path → load_watermark_templates returns []."""
+        from pathlib import Path
+        result = load_watermark_templates(Path("definitely_does_not_exist_xyz"))
+        assert result == []
+
+    def test_save_timing_report(self, tmp_path):
+        """_save_clean_timing_report writes a file containing expected headers."""
+        from pathlib import Path
+        timing_file = tmp_path / "timing.txt"
+        detailed = [{"file": "a.jpg", "time": 1.2}]
+        _save_clean_timing_report(
+            detailed_timings=detailed,
+            total_time=1.2,
+            avg_time=1.2,
+            timing_file=timing_file,
+            method="known_mask",
+            confidence_threshold=0.5,
+            target_color=None,
+            forced_bbox=None,
+        )
+        assert timing_file.exists(), "Timing report file was not created"
+        content = timing_file.read_text()
+        assert "Inpainting method:" in content
+
+
+def test_package_lazy_imports():
+    """__getattr__ lazy-loader in __init__.py is triggered by attribute access."""
+    # Access one name from each lazy branch to maximise coverage:
+    # utils branch, find_text_colors branch, inpaint branch, cli branch
+    assert callable(untextre.load_image), "load_image not callable"
+    assert callable(untextre.find_mask_by_spatial_tf_idf), "find_mask_by_spatial_tf_idf not callable"
+    assert callable(untextre.inpaint_image), "inpaint_image not callable"
+    assert callable(untextre.main), "main not callable"
