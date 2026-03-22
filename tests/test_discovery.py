@@ -57,16 +57,10 @@ def test_extract_blobs_finds_dark_region():
     cx, cy = blobs[0]
     assert 125 <= cx <= 175 and 75 <= cy <= 125
 
-def test_extract_blobs_morphology_expands_small_blobs():
-    # With morphology applied to the full binary map before blob detection,
-    # small blobs will be expanded by the closing and dilation operations.
-    # This test verifies that a single small blob (4px) becomes a detected blob
-    # after morphological processing (since it expands beyond min_area).
+def test_extract_blobs_ignores_tiny_noise():
+    # 4px blob in a 200x300 image: min_area = int(60000 * 0.0005) = 30px
+    # Without morphology, 4px < 30px → filtered out
     var_map = np.ones((200, 300), dtype=np.float32) * 0.5
-    var_map[10:12, 10:12] = 0.0  # 4 px blob
+    var_map[10:12, 10:12] = 0.0  # 4 px — below min_area threshold
     blobs = extract_blobs(var_map, image_area=200 * 300)
-    # The blob expands through morphology to ~148px, exceeding min_area of 30px
-    assert len(blobs) == 1
-    cx, cy = blobs[0]
-    # Centroid should be near the original blob location (roughly at 11, 11)
-    assert 5 <= cx <= 20 and 5 <= cy <= 20
+    assert len(blobs) == 0

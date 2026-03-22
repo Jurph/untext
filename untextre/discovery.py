@@ -66,8 +66,10 @@ def extract_blobs(
 ) -> List[Tuple[int, int]]:
     """Extract 8-connected low-variance blobs from a variance map.
 
-    Applies morphological closing then dilation to the full binary map
-    (no blur — smooth edges are not needed for bounding-box extraction).
+    The variance map is the signal: pixels below VARIANCE_THRESHOLD are
+    watermark candidates. No morphological operations are applied — the
+    convergence loop (requiring blobs to appear across multiple independent
+    draws) is the noise filter.
 
     Args:
         variance_map: Per-pixel variance (H×W float32).
@@ -81,17 +83,7 @@ def extract_blobs(
     # Threshold: 255 where variance is LOW (candidate watermark pixels)
     binary = (variance_map < VARIANCE_THRESHOLD).astype(np.uint8) * 255
 
-    # Morphological closing then dilation applied to FULL binary map
-    kernel_close = cv2.getStructuringElement(
-        cv2.MORPH_RECT, (CLOSE_KERNEL_SIZE, CLOSE_KERNEL_SIZE)
-    )
-    kernel_dilate = cv2.getStructuringElement(
-        cv2.MORPH_ELLIPSE, (DILATE_SIZE, DILATE_SIZE)
-    )
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel_close)
-    binary = cv2.dilate(binary, kernel_dilate)
-
-    # Find 8-connected contiguous blobs on the processed map
+    # Find 8-connected contiguous blobs directly — no morphological expansion
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
         binary, connectivity=8
     )
