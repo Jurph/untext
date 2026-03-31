@@ -9,7 +9,7 @@ import numpy as np
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from .utils import load_image, setup_logger, IMAGE_EXTENSIONS
+from .utils import load_image, setup_logger
 
 logger = setup_logger(__name__)
 
@@ -193,28 +193,6 @@ def bucket_images_by_size(
     return buckets
 
 
-def _make_zone_mask(
-    shape: Tuple[int, int],
-    zone: Tuple[int, int],
-) -> np.ndarray:
-    """Return a binary mask (255) for the pixels belonging to a given zone."""
-    h, w = shape
-    col, row = zone
-
-    if w >= h:
-        col_divs, row_divs = ZONE_LONG_DIVISIONS, ZONE_SHORT_DIVISIONS
-    else:
-        col_divs, row_divs = ZONE_SHORT_DIVISIONS, ZONE_LONG_DIVISIONS
-
-    x0 = int(w * col / col_divs)
-    x1 = int(w * (col + 1) / col_divs)
-    y0 = int(h * row / row_divs)
-    y1 = int(h * (row + 1) / row_divs)
-
-    mask = np.zeros((h, w), dtype=np.uint8)
-    mask[y0:y1, x0:x1] = 255
-    return mask
-
 
 def _aspect_ratio(crop: np.ndarray) -> float:
     """Return width/height ratio of a crop array (H×W×4)."""
@@ -277,9 +255,8 @@ def compute_stack_statistics(paths: List[Path]) -> Optional[Dict[str, np.ndarray
 
     Returns:
         Dict with keys:
-            mean_bgr       H×W×3 uint8
-            var_gray       H×W float32 population variance
-            grad_mean_gray H×W float32 Sobel gradient magnitude of mean gray
+            mean_bgr  H×W×3 uint8
+            var_gray  H×W float32 population variance
         or None if fewer than 3 images loaded.
     """
     n = 0
@@ -313,23 +290,16 @@ def compute_stack_statistics(paths: List[Path]) -> Optional[Dict[str, np.ndarray
     mean_bgr = bgr_mean.astype(np.uint8)
     var_gray = (gray_M2 / n).astype(np.float32)
 
-    mean_gray_u8 = (gray_mean * 255.0).clip(0, 255).astype(np.uint8)
-    gx = cv2.Sobel(mean_gray_u8, cv2.CV_32F, 1, 0, ksize=3)
-    gy = cv2.Sobel(mean_gray_u8, cv2.CV_32F, 0, 1, ksize=3)
-    grad_mean_gray = np.sqrt(gx ** 2 + gy ** 2)
-
     return {
         "n_loaded": n,
         "mean_bgr": mean_bgr,
         "var_gray": var_gray,
-        "grad_mean_gray": grad_mean_gray,
     }
 
 
 def build_watermark_score(
     stats: Dict[str, np.ndarray],
     var_norm: np.ndarray,
-    stable_threshold: Optional[float] = None,
 ) -> np.ndarray:
     """Build a composite watermark-likelihood score from stack statistics.
 
@@ -354,9 +324,6 @@ def build_watermark_score(
         even a globally-normalized structure signal.
       - The score is highest exactly where the watermark boundary lies, not where
         some incidentally-stable scene edge happens to be.
-
-    The stable_threshold parameter is accepted for API compatibility with the
-    two-pass caller but is not used in the score computation.
 
     Returns:
         H×W float32 in [0, 1].
@@ -425,28 +392,23 @@ def score_to_mask(
     var_norm: np.ndarray,
     precision_outlier_mask: Optional[np.ndarray] = None,
 ) -> Dict[str, np.ndarray]:
-    """Convert a composite score image to a cleaned binary watermark mask.
+    """Produce the candidate mask from the composite score and stable-pixel region.
 
-    Pipeline:
-      1. Otsu threshold on the composite score → raw high-confidence seed mask
-      2. Morphological close (7×7) to connect glyph fragments in the score mask
-      3. Seed-grow: find connected components in the LOW-VARIANCE mask that
-         contain score pixels — recovers the full stable body of the watermark
-      4. The grow region is defined by precision_outlier_mask when provided:
-         pixels whose variance is a statistical outlier on the precision axis.
-         This is the Tukey-fence-derived stable mask from the caller, which is
-         already calibrated against the pooled distribution and does not rely
-         on Otsu.  If not provided, Otsu on var_norm is used as a fallback.
-      5. Connected-component analysis on final mask
+    The function has two responsibilities:
+
+    1. Build mask_raw — Otsu threshold on the score image followed by a
+       morphological close.  This is a high-confidence seed: it marks where
+       the score is strongest.  It is returned so that select_candidate_components
+       can use it as a size-budget seed if needed.
+
+    2. Build mask_clean — the full stable-pixel region from which candidates
+       are drawn.  When precision_outlier_mask is supplied (the Tukey-fence
+       derived stable mask from the pooled distribution), that is used
+       directly.  Otherwise Otsu on var_norm provides a fallback.
 
     Returns:
-        Dict with:
-            mask_raw     H×W uint8 — Otsu binary from composite score
-            mask_clean   H×W uint8 — after seed-grow + fallback
-            num_labels   int
-            labels       H×W int32 label image
-            stats        array from connectedComponentsWithStats
-            centroids    centroid array
+        Dict with mask_raw, mask_clean, score_closed, num_labels, labels,
+        stats, and centroids from connectedComponentsWithStats on mask_clean.
     """
     score_u8 = (score * 255).clip(0, 255).astype(np.uint8)
     _, mask_raw = cv2.threshold(score_u8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -564,7 +526,6 @@ def select_candidate_components(
     return candidates
 
 
-
 def discover_watermark_candidates(
     image_paths: List[Path],
     debug_dir: Optional[Path] = None,
@@ -665,8 +626,8 @@ def discover_watermark_candidates(
             f"= {stable_pct:.2f}% of pixels (threshold {global_stable_threshold:.2e})"
         )
 
-        # Phase 3: composite score (variance-field gradient × stability)
-        score = build_watermark_score(stats, var_norm, stable_threshold=global_stable_threshold)
+        # Composite score: variance-field gradient × stability
+        score = build_watermark_score(stats, var_norm)
 
         # Phase 4: Otsu on score → morph close → seed-grow into precision-outlier mask
         mask_data = score_to_mask(score, var_norm, precision_outlier_mask=precision_mask)
@@ -694,10 +655,9 @@ def discover_watermark_candidates(
             f"Bucket {img_w}×{img_h}: {len(filtered_candidates)} candidate(s) selected"
         )
 
-        # Domain-knowledge ceiling: watermarks are overlays, not half the image.
-        # If a grown candidate exceeds 10% of image area, trim it back by keeping
-        # only the pixels closest to the composite-score seed, dropping the
-        # distant sprawl that seed-growing may have absorbed.
+        # Safety backstop: with the Tukey-fence stable mask the zone union
+        # should always be well under 10% of the image.  This trim fires only
+        # if a pathological bucket still produces an oversized candidate.
         image_area = img_w * img_h
         max_wm_area = int(image_area * 0.10)
         score_seed = mask_data["score_closed"]

@@ -194,34 +194,30 @@ def test_compute_alpha_iou_all_transparent():
     assert iou == 0.0
 
 
-def test_compute_stack_statistics_grad_high_at_watermark_edges(tmp_path):
-    """grad_mean_gray must have strong response at the watermark boundary."""
+def test_compute_stack_statistics_returns_required_keys(tmp_path):
+    """compute_stack_statistics must return mean_bgr and var_gray."""
     from untextre.discovery import compute_stack_statistics
 
     rng = np.random.RandomState(30)
     paths = []
-    wm_slice = (slice(40, 60), slice(60, 110))
     for i in range(5):
         img = rng.randint(40, 160, (100, 150, 3), dtype=np.uint8)
-        img[wm_slice] = 240
+        img[40:60, 60:110] = 240
         p = tmp_path / f"gs_{i}.png"
         cv2.imwrite(str(p), img)
         paths.append(p)
 
     stats = compute_stack_statistics(paths)
-    assert stats is not None, "compute_stack_statistics returned None"
-    assert "grad_mean_gray" in stats
-
-    grad = stats["grad_mean_gray"]
-    edge_response = float(grad[40, 60:110].mean())
-    interior_response = float(grad[50, 65:105].mean())
-    background_response = float(grad[15, 15:60].mean())
-
-    assert edge_response > interior_response, (
-        f"Edge ({edge_response:.2f}) should exceed interior ({interior_response:.2f})"
-    )
-    assert edge_response > background_response, (
-        f"Edge ({edge_response:.2f}) should exceed background ({background_response:.2f})"
+    assert stats is not None
+    assert "mean_bgr" in stats
+    assert "var_gray" in stats
+    assert stats["mean_bgr"].shape == (100, 150, 3)
+    assert stats["var_gray"].shape == (100, 150)
+    # Watermark pixels are pixel-perfect — their variance should be near zero.
+    wm_var = float(stats["var_gray"][40:60, 60:110].max())
+    bg_var = float(stats["var_gray"][0:20, 0:40].mean())
+    assert wm_var < bg_var, (
+        f"Watermark var ({wm_var:.4e}) should be lower than background var ({bg_var:.4e})"
     )
 
 
@@ -339,30 +335,28 @@ def test_build_watermark_score_unstable_region_scores_zero(tmp_path):
     )
 
 
-from untextre.discovery import discover_watermark_candidates, _precision_outlier_threshold
+from untextre.discovery import discover_watermark_candidates
 
-def test_discover_uses_pooled_threshold_across_buckets(tmp_path, monkeypatch):
-    """Pass-1 pooling: stable threshold is derived from ALL qualifying buckets combined.
+def test_discover_two_pass_processes_all_qualifying_buckets(tmp_path, monkeypatch):
+    """Pass-1 pooling: both qualifying buckets are processed in pass 2.
 
-    With two buckets that share similar image statistics, the pooled Tukey fence
-    should fall between the watermark variance (near 0) and the background
-    variance.  The per-bucket threshold computed from bucket A alone should
-    give the same general order of magnitude but is noisier (fewer images).
-    This test verifies the two-pass path is taken when multiple buckets exist.
+    With two size buckets each containing a watermark, discover_watermark_candidates
+    should call build_watermark_score once per bucket and return at least one
+    candidate.  This verifies the two-pass structure runs to completion on
+    multi-bucket inputs.
     """
     calls = []
     real_build = __import__("untextre.discovery", fromlist=["build_watermark_score"]).build_watermark_score
 
-    def tracking_build(stats, var_norm, stable_threshold=None):
-        calls.append(stable_threshold)
-        return real_build(stats, var_norm, stable_threshold)
+    def tracking_build(stats, var_norm):
+        calls.append(True)
+        return real_build(stats, var_norm)
 
     monkeypatch.setattr("untextre.discovery.build_watermark_score", tracking_build)
 
     rng = np.random.RandomState(50)
     wm = np.array([240, 240, 240], dtype=np.uint8)
 
-    # Bucket A: 200×150
     paths_a = []
     for i in range(4):
         img = rng.randint(40, 160, (150, 200, 3), dtype=np.uint8)
@@ -371,7 +365,6 @@ def test_discover_uses_pooled_threshold_across_buckets(tmp_path, monkeypatch):
         cv2.imwrite(str(p), img)
         paths_a.append(p)
 
-    # Bucket B: 300×200  (different size → different bucket)
     paths_b = []
     for i in range(4):
         img = rng.randint(40, 160, (200, 300, 3), dtype=np.uint8)
@@ -382,16 +375,8 @@ def test_discover_uses_pooled_threshold_across_buckets(tmp_path, monkeypatch):
 
     candidates = discover_watermark_candidates(paths_a + paths_b)
 
-    # With two qualifying buckets, build_watermark_score should have been
-    # called with a non-None stable_threshold derived from the pooled data.
-    assert len(calls) == 2, f"Expected 2 build calls (one per bucket), got {len(calls)}"
-    assert all(t is not None for t in calls), (
-        f"Expected pooled threshold passed to each build call, got {calls}"
-    )
-    # Both calls should receive the SAME pooled threshold.
-    assert calls[0] == calls[1], (
-        f"Both buckets should use the same pooled threshold, got {calls}"
-    )
+    assert len(calls) == 2, f"Expected build_watermark_score called once per bucket, got {len(calls)}"
+    assert candidates, "Expected at least one candidate from a two-bucket run"
 
 
 def test_discover_finds_watermark_in_homogeneous_batch(tmp_path):
