@@ -500,47 +500,68 @@ def score_to_mask(
 def select_candidate_components(
     mask_data: Dict,
     score: np.ndarray,
-    max_candidates: int = 3,
+    img_w: int,
+    img_h: int,
+    max_zones: int = 3,
 ) -> List[np.ndarray]:
-    """Rank connected components of the precision-outlier mask by area.
+    """Group stable components by spatial zone; return zone unions ranked by total stable area.
 
-    The watermark is the largest coherent stable region.  Isolated noise
-    spots (accidentally stable pixels) are individually much smaller.
-    Area-based selection therefore naturally prefers the watermark without
-    requiring location priors or score-based filtering.
+    A watermark like "PLAYBOYPLUS.COM + logo" consists of many medium-sized
+    connected components (each letter, punctuation, logo element) all clustered
+    in one image zone.  Individual letter areas overlap with accidentally-stable
+    noise spots that appear scattered elsewhere.
 
-    The composite score is logged for diagnosis but is not the primary
-    criterion: score fires more strongly at sharp noise-spot boundaries
-    than at gradual semi-transparent watermark boundaries, so
-    score-weighted selection tends to pick the wrong components.
+    Individual component area cannot distinguish a letter from a noise spot.
+    Spatial density can: the watermark zone accumulates the most total stable
+    area because it holds 12+ components vs. 0-2 per noise zone.
+
+    No size threshold is needed — we ask which zone has the most stable pixels
+    and return the union of all components in that zone as the template.
 
     Returns:
-        List of H×W uint8 masks (255 = candidate pixels), largest first.
+        List of H×W uint8 union masks, one per selected zone, highest-area zone first.
     """
     num_labels = mask_data["num_labels"]
     labels = mask_data["labels"]
     cc_stats = mask_data["stats"]
+    cc_centroids = mask_data["centroids"]
 
-    candidates: List[Tuple[int, float, np.ndarray]] = []
+    zone_area: Dict[Tuple[int, int], int] = {}
+    zone_components: Dict[Tuple[int, int], List[np.ndarray]] = {}
+
     for label in range(1, num_labels):
         area = int(cc_stats[label, cv2.CC_STAT_AREA])
         if area < 4:
             continue
-        blob = np.zeros(score.shape, dtype=np.uint8)
-        blob[labels == label] = 255
-        mean_score = float(score[blob == 255].mean())
-        candidates.append((area, mean_score, blob))
+        cx = int(round(cc_centroids[label][0]))
+        cy = int(round(cc_centroids[label][1]))
+        zone = assign_zone(cx, cy, img_w, img_h)
 
-    if not candidates:
+        blob = np.zeros(labels.shape, dtype=np.uint8)
+        blob[labels == label] = 255
+
+        zone_area[zone] = zone_area.get(zone, 0) + area
+        zone_components.setdefault(zone, []).append(blob)
+
+    if not zone_area:
         return []
 
-    # Primary rank: area descending.  Secondary: mean score descending.
-    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    ranked_zones = sorted(zone_area.items(), key=lambda x: x[1], reverse=True)
+    zone_strs = ", ".join(f"z{z}:{a}px" for z, a in ranked_zones[:6])
+    logger.debug(f"Zone total stable area: [{zone_strs}]")
 
-    area_strs = ", ".join(str(a) for a, _, _ in candidates[:10])
-    logger.debug(f"Component areas (top 10): [{area_strs}]")
+    candidates: List[np.ndarray] = []
+    for zone, total_area in ranked_zones[:max_zones]:
+        union = np.zeros(labels.shape, dtype=np.uint8)
+        for blob in zone_components[zone]:
+            union = cv2.bitwise_or(union, blob)
+        candidates.append(union)
+        logger.debug(
+            f"Zone {zone}: {len(zone_components[zone])} component(s), "
+            f"{total_area} stable px total"
+        )
 
-    return [blob for _, _, blob in candidates[:max_candidates]]
+    return candidates
 
 
 
@@ -661,7 +682,9 @@ def discover_watermark_candidates(
             cv2.imwrite(str(debug_dir / f"debug_mask_clean_{stem}.png"), mask_data["mask_clean"])
             logger.info(f"Debug images saved for bucket {stem}")
 
-        filtered_candidates = select_candidate_components(mask_data, score)
+        filtered_candidates = select_candidate_components(
+            mask_data, score, img_w, img_h
+        )
 
         if not filtered_candidates:
             logger.warning(f"Bucket {img_w}×{img_h}: no candidate components found")
