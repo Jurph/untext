@@ -467,18 +467,20 @@ def score_to_mask(
         )
 
     lv_pct = float(np.mean(low_var_mask > 0) * 100)
-    logger.debug(f"Grow region: {lv_pct:.2f}% of pixels marked stable")
+    logger.debug(f"Stable mask: {lv_pct:.2f}% of pixels")
 
-    # Seed-grow: find low-var connected components that contain score pixels
-    num_lv, lv_labels, _, _ = cv2.connectedComponentsWithStats(
-        low_var_mask, connectivity=8
-    )
-    seed_labels = set(np.unique(lv_labels[score_closed > 0]).tolist()) - {0}
-    grown = np.zeros_like(low_var_mask, dtype=np.uint8)
-    for lab in seed_labels:
-        grown[lv_labels == lab] = 255
-
-    mask_clean = grown if np.any(grown) else score_closed
+    # ALL connected components of the precision-outlier stable mask become
+    # candidates.  Do not filter by score overlap here.
+    #
+    # The score (gradient of var_norm) fires more strongly at isolated noise
+    # spots — which have sharp variance boundaries — than at semi-transparent
+    # watermarks, which have gradual boundaries.  A score-based seed filter
+    # would therefore exclude the watermark while retaining noise.
+    #
+    # The watermark IS the largest coherent stable region; noise spots are
+    # isolated and individually small.  Area-based selection in
+    # select_candidate_components handles the distinction correctly.
+    mask_clean = low_var_mask
 
     num_labels, labels, cc_stats, centroids = cv2.connectedComponentsWithStats(
         mask_clean, connectivity=8
@@ -500,21 +502,26 @@ def select_candidate_components(
     score: np.ndarray,
     max_candidates: int = 3,
 ) -> List[np.ndarray]:
-    """Rank connected components by total watermark evidence; keep outliers.
+    """Rank connected components of the precision-outlier mask by area.
 
-    Evidence = mean_score_inside_component × component_area.
-    Components are ranked by evidence.  An IQR fence removes weak candidates
-    when a clear outlier exists.  The result is capped at max_candidates —
-    a single image bucket cannot contain more than a few distinct watermarks.
+    The watermark is the largest coherent stable region.  Isolated noise
+    spots (accidentally stable pixels) are individually much smaller.
+    Area-based selection therefore naturally prefers the watermark without
+    requiring location priors or score-based filtering.
+
+    The composite score is logged for diagnosis but is not the primary
+    criterion: score fires more strongly at sharp noise-spot boundaries
+    than at gradual semi-transparent watermark boundaries, so
+    score-weighted selection tends to pick the wrong components.
 
     Returns:
-        List of H×W uint8 masks (255 = candidate pixels), largest-evidence first.
+        List of H×W uint8 masks (255 = candidate pixels), largest first.
     """
     num_labels = mask_data["num_labels"]
     labels = mask_data["labels"]
     cc_stats = mask_data["stats"]
 
-    candidates: List[Tuple[float, np.ndarray]] = []
+    candidates: List[Tuple[int, float, np.ndarray]] = []
     for label in range(1, num_labels):
         area = int(cc_stats[label, cv2.CC_STAT_AREA])
         if area < 4:
@@ -522,32 +529,18 @@ def select_candidate_components(
         blob = np.zeros(score.shape, dtype=np.uint8)
         blob[labels == label] = 255
         mean_score = float(score[blob == 255].mean())
-        evidence = mean_score * area
-        candidates.append((evidence, blob))
+        candidates.append((area, mean_score, blob))
 
     if not candidates:
         return []
 
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    evidences = np.array([e for e, _ in candidates], dtype=np.float64)
-    score_strs = ", ".join(f"{e:.1f}" for e in evidences[:10])
-    logger.debug(f"Component evidence (top 10): [{score_strs}]")
+    # Primary rank: area descending.  Secondary: mean score descending.
+    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
 
-    if evidences.size > 1:
-        q1, q3 = np.percentile(evidences, [25, 75])
-        fence = q3 + 1.5 * (q3 - q1)
-        selected = [m for e, m in candidates if e >= fence]
-        logger.debug(
-            f"IQR fence={fence:.1f}: {len(selected)}/{len(candidates)} component(s) above fence"
-        )
-    else:
-        selected = [candidates[0][1]]
+    area_strs = ", ".join(str(a) for a, _, _ in candidates[:10])
+    logger.debug(f"Component areas (top 10): [{area_strs}]")
 
-    if not selected:
-        selected = [candidates[0][1]]
-        logger.debug(f"No outliers; keeping single best (evidence={candidates[0][0]:.1f})")
-
-    return selected[:max_candidates]
+    return [blob for _, _, blob in candidates[:max_candidates]]
 
 
 
