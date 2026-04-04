@@ -1127,6 +1127,49 @@ def test_consensus_vote_splits_one_raw_candidate_into_multiple_records(monkeypat
     assert all(crop.shape[2] == 4 for crop in crops)
 
 
+def test_consensus_vote_logs_prep_cutline_before_graph_scoring(monkeypatch, caplog):
+    H, W = 240, 320
+    mask = np.zeros((H, W), dtype=np.uint8)
+    mask[40:120, 90:200] = 255
+    mean_img = np.full((H, W, 3), 128, dtype=np.uint8)
+    wm_img = mean_img.copy()
+    captured_records = {}
+
+    def fake_build_final_templates(records, debug_dir=None):
+        del debug_dir
+        captured_records["count"] = len(records)
+        template = np.zeros((12, 18, 4), dtype=np.uint8)
+        template[:, :, 3] = 255
+        return [
+            ConsensusTemplate(
+                label="source",
+                bgra=template,
+                alpha_mass=float(np.count_nonzero(template[:, :, 3])),
+                member_indices=(0,),
+                family_count=1,
+            )
+        ]
+
+    monkeypatch.setattr(
+        "untextre.discovery._candidate_meets_consensus_minimums",
+        lambda bgra: (True, 8800, bgra.shape[1], bgra.shape[0], 376, 1.0, 12),
+    )
+    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
+
+    with caplog.at_level(logging.INFO):
+        crops = _consensus_vote([
+            (mask, W, H, (1, 0), mean_img, wm_img),
+            (mask, W, H, (1, 1), mean_img, wm_img),
+        ])
+
+    assert len(crops) == 1
+    assert captured_records["count"] == 2
+    assert any(
+        "Consensus prep complete:" in message and "2 kept sub-candidates" in message
+        for message in caplog.messages
+    )
+
+
 def test_discover_two_pass_processes_all_qualifying_buckets(tmp_path, monkeypatch):
     """Pass-1 pooling: both qualifying buckets are processed in pass 2.
 

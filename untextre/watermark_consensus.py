@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
+import logging
+import time
 
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -949,6 +953,26 @@ def build_candidate_graph(
     count = len(graph_records)
     weights = np.zeros((count, count), dtype=np.float32)
     directed_scores = np.empty((count, count), dtype=object)
+    total_pairs = count * (count - 1) // 2
+
+    logger.info(
+        "Consensus graph start: %d candidate(s) -> %d unordered pairs / %d directional alignments",
+        count,
+        total_pairs,
+        total_pairs * 2,
+    )
+
+    if total_pairs <= 0:
+        return CandidateGraph(
+            records=graph_records,
+            weights=weights,
+            directed_scores=directed_scores,
+        )
+
+    progress_stride = max(1, total_pairs // 10)
+    completed_pairs = 0
+    last_logged_pairs = 0
+    started_at = time.perf_counter()
 
     for i in range(count):
         directed_scores[i, i] = None
@@ -962,6 +986,26 @@ def build_candidate_graph(
                 weight = 0.0
             weights[i, j] = float(weight)
             weights[j, i] = float(weight)
+
+            completed_pairs += 1
+            should_log_progress = (
+                completed_pairs == total_pairs
+                or completed_pairs - last_logged_pairs >= progress_stride
+            )
+            if should_log_progress:
+                elapsed_seconds = time.perf_counter() - started_at
+                elapsed_minutes = int(elapsed_seconds // 60)
+                elapsed_remainder = int(elapsed_seconds % 60)
+                percent = int(round((completed_pairs / total_pairs) * 100))
+                logger.info(
+                    "Consensus graph progress: %d/%d pairs (%d%%), elapsed %02d:%02d",
+                    completed_pairs,
+                    total_pairs,
+                    percent,
+                    elapsed_minutes,
+                    elapsed_remainder,
+                )
+                last_logged_pairs = completed_pairs
 
     return CandidateGraph(
         records=graph_records,

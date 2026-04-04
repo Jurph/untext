@@ -1238,6 +1238,14 @@ def _consensus_vote(
     if not records:
         return []
 
+    kept_buckets = {record.metadata.family_key for record in records}
+    logger.info(
+        "Consensus prep complete: %d zone candidate(s) -> %d kept sub-candidates across %d bucket(s)",
+        len(zone_data),
+        len(records),
+        len(kept_buckets),
+    )
+
     templates = build_final_templates(
         records,
         debug_dir=None if debug_dir is None else str(debug_dir),

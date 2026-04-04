@@ -1,4 +1,5 @@
 from dataclasses import is_dataclass
+import logging
 
 import cv2
 import numpy as np
@@ -344,6 +345,22 @@ def test_build_candidate_graph_isolates_noise_node():
     assert graph.weights.shape == (4, 4)
     assert graph.weights[0, 1] > 0.0
     assert graph.weights[0, 3] == 0.0
+
+
+def test_build_candidate_graph_logs_pair_workload_and_progress(caplog):
+    records = [make_related_record(i) for i in range(3)]
+
+    with caplog.at_level(logging.INFO):
+        build_candidate_graph(records)
+
+    assert any(
+        "Consensus graph start:" in message and "3 unordered pairs" in message
+        for message in caplog.messages
+    )
+    assert any(
+        "Consensus graph progress:" in message and "3/3 pairs" in message
+        for message in caplog.messages
+    )
 
 
 def test_extract_candidate_clusters_returns_only_high_confidence_group():
