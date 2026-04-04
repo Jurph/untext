@@ -194,6 +194,13 @@ def test_candidate_record_separates_pixels_from_metadata():
     assert is_dataclass(ConsensusTemplate)
 
 
+def test_consensus_module_logger_is_configured_for_info_output():
+    import untextre.watermark_consensus as consensus_mod
+
+    assert consensus_mod.logger.handlers
+    assert consensus_mod.logger.level == logging.INFO
+
+
 def test_alpha_to_soft_mask_normalizes_uint8_alpha():
     alpha = np.array([[0, 128, 255]], dtype=np.uint8)
     soft = alpha_to_soft_mask(alpha)
