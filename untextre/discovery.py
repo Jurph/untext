@@ -10,6 +10,13 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from .utils import load_image, setup_logger
+from .watermark_consensus import (
+    CandidateMetadata,
+    build_candidate_record,
+    build_final_templates,
+    split_candidate_bgra,
+)
+from .orb_prep import count_candidate_orb_keypoints
 
 logger = setup_logger(__name__)
 
@@ -23,6 +30,14 @@ ZONE_SHORT_DIVISIONS = 2
 
 # Cross-bucket IoU threshold for family membership.
 CROSS_BUCKET_IOU_THRESHOLD = 0.50
+
+# Structural lower bounds for candidates entering graph consensus.
+MIN_CONSENSUS_CANDIDATE_AREA_PX = 64
+MIN_CONSENSUS_CANDIDATE_SHORT_SIDE_PX = 10
+MIN_CONSENSUS_CANDIDATE_LONG_SIDE_PX = 14
+MIN_CONSENSUS_CANDIDATE_EDGE_PX = 64
+MIN_CONSENSUS_CANDIDATE_FILL_RATIO = 0.01
+MIN_CONSENSUS_CANDIDATE_ORB_KEYPOINTS = 6
 
 
 def assign_zone(
@@ -52,12 +67,18 @@ def assign_zone(
 def crop_zone_to_bgra(
     mean_image: np.ndarray,
     blob_mask: np.ndarray,
+    wm_color: Optional[np.ndarray] = None,
 ) -> Optional[np.ndarray]:
-    """Crop a blob region from the mean image and produce a tight BGRA array.
+    """Crop a blob region and produce a tight BGRA array.
 
     The alpha channel is 255 inside the blob and 0 in the transparent border.
     Channel order is BGRA to match cv2's native format and what
     find_known_mask_in_image expects.
+
+    When wm_color is provided (from extract_watermark_colors), it is used for
+    the BGR channels instead of mean_image.  The transparency-corrected colors
+    have background bleed removed; mean_image is the fallback when correction
+    is unavailable.
 
     Note on disk I/O: cv2.imwrite handles BGRA→PNG correctly.
     Use cv2.imread(..., cv2.IMREAD_UNCHANGED) to reload; do NOT use
@@ -66,6 +87,8 @@ def crop_zone_to_bgra(
     Args:
         mean_image: Pixel-wise mean of all images in the bucket (H×W×3 BGR).
         blob_mask: Binary mask (H×W uint8, 255 = blob).
+        wm_color: Optional H×W×3 uint8 transparency-corrected watermark colors.
+                  When supplied, used for BGR channels instead of mean_image.
 
     Returns:
         BGRA crop (H'×W'×4 uint8) with transparent border, or None if
@@ -85,7 +108,8 @@ def crop_zone_to_bgra(
     cx0 = max(0, x0 - CROP_BORDER_PX)
     cx1 = min(w, x1 + CROP_BORDER_PX)
 
-    bgr_crop = mean_image[cy0:cy1, cx0:cx1].copy()
+    color_source = wm_color if wm_color is not None else mean_image
+    bgr_crop = color_source[cy0:cy1, cx0:cx1].copy()
     mask_crop = blob_mask[cy0:cy1, cx0:cx1].copy()
 
     # Produce BGRA — keep BGR channel order from source image so that
@@ -93,6 +117,39 @@ def crop_zone_to_bgra(
     b_ch, g_ch, r_ch = cv2.split(bgr_crop)
     bgra = cv2.merge([b_ch, g_ch, r_ch, mask_crop])
     return bgra
+
+
+def _candidate_meets_consensus_minimums(
+    bgra: np.ndarray,
+) -> Tuple[bool, int, int, int, int, float, int]:
+    """Return whether a BGRA candidate is large enough for graph consensus."""
+    alpha = bgra[:, :, 3] > 0
+    area = int(alpha.sum())
+    if area == 0:
+        return False, 0, 0, 0, 0, 0.0, 0
+
+    ys, xs = np.where(alpha)
+    bbox_h = int(ys.max() - ys.min() + 1)
+    bbox_w = int(xs.max() - xs.min() + 1)
+    short_side = min(bbox_h, bbox_w)
+    long_side = max(bbox_h, bbox_w)
+    bbox_area = max(bbox_h * bbox_w, 1)
+    fill_ratio = float(area) / float(bbox_area)
+    edge_px = int(cv2.Canny(alpha.astype(np.uint8) * 255, 50, 150).astype(bool).sum())
+
+    structural_valid = (
+        area >= MIN_CONSENSUS_CANDIDATE_AREA_PX
+        and short_side >= MIN_CONSENSUS_CANDIDATE_SHORT_SIDE_PX
+        and long_side >= MIN_CONSENSUS_CANDIDATE_LONG_SIDE_PX
+        and edge_px >= MIN_CONSENSUS_CANDIDATE_EDGE_PX
+        and fill_ratio >= MIN_CONSENSUS_CANDIDATE_FILL_RATIO
+    )
+    if not structural_valid:
+        return False, area, bbox_w, bbox_h, edge_px, fill_ratio, 0
+
+    orb_keypoints = count_candidate_orb_keypoints(bgra, nfeatures=1000)
+    is_valid = orb_keypoints >= MIN_CONSENSUS_CANDIDATE_ORB_KEYPOINTS
+    return is_valid, area, bbox_w, bbox_h, edge_px, fill_ratio, orb_keypoints
 
 
 def compute_alpha_iou(crop_a: np.ndarray, crop_b: np.ndarray) -> float:
@@ -297,33 +354,82 @@ def compute_stack_statistics(paths: List[Path]) -> Optional[Dict[str, np.ndarray
     }
 
 
+def compute_median_gradient(paths: List[Path]) -> Optional[np.ndarray]:
+    """Compute the per-pixel median gradient magnitude across an image stack.
+
+    For each image, compute the Sobel gradient magnitude on grayscale.  Return
+    the per-pixel median across all successfully-loaded images.
+
+    This implements the core signal from Dekel et al. (CVPR 2017, §3):
+    scene background gradients are statistically independent across varying
+    images and converge toward zero under the median; the watermark gradient
+    (identical position in every image) persists robustly.  The result is a
+    map that is high at watermark edges and near-zero at most background regions.
+
+    For consistently-lit or static backgrounds, the background gradients do NOT
+    cancel under the median — they persist just like the watermark.  This signal
+    is therefore complementary to the variance-based score rather than a complete
+    replacement: it adds discriminating power over varied backgrounds while the
+    variance-based score handles the static-background failure mode.
+
+    Memory note: all N gradient-magnitude frames (H×W float32 each) are held
+    in memory simultaneously for the median computation.  For large batches of
+    high-resolution images this may be significant.
+
+    Args:
+        paths: Paths to images that must all be the same pixel dimensions.
+
+    Returns:
+        H×W float32 median gradient magnitude, or None if fewer than 3 images
+        could be loaded.
+    """
+    frames = []
+    for p in paths:
+        try:
+            img = load_image(p)
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY).astype(np.float32) / 255.0
+        except Exception as e:
+            logger.warning(f"compute_median_gradient: could not load {p.name}: {e}")
+            continue
+
+        gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+        gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+        frames.append(np.sqrt(gx ** 2 + gy ** 2))
+
+    if len(frames) < 3:
+        return None
+
+    return np.median(np.stack(frames, axis=0), axis=0).astype(np.float32)
+
+
 def build_watermark_score(
     stats: Dict[str, np.ndarray],
     var_norm: np.ndarray,
+    median_grad: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     """Build a composite watermark-likelihood score from stack statistics.
 
-    score = low_var × var_boundary
+    score = low_var × var_boundary × median_grad_norm  (if median_grad provided)
+    score = low_var × var_boundary                     (fallback without it)
 
-    low_var      = normalize( −log10(var_gray + ε) )        stable pixels → 1
-    var_boundary = normalize( gradient_magnitude(var_norm) )  step edges → 1
+    low_var          = normalize( −log10(var_gray + ε) )       stable pixels → 1
+    var_boundary     = normalize( |∇ var_norm| )               step edges → 1
+    median_grad_norm = normalize( median_k(|∇J_k|) )           persistent structure → 1
 
-    The key insight: the variance field has a sharp step edge at the watermark
-    boundary — near-zero variance inside the overlay, elevated variance outside.
-    That step is large regardless of the watermark's opacity.
+    The var_boundary term fires at the outer edge of the watermark region (where
+    variance transitions sharply from ≈0 inside to background-level outside).
 
-    The previous approach (gradient of the mean image within a stable mask) fails
-    for semi-transparent watermarks because:
-      - Boundary pixels blend with the varying background → elevated variance →
-        excluded from the stable mask → structure = 0 there.
-      - Interior pixels are stable but have zero gradient → score = 0 there too.
+    The median_grad_norm term fires at pixels that have consistent image-space
+    gradients across the stack — i.e., watermark strokes and edges whose structure
+    persists regardless of the background underneath them.  Background gradients
+    from varying scenes cancel toward zero under the median; watermark gradients
+    do not.  This adds discriminating power over varied backgrounds, and is
+    complementary to var_boundary (which handles the watermark boundary itself).
 
-    Using the gradient of the variance map solves both:
-      - The step in var_norm at the watermark boundary is the LARGEST such step
-        in the image (from ≈0 inside to content-level outside), so it dominates
-        even a globally-normalized structure signal.
-      - The score is highest exactly where the watermark boundary lies, not where
-        some incidentally-stable scene edge happens to be.
+    The product requires all active factors to be high simultaneously, which makes
+    the seed score sparse.  This is intentional: score_to_mask grows from high-
+    confidence seed pixels into the full stable (low-variance) region, so the
+    score only needs to fire somewhere within the watermark, not everywhere.
 
     Returns:
         H×W float32 in [0, 1].
@@ -340,8 +446,12 @@ def build_watermark_score(
     gy = cv2.Sobel(vn, cv2.CV_32F, 0, 1, ksize=3)
     var_boundary = _normalize_01(np.sqrt(gx ** 2 + gy ** 2))
 
-    score = (low_var.astype(np.float32) * var_boundary).astype(np.float32)
-    return score
+    score = low_var.astype(np.float32) * var_boundary
+
+    if median_grad is not None:
+        score = score * _normalize_01(median_grad)
+
+    return score.astype(np.float32)
 
 
 def _trim_to_budget(
@@ -385,6 +495,71 @@ def _trim_to_budget(
     result = np.zeros_like(component_mask, dtype=np.uint8)
     result[keep_ys, keep_xs] = 255
     return result
+
+
+def _deblot_mask_by_area(mask: np.ndarray) -> np.ndarray:
+    """Remove satellite noise components using Otsu on the log(component area) distribution.
+
+    The component area distribution of a watermark candidate is typically bimodal:
+    signal components (text glyphs, graphic elements) cluster at 100–2000 px;
+    noise blotches cluster at 1–50 px.  Otsu on log(area) finds the valley between
+    these two clusters as the split threshold — no pre-specified size constant needed.
+
+    If the distribution is not clearly bimodal (la_max − la_min < 0.5 in log space,
+    meaning all components are nearly the same size), the mask is returned unchanged,
+    because Otsu would split a uniform distribution arbitrarily.
+
+    Otsu requires at least 2 samples per class; if there are fewer than 4 components
+    total, the mask is returned unchanged.
+
+    The safety fallback — return the original if zero components survive — prevents
+    deblotching from returning an empty mask.
+
+    Args:
+        mask: H×W uint8 binary mask (255 = candidate pixel).
+
+    Returns:
+        Cleaned mask with noise-sized components removed, or the original if the
+        distribution is unimodal or the result would be empty.
+    """
+    n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
+    if n_labels <= 2:   # background + at most one foreground component
+        return mask
+
+    areas = np.array(
+        [stats[i, cv2.CC_STAT_AREA] for i in range(1, n_labels)], dtype=np.float64
+    )
+    if len(areas) < 4:
+        # Need at least 2 samples per class for Otsu to have any meaning.
+        return mask
+
+    log_areas = np.log(areas + 1.0)
+    la_min, la_max = float(log_areas.min()), float(log_areas.max())
+    if la_max - la_min < 0.5:
+        # All components nearly the same size — no meaningful gap to cut.
+        return mask
+
+    # Normalise to [0, 255] and find the Otsu threshold on the 1-D distribution.
+    # Otsu maximises between-class variance, placing the threshold at the valley
+    # of a bimodal distribution — exactly the gap between glyphs and blotches.
+    la_u8 = ((log_areas - la_min) / (la_max - la_min) * 255).clip(0, 255).astype(np.uint8)
+    thresh_val, _ = cv2.threshold(la_u8.reshape(-1, 1), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    threshold_log = la_min + float(thresh_val) / 255.0 * (la_max - la_min)
+    min_area = float(np.exp(threshold_log))
+
+    clean = np.zeros_like(mask)
+    kept = 0
+    for i in range(1, n_labels):
+        if stats[i, cv2.CC_STAT_AREA] >= min_area:
+            clean[labels == i] = 255
+            kept += 1
+
+    # Fallback: if the threshold eliminated everything, return the original.
+    # A single surviving component is a valid result (one clean glyph cluster).
+    if kept < 1:
+        return mask
+
+    return clean
 
 
 def score_to_mask(
@@ -465,65 +640,612 @@ def select_candidate_components(
     img_w: int,
     img_h: int,
     max_zones: int = 3,
+    median_grad: Optional[np.ndarray] = None,
 ) -> List[np.ndarray]:
-    """Group stable components by spatial zone; return zone unions ranked by total stable area.
+    """Group stable components by spatial zone; return zone unions ranked by gradient-weighted area.
 
     A watermark like "PLAYBOYPLUS.COM + logo" consists of many medium-sized
     connected components (each letter, punctuation, logo element) all clustered
     in one image zone.  Individual letter areas overlap with accidentally-stable
     noise spots that appear scattered elsewhere.
 
-    Individual component area cannot distinguish a letter from a noise spot.
-    Spatial density can: the watermark zone accumulates the most total stable
-    area because it holds 12+ components vs. 0-2 per noise zone.
+    Ranking by raw stable area fails when a large consistently-lit background
+    region (e.g., a white wall always in frame) accumulates more stable pixels
+    than the watermark zone.  Weighting by gradient-consistency solves this:
 
-    No size threshold is needed — we ask which zone has the most stable pixels
-    and return the union of all components in that zone as the template.
+        zone_score = total_stable_area × mean( median_grad_norm[stable_pixels_in_zone] )
+
+    Flat uniform regions (a white wall, clear sky) have near-zero median gradient
+    and score ≈ 0 regardless of how many stable pixels they contain.  A text or
+    logo watermark has persistent structure at stroke edges and scores high.
+
+    Falls back to raw stable-area ranking when median_grad is None, preserving
+    the previous behaviour for callers that do not provide gradient evidence.
 
     Returns:
-        List of H×W uint8 union masks, one per selected zone, highest-area zone first.
+        List of H×W uint8 union masks, one per selected zone, highest-score zone first.
     """
     num_labels = mask_data["num_labels"]
     labels = mask_data["labels"]
     cc_stats = mask_data["stats"]
     cc_centroids = mask_data["centroids"]
 
+    # Normalise median gradient to [0, 1] once so all zone means are comparable.
+    grad_norm: Optional[np.ndarray] = None
+    if median_grad is not None:
+        grad_norm = _normalize_01(median_grad)
+
     zone_area: Dict[Tuple[int, int], int] = {}
-    zone_components: Dict[Tuple[int, int], List[np.ndarray]] = {}
+    zone_grad_sum: Dict[Tuple[int, int], float] = {}
+    zone_labels: Dict[Tuple[int, int], List[int]] = {}
 
     for label in range(1, num_labels):
         area = int(cc_stats[label, cv2.CC_STAT_AREA])
         if area < 4:
             continue
+        left = int(cc_stats[label, cv2.CC_STAT_LEFT])
+        top = int(cc_stats[label, cv2.CC_STAT_TOP])
+        width = int(cc_stats[label, cv2.CC_STAT_WIDTH])
+        height = int(cc_stats[label, cv2.CC_STAT_HEIGHT])
         cx = int(round(cc_centroids[label][0]))
         cy = int(round(cc_centroids[label][1]))
         zone = assign_zone(cx, cy, img_w, img_h)
 
-        blob = np.zeros(labels.shape, dtype=np.uint8)
-        blob[labels == label] = 255
-
         zone_area[zone] = zone_area.get(zone, 0) + area
-        zone_components.setdefault(zone, []).append(blob)
+        zone_labels.setdefault(zone, []).append(label)
+
+        if grad_norm is not None:
+            label_window = labels[top:top + height, left:left + width]
+            grad_window = grad_norm[top:top + height, left:left + width]
+            zone_grad_sum[zone] = zone_grad_sum.get(zone, 0.0) + float(
+                grad_window[label_window == label].sum()
+            )
 
     if not zone_area:
         return []
 
-    ranked_zones = sorted(zone_area.items(), key=lambda x: x[1], reverse=True)
-    zone_strs = ", ".join(f"z{z}:{a}px" for z, a in ranked_zones[:6])
-    logger.debug(f"Zone total stable area: [{zone_strs}]")
+    # Compute ranking key per zone.
+    if grad_norm is not None:
+        # Gradient-consistency weight: mean normalised gradient over stable pixels.
+        # zone_score = total_stable_area × mean_grad_in_zone
+        # Flat regions: many stable pixels × ≈0 gradient → low score.
+        # Text watermark: moderate stable pixels × high gradient → high score.
+        def zone_score(zone: Tuple[int, int]) -> float:
+            area = zone_area[zone]
+            mean_grad = zone_grad_sum.get(zone, 0.0) / area
+            return area * mean_grad
+    else:
+        def zone_score(zone: Tuple[int, int]) -> float:
+            return float(zone_area[zone])
+
+    ranked_zones = sorted(zone_area.keys(), key=zone_score, reverse=True)
+
+    if grad_norm is not None:
+        zone_strs = ", ".join(
+            f"z{z}:{zone_area[z]}px×{zone_grad_sum.get(z,0)/zone_area[z]:.2f}g"
+            for z in ranked_zones[:6]
+        )
+        logger.debug(f"Zone gradient-weighted scores: [{zone_strs}]")
+    else:
+        zone_strs = ", ".join(f"z{z}:{zone_area[z]}px" for z in ranked_zones[:6])
+        logger.debug(f"Zone total stable area: [{zone_strs}]")
 
     candidates: List[np.ndarray] = []
-    for zone, total_area in ranked_zones[:max_zones]:
+    for zone in ranked_zones[:max_zones]:
         union = np.zeros(labels.shape, dtype=np.uint8)
-        for blob in zone_components[zone]:
-            union = cv2.bitwise_or(union, blob)
+        for label in zone_labels[zone]:
+            left = int(cc_stats[label, cv2.CC_STAT_LEFT])
+            top = int(cc_stats[label, cv2.CC_STAT_TOP])
+            width = int(cc_stats[label, cv2.CC_STAT_WIDTH])
+            height = int(cc_stats[label, cv2.CC_STAT_HEIGHT])
+            label_window = labels[top:top + height, left:left + width]
+            union_window = union[top:top + height, left:left + width]
+            union_window[label_window == label] = 255
         candidates.append(union)
         logger.debug(
-            f"Zone {zone}: {len(zone_components[zone])} component(s), "
-            f"{total_area} stable px total"
+            f"Zone {zone}: {len(zone_labels[zone])} component(s), "
+            f"{zone_area[zone]} stable px, score={zone_score(zone):.1f}"
         )
 
     return candidates
+
+
+def extract_watermark_colors(
+    mean_bgr: np.ndarray,
+    var_gray: np.ndarray,
+    precision_mask: np.ndarray,
+    inpaint_radius: int = 15,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Extract true watermark colors by inverting the transparency mixing model.
+
+    A semi-transparent watermark composites as:
+        observed_i = α·WM_color + (1−α)·background_i
+
+    The pixel-wise mean image at stable (watermark) pixels is contaminated:
+        E[observed] = α·WM_color + (1−α)·E[background]
+
+    This function removes the background term by estimating it from spatial
+    neighbors (inpainting) and recovers WM_color:
+        WM_color = (E[observed] − (1−α)·bg_estimate) / α
+
+    Alpha is estimated per-pixel from the variance ratio (no guessed constant):
+        Var[observed] = (1−α)² · Var[background]
+        → α = 1 − sqrt(Var_observed / Var_background)
+
+    Background mean and variance at watermark pixels are estimated by inpainting
+    through precision_mask from surrounding non-watermark pixels.
+
+    Args:
+        mean_bgr: H×W×3 uint8 per-pixel mean image.
+        var_gray: H×W float32 per-pixel grayscale population variance.
+        precision_mask: H×W uint8, 255 at stable (watermark candidate) pixels.
+        inpaint_radius: Pixel radius for TELEA inpainting neighborhood.
+
+    Returns:
+        wm_color: H×W×3 uint8 estimated true watermark color at every pixel.
+        alpha_hat: H×W float32 per-pixel opacity estimate, clamped to [0.05, 1.0].
+    """
+    # ── Background mean estimation ─────────────────────────────────────────
+    # Inpaint mean_bgr through the watermark mask so that watermark pixels are
+    # replaced by spatial interpolation of the surrounding non-watermark mean.
+    bg_mean_inpainted = cv2.inpaint(
+        mean_bgr, precision_mask, inpaint_radius, cv2.INPAINT_TELEA
+    )
+
+    # ── Background variance estimation ────────────────────────────────────
+    # Inpaint in log-variance space (uint8 proxy preserves relative scale).
+    log_var = np.log10(var_gray.astype(np.float64) + 1e-8).astype(np.float32)
+    log_min = float(log_var.min())
+    log_max = float(log_var.max())
+
+    if log_max - log_min > 1e-6:
+        log_var_u8 = cv2.normalize(log_var, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+    else:
+        log_var_u8 = np.zeros_like(log_var, dtype=np.uint8)
+
+    log_var_u8_inpainted = cv2.inpaint(
+        log_var_u8, precision_mask, inpaint_radius, cv2.INPAINT_TELEA
+    )
+
+    # Invert normalisation to recover float log-variance, then exponentiate.
+    log_var_inpainted = (
+        log_var_u8_inpainted.astype(np.float32) / 255.0 * (log_max - log_min) + log_min
+    )
+    bg_var_inpainted = (10.0 ** log_var_inpainted.astype(np.float64)).astype(np.float32)
+
+    # ── Per-pixel alpha estimation ─────────────────────────────────────────
+    # Var[observed] = (1−α)² · Var[background]  →  α = 1 − sqrt(ratio)
+    var_ratio = np.clip(var_gray / (bg_var_inpainted + 1e-8), 0.0, 1.0).astype(np.float32)
+    alpha_hat = np.clip(1.0 - np.sqrt(var_ratio), 0.05, 1.0).astype(np.float32)
+
+    # ── WM color extraction ────────────────────────────────────────────────
+    # Rearranging the mixing model: WM = (observed − (1−α)·bg) / α
+    alpha_3ch = alpha_hat[:, :, np.newaxis]   # broadcast over BGR
+    wm_f = (mean_bgr.astype(np.float32) - (1.0 - alpha_3ch) * bg_mean_inpainted.astype(np.float32)) / alpha_3ch
+    wm_color = np.clip(wm_f, 0, 255).astype(np.uint8)
+
+    return wm_color, alpha_hat
+
+
+def _top_n_alpha_components(alpha: np.ndarray, n: int = 1) -> np.ndarray:
+    """Return alpha retaining only the n largest connected components by area.
+
+    Used to focus phase-correlation geometry on the dominant watermark
+    structure and suppress scattered noise pixels that would otherwise
+    dominate the geometry field.
+
+    Args:
+        alpha: H×W uint8 alpha channel.
+        n: Number of largest components to keep.
+
+    Returns:
+        H×W uint8 alpha with only the top-n components; all other pixels
+        are set to 0.  Returns alpha unchanged if no foreground exists.
+    """
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(
+        (alpha > 0).astype(np.uint8), connectivity=8
+    )
+    if stats.shape[0] <= 1:  # only background label
+        return alpha
+    fg_ids = np.argsort(stats[1:, cv2.CC_STAT_AREA])[::-1][:n] + 1
+    out = np.zeros_like(alpha)
+    for cid in fg_ids:
+        out[labels == cid] = alpha[labels == cid]
+    return out
+
+
+def _filter_alpha_by_area(alpha: np.ndarray, min_area: int) -> np.ndarray:
+    """Return alpha with components smaller than min_area zeroed out.
+
+    Removes isolated noise pixels while preserving the distributed structure
+    of real watermarks, whose individual glyphs/components are each typically
+    several hundred pixels.
+
+    Args:
+        alpha: H×W uint8 alpha channel.
+        min_area: Minimum connected-component area (in pixels) to keep.
+
+    Returns:
+        H×W uint8 alpha with sub-threshold components set to 0.
+    """
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(
+        (alpha > 0).astype(np.uint8), connectivity=8
+    )
+    out = np.zeros_like(alpha)
+    for cid in range(1, stats.shape[0]):
+        if stats[cid, cv2.CC_STAT_AREA] >= min_area:
+            out[labels == cid] = alpha[labels == cid]
+    return out
+
+
+def _geom_from_alpha(alpha: np.ndarray) -> np.ndarray:
+    """Convert an alpha channel into a soft edge-likelihood geometry field.
+
+    Pipeline:
+      alpha → soft binarization → Canny edges → distance transform
+      → exp(-dist / 4.0)
+
+    The resulting field has soft peaks at edge locations and smooth falloff
+    into the interior.  It gives phase correlation a clean high-frequency
+    signal regardless of whether the watermark is text, logo, solid, or
+    semi-transparent.
+
+    Args:
+        alpha: H×W uint8 alpha channel.
+
+    Returns:
+        H×W float32 geometry field in [0, 1].  All-zero if alpha is empty.
+    """
+    a = alpha.astype(np.float32) / 255.0
+    soft = cv2.GaussianBlur(a, (0, 0), 1.0)
+    nonzero = soft[soft > 0]
+    if len(nonzero) == 0:
+        return np.zeros_like(soft)
+    thresh = float(np.quantile(nonzero, 0.25))
+    mask = (soft > thresh).astype(np.uint8) * 255
+    edges = cv2.Canny(mask, 50, 150)
+    dist = cv2.distanceTransform(255 - edges, cv2.DIST_L2, 3)
+    return np.exp(-dist / 4.0).astype(np.float32)
+
+
+def _register_pair(
+    geom_ref: np.ndarray,
+    geom_mov: np.ndarray,
+    min_scale: float = 0.1,
+    max_scale: float = 10.0,
+) -> Optional[Tuple[float, float, float, float]]:
+    """Register geom_mov onto geom_ref via log-polar + phase correlation.
+
+    Step 1: Pad both geometry fields to a common power-of-2 canvas.
+    Step 2: Compute FFT log-magnitude spectra; shift DC to centre.
+    Step 3: Convert spectra to log-polar coordinates.
+            In log-polar space a spatial scale factor s becomes a column shift
+            of ln(s) * W / ln(maxRadius) — algebraic consequence of the
+            similarity theorem for the Fourier transform.
+    Step 4: Phase-correlate the log-polar spectra; the column peak gives s.
+            Scale formula:  s = exp(col_shift * ln(maxRadius) / W)
+    Step 5: Resize geom_mov by s; pad to a fresh common canvas.
+    Step 6: Phase-correlate the rescaled pair; the x/y peak gives (tx_pc, ty_pc).
+
+    The response from step 6 (resp_trans) is used as the quality score.
+    A bad scale estimate produces a poorly-aligned rescaled pair → low
+    resp_trans, so resp_trans alone captures end-to-end registration quality.
+
+    Warp convention: to place crop_mov onto crop_ref's canvas, use
+        M = [[s, 0, -tx_pc], [0, s, -ty_pc]]
+    in cv2.warpAffine(crop_mov, M, (ref_w, ref_h)).
+
+    Args:
+        geom_ref: H×W float32 geometry field (reference, crop coordinates).
+        geom_mov: H×W float32 geometry field (moving, crop coordinates).
+        min_scale: Reject if estimated s < min_scale.
+        max_scale: Reject if estimated s > max_scale.
+
+    Returns:
+        (s, tx_pc, ty_pc, score) or None if registration fails or s is
+        out of bounds.  score ∈ (0, 1] is the translation peak response.
+    """
+    if geom_ref.max() < 1e-3 or geom_mov.max() < 1e-3:
+        return None
+
+    # ── Step 1: common power-of-2 canvas for efficient FFT ────────────────
+    H = max(geom_ref.shape[0], geom_mov.shape[0], 64)
+    W = max(geom_ref.shape[1], geom_mov.shape[1], 64)
+    H2 = 1 << (H - 1).bit_length()
+    W2 = 1 << (W - 1).bit_length()
+
+    def _pad(img: np.ndarray, h: int, w: int) -> np.ndarray:
+        out = np.zeros((h, w), dtype=np.float32)
+        out[:img.shape[0], :img.shape[1]] = img
+        return out
+
+    ref_p = _pad(geom_ref, H2, W2)
+    mov_p = _pad(geom_mov, H2, W2)
+
+    # ── Steps 2+3: FFT log-magnitude → log-polar ──────────────────────────
+    def _log_mag_lp(img: np.ndarray) -> np.ndarray:
+        F = np.fft.fft2(img)
+        mag = np.log1p(np.abs(np.fft.fftshift(F))).astype(np.float32)
+        center = (W2 / 2.0, H2 / 2.0)
+        max_r = min(H2, W2) / 2.0
+        return cv2.warpPolar(
+            mag, (W2, H2), center, max_r,
+            cv2.WARP_POLAR_LOG | cv2.INTER_LINEAR,
+        )
+
+    ref_lp = _log_mag_lp(ref_p)
+    mov_lp = _log_mag_lp(mov_p)
+
+    # ── Step 4: scale from log-polar phase correlation ─────────────────────
+    # Column axis of warpPolar log-polar output spans log(r) ∈ [0, ln(maxR)].
+    # A spatial scale s → radial expansion of FFT magnitude by s
+    #   → column shift of ln(s) · W2 / ln(maxR).
+    # Therefore s = exp(col_shift · ln(maxR) / W2).  Algebraic from the
+    # Fourier similarity theorem: F[f(x/s)](ξ) = s·F(sξ).
+    max_r = min(H2, W2) / 2.0
+    if max_r <= 1.0:
+        return None
+    hann_lp = cv2.createHanningWindow((W2, H2), cv2.CV_32F)
+    (col_shift, _row_shift), _resp_scale = cv2.phaseCorrelate(
+        ref_lp * hann_lp, mov_lp * hann_lp
+    )
+    s = float(np.exp(col_shift * np.log(max_r) / W2))
+    if not (min_scale <= s <= max_scale):
+        return None
+
+    # ── Steps 5+6: translation from phase correlation of rescaled mov ──────
+    new_h = max(1, round(geom_mov.shape[0] * s))
+    new_w = max(1, round(geom_mov.shape[1] * s))
+    mov_scaled = cv2.resize(geom_mov, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+
+    H3 = max(geom_ref.shape[0], mov_scaled.shape[0], 64)
+    W3 = max(geom_ref.shape[1], mov_scaled.shape[1], 64)
+    H4 = 1 << (H3 - 1).bit_length()
+    W4 = 1 << (W3 - 1).bit_length()
+
+    ref_c = _pad(geom_ref, H4, W4)
+    mov_c = _pad(mov_scaled, H4, W4)
+
+    hann_c = cv2.createHanningWindow((W4, H4), cv2.CV_32F)
+    (tx_pc, ty_pc), resp_trans = cv2.phaseCorrelate(ref_c * hann_c, mov_c * hann_c)
+
+    return (s, float(tx_pc), float(ty_pc), float(resp_trans))
+
+
+def _find_largest_clique(adj: np.ndarray) -> List[int]:
+    """Find the largest clique in a graph defined by an adjacency matrix.
+
+    Bron-Kerbosch algorithm without pivoting.  Practical for N ≤ ~15 (expected
+    range of candidates in this pipeline is 3–12).
+
+    Args:
+        adj: (N, N) boolean symmetric array; adj[i,j] True means i and j
+             are compatible (RANSAC succeeded between them).
+
+    Returns:
+        Indices of the largest clique found.  Empty list if N=0.
+    """
+    n = adj.shape[0]
+    best: List[int] = []
+
+    def bk(current: List[int], candidates: List[int]) -> None:
+        nonlocal best
+        if not candidates:
+            if len(current) > len(best):
+                best = current[:]
+            return
+        for i in candidates:
+            new_cands = [j for j in candidates if j != i and adj[i, j]]
+            current.append(i)
+            bk(current, new_cands)
+            current.pop()
+
+    bk([], list(range(n)))
+    return best
+
+
+def _consensus_vote(
+    zone_data: List[Tuple[np.ndarray, int, int, Tuple[int, int], np.ndarray, np.ndarray]],
+    debug_dir: Optional[Path] = None,
+) -> List[np.ndarray]:
+    """Merge zone candidates via log-polar phase-correlation registration.
+
+    Two candidates from the same bucket (img_w, img_h) are from different spatial
+    zones of the same images — they are definitionally different watermarks and
+    must never be compared.  All cross-bucket pairs are attempted regardless of
+    zone position, since a watermark may land in different zones of differently-
+    sized images.
+
+    Algorithm:
+    1. Generate BGRA crops; extract per-crop geometry fields from alpha channels.
+    2. For every cross-bucket pair (i, j), call _register_pair(geom_i, geom_j).
+       The registration works entirely in crop-local coordinates; no full-image
+       step is needed because phase correlation has no minimum image size.
+    3. Accept a pair if its translation peak response exceeds a minimum floor.
+       Build a binary adjacency matrix and find the largest clique.
+    4. Register all clique members onto the reference crop (largest area) using
+       the crop-space transforms:
+           M = [[s, 0, -tx_pc], [0, s, -ty_pc]]
+       phaseCorrelate(ref, mov) returns (tx_pc, ty_pc) where mov is shifted by
+       (tx_pc, ty_pc) relative to ref, so negating brings mov into ref's frame.
+    5. Vote: keep pixels where ≥ 2 registered alpha masks agree.
+    6. Average color at surviving pixels; tight-crop the result.
+
+    Fallback: if no corroborated group is found, return all crops sorted by area.
+
+    Args:
+        zone_data: List of (zone_mask, img_w, img_h, zone, mean_bgr, wm_color).
+        debug_dir: Unused; kept for signature compatibility with caller.
+
+    Returns:
+        List containing one consensus BGRA crop, or all crops if fallback.
+    """
+    # ── Step 1: BGRA crops + geometry fields ──────────────────────────────
+    crops: List[np.ndarray] = []
+    buckets: List[Tuple[int, int]] = []
+    zones: List[Tuple[int, int]] = []
+
+    for zone_mask, img_w, img_h, zone, mean_img, wm_color in zone_data:
+        bgra = crop_zone_to_bgra(mean_img, zone_mask, wm_color=wm_color)
+        if bgra is None:
+            continue
+        crops.append(bgra)
+        buckets.append((img_w, img_h))
+        zones.append(zone)
+
+    if len(crops) <= 1:
+        return crops
+
+    n = len(crops)
+
+    # ── Step 2: per-candidate alpha filtering ─────────────────────────────
+    # Strip isolated noise pixels (area < 100 px) from each crop's alpha.
+    # This suppresses background artefacts that the Welford estimator picks up
+    # while preserving multi-component watermark structures (text, logos) whose
+    # individual components are each typically hundreds of pixels.
+    # 100 px is a structural lower bound: a recognisable glyph cannot be
+    # meaningfully represented below roughly 10×10 px (algebraic: 10*10 = 100).
+    _MIN_COMPONENT_AREA = 100
+
+    filtered_alphas: List[np.ndarray] = []
+    for crop in crops:
+        filtered_alphas.append(_filter_alpha_by_area(crop[:, :, 3], _MIN_COMPONENT_AREA))
+
+    # ── Step 3: corner-anchored overlay + pixel voting ────────────────────
+    # Watermarks are placed at a fixed offset from a corner of their source
+    # image.  Aligning crops by that corner brings the watermark pixels into
+    # register without any explicit transformation search.
+    #
+    # Anchor direction is determined per-candidate from its zone and image
+    # orientation.  zone = (col_bin, row_bin) from assign_zone.
+    #   Landscape (img_w >= img_h): col bins 0-2, row bins 0-1.
+    #   Portrait  (img_h  > img_w): col bins 0-1, row bins 0-2.
+    # Last-bin in each dimension → right/bottom anchor; otherwise left/top.
+    #
+    # Watermark pixels from same-watermark candidates land at the same canvas
+    # position regardless of source-image size.  Background artefacts in each
+    # candidate are at different canvas positions (different image heights shift
+    # their rows) and therefore accumulate fewer votes.
+
+    canvas_h = max(c.shape[0] for c in crops)
+    canvas_w = max(c.shape[1] for c in crops)
+
+    # Vote by distinct bucket: a pixel must be corroborated by candidates from
+    # at least 2 different (img_w, img_h) buckets.  Two candidates from the same
+    # bucket are definitionally different watermarks, so they cannot corroborate
+    # each other.  We implement this by OR-ing all same-bucket masks into one
+    # layer before counting.
+    unique_buckets = list(dict.fromkeys(buckets))   # preserves insertion order
+    bucket_idx_map = {b: i for i, b in enumerate(unique_buckets)}
+    n_b = len(unique_buckets)
+
+    # Shape: (n_buckets, canvas_h, canvas_w)
+    bucket_layers = np.zeros((n_b, canvas_h, canvas_w), dtype=bool)
+    color_sum   = np.zeros((canvas_h, canvas_w, 3), dtype=np.float64)
+    color_count = np.zeros((canvas_h, canvas_w), dtype=np.int32)
+
+    for crop, (img_w, img_h), zone, fa in zip(crops, buckets, zones, filtered_alphas):
+        h, w = crop.shape[:2]
+        col_bin, row_bin = zone
+        if img_w >= img_h:  # landscape
+            n_col_bins, n_row_bins = ZONE_LONG_DIVISIONS, ZONE_SHORT_DIVISIONS
+        else:               # portrait
+            n_col_bins, n_row_bins = ZONE_SHORT_DIVISIONS, ZONE_LONG_DIVISIONS
+
+        y0 = canvas_h - h if row_bin == n_row_bins - 1 else 0
+        x0 = canvas_w - w if col_bin == n_col_bins - 1 else 0
+
+        mask = fa > 127
+        bi = bucket_idx_map[(img_w, img_h)]
+        bucket_layers[bi, y0:y0+h, x0:x0+w] |= mask
+        color_sum[y0:y0+h, x0:x0+w] += (
+            crop[:, :, :3].astype(np.float64) * mask[:, :, np.newaxis]
+        )
+        color_count[y0:y0+h, x0:x0+w] += mask
+
+    # Count how many distinct buckets voted for each pixel.
+    vote = bucket_layers.sum(axis=0).astype(np.int32)
+
+    logger.debug(
+        f"Consensus: {n} crop(s), {n_b} bucket(s), canvas {canvas_w}×{canvas_h}, "
+        f"vote≥2: {int((vote >= 2).sum())} px"
+    )
+
+    # ── Step 4: consensus mask, color average, tight crop ─────────────────
+    consensus_alpha = (vote >= 2).astype(np.uint8) * 255
+    if not np.any(consensus_alpha):
+        logger.warning(
+            "Consensus: no pixel received ≥ 2 votes; returning all candidates."
+        )
+        return sorted(crops, key=lambda c: c.shape[0] * c.shape[1], reverse=True)
+
+    safe_count = np.maximum(color_count, 1)
+    consensus_bgr = (color_sum / safe_count[:, :, np.newaxis]).astype(np.uint8)
+    result = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
+    result[:, :, :3] = consensus_bgr
+    result[:, :, 3] = consensus_alpha
+
+    ys, xs = np.where(consensus_alpha == 255)
+    y0_c, y1_c = int(ys.min()), int(ys.max()) + 1
+    x0_c, x1_c = int(xs.min()), int(xs.max()) + 1
+    result = result[y0_c:y1_c, x0_c:x1_c]
+
+    logger.info(
+        f"Consensus: {n} candidate(s) → 1 crop ({result.shape[1]}×{result.shape[0]} px) "
+        f"from corner-anchored vote"
+    )
+    return [result]
+
+
+def _consensus_vote(
+    zone_data: List[Tuple[np.ndarray, int, int, Tuple[int, int], np.ndarray, np.ndarray]],
+    debug_dir: Optional[Path] = None,
+) -> List[np.ndarray]:
+    """Convert discovery candidates into graph-consensus templates."""
+    records = []
+    record_index = 0
+    for index, (zone_mask, img_w, img_h, zone, mean_img, wm_color) in enumerate(zone_data):
+        bgra = crop_zone_to_bgra(mean_img, zone_mask, wm_color=wm_color)
+        if bgra is None:
+            continue
+        subcrops = split_candidate_bgra(bgra)
+        if len(subcrops) > 1:
+            logger.info(
+                f"Consensus: split candidate from {img_w}x{img_h} zone {zone} into {len(subcrops)} sub-candidates"
+            )
+        for split_index, subcrop in enumerate(subcrops):
+            is_valid, area, bbox_w, bbox_h, edge_px, fill_ratio, orb_keypoints = _candidate_meets_consensus_minimums(subcrop)
+            if not is_valid:
+                logger.info(
+                    f"Consensus: skipping low-signal candidate from {img_w}x{img_h} zone {zone} "
+                    f"(split {split_index + 1}/{len(subcrops)}, {area} px, bbox {bbox_w}x{bbox_h}, "
+                    f"edges {edge_px}, fill {fill_ratio:.4f}, orb_kp {orb_keypoints})"
+                )
+                continue
+            records.append(
+                build_candidate_record(
+                    subcrop,
+                    CandidateMetadata(
+                        family_key=(img_w, img_h),
+                        zone=zone,
+                        candidate_index=record_index,
+                        source_kind="discovery",
+                    ),
+                )
+            )
+            record_index += 1
+
+    if not records:
+        return []
+
+    templates = build_final_templates(
+        records,
+        debug_dir=None if debug_dir is None else str(debug_dir),
+    )
+    logger.info(
+        f"Consensus: {len(records)} candidate(s) -> {len(templates)} graph-derived template(s)"
+    )
+    return [template.bgra for template in templates]
 
 
 def discover_watermark_candidates(
@@ -602,7 +1324,9 @@ def discover_watermark_candidates(
         logger.info("Single qualifying bucket — pooled threshold equals per-bucket threshold")
 
     # ── Pass 2: process each bucket using the shared global threshold ─────────
-    all_candidates: List[np.ndarray] = []
+    all_candidates: List[np.ndarray] = []   # kept for debug output only
+    all_zone_data: List[Tuple[np.ndarray, int, int, Tuple[int, int], np.ndarray, np.ndarray]] = []
+    # Each entry: (zone_mask, img_w, img_h, zone, mean_bgr, wm_color)
 
     for (img_w, img_h), (paths, stats, var_norm) in bucket_data.items():
         logger.info(f"Discovering watermark in bucket {img_w}×{img_h} ({len(paths)} images)")
@@ -626,8 +1350,46 @@ def discover_watermark_candidates(
             f"= {stable_pct:.2f}% of pixels (threshold {global_stable_threshold:.2e})"
         )
 
-        # Composite score: variance-field gradient × stability
-        score = build_watermark_score(stats, var_norm)
+        # Cross-sub-sample validation: intersect stable masks from two independent
+        # halves of the image population.  A pixel that is a Tukey-fence outlier in
+        # BOTH halves is a genuine watermark pixel; incidentally-stable noise that
+        # barely passes the fence in the full population often fails one half.
+        # Requires ≥ 6 images per bucket so each half has ≥ 3 images (Welford minimum).
+        if len(paths) >= 6:
+            rng = np.random.RandomState(seed=img_w ^ (img_h * 1031))
+            shuffled = list(paths)
+            rng.shuffle(shuffled)
+            half = len(shuffled) // 2
+            stats_a = compute_stack_statistics(shuffled[:half])
+            stats_b = compute_stack_statistics(shuffled[half:])
+            if stats_a is not None and stats_b is not None:
+                mask_a = (stats_a["var_gray"] <= global_stable_threshold).astype(np.uint8) * 255
+                mask_b = (stats_b["var_gray"] <= global_stable_threshold).astype(np.uint8) * 255
+                precision_mask = cv2.bitwise_and(precision_mask, cv2.bitwise_and(mask_a, mask_b))
+                xval_pct = float(np.mean(precision_mask > 0) * 100)
+                logger.debug(
+                    f"Bucket {img_w}×{img_h}: after cross-sub-sample validation: "
+                    f"{xval_pct:.2f}% of pixels stable in both halves"
+                )
+
+        # Transparency-model inversion: estimate true WM color and per-pixel
+        # alpha by removing background bleed from the mean image.
+        # observed = α·WM + (1−α)·background  →  background estimated by
+        # inpainting, α from variance ratio; no constants needed.
+        wm_color, alpha_hat = extract_watermark_colors(mean_img, var_gray, precision_mask)
+
+        # Median gradient: persistent image-space gradients across the stack.
+        # Dekel et al. (CVPR 2017): background gradients cancel under the median;
+        # watermark gradients (fixed position) survive.
+        median_grad = compute_median_gradient(paths)
+        if median_grad is None:
+            logger.warning(
+                f"Bucket {img_w}×{img_h}: median gradient computation failed, "
+                f"falling back to two-factor score"
+            )
+
+        # Composite score: stability × variance-boundary × persistent-gradient
+        score = build_watermark_score(stats, var_norm, median_grad=median_grad)
 
         # Phase 4: Otsu on score → morph close → seed-grow into precision-outlier mask
         mask_data = score_to_mask(score, var_norm, precision_outlier_mask=precision_mask)
@@ -641,10 +1403,13 @@ def discover_watermark_candidates(
             cv2.imwrite(str(debug_dir / f"debug_score_{stem}.png"), score_vis)
             cv2.imwrite(str(debug_dir / f"debug_mask_raw_{stem}.png"), mask_data["mask_raw"])
             cv2.imwrite(str(debug_dir / f"debug_mask_clean_{stem}.png"), mask_data["mask_clean"])
+            cv2.imwrite(str(debug_dir / f"debug_wm_color_{stem}.png"), wm_color)
+            alpha_vis = (alpha_hat * 255).astype(np.uint8)
+            cv2.imwrite(str(debug_dir / f"debug_alpha_hat_{stem}.png"), alpha_vis)
             logger.info(f"Debug images saved for bucket {stem}")
 
         filtered_candidates = select_candidate_components(
-            mask_data, score, img_w, img_h
+            mask_data, score, img_w, img_h, median_grad=median_grad
         )
 
         if not filtered_candidates:
@@ -674,6 +1439,21 @@ def discover_watermark_candidates(
             trimmed_candidates.append(mask)
         filtered_candidates = trimmed_candidates
 
+        # Deblot: remove satellite noise components using Otsu on the log(area)
+        # distribution.  The bimodal gap between glyph-sized components and tiny
+        # blotches is found from the data; no size threshold is hard-coded.
+        deblotted = [_deblot_mask_by_area(m) for m in filtered_candidates]
+        filtered_candidates = [m for m in deblotted if np.any(m)]
+        if not filtered_candidates:
+            logger.warning(f"Bucket {img_w}×{img_h}: all candidates empty after deblotching")
+            continue
+
+        if debug_dir is not None:
+            stem = f"{img_w}x{img_h}"
+            for idx, m in enumerate(filtered_candidates):
+                suffix = "" if idx == 0 else f"_{idx}"
+                cv2.imwrite(str(debug_dir / f"debug_deblotted{suffix}_{stem}.png"), m)
+
         for zone_mask in filtered_candidates:
             ys, xs = np.where(zone_mask == 255)
             if len(ys) == 0:
@@ -681,33 +1461,23 @@ def discover_watermark_candidates(
             cx = int(np.round(xs.mean()))
             cy = int(np.round(ys.mean()))
             zone = assign_zone(cx, cy, img_w, img_h)
-            bgra = crop_zone_to_bgra(mean_img, zone_mask)
-            if bgra is not None:
-                all_candidates.append(bgra)
-                logger.info(
-                    f"Bucket {img_w}×{img_h} zone {zone}: "
-                    f"candidate {bgra.shape[1]}×{bgra.shape[0]} px"
-                )
+            all_zone_data.append((zone_mask, img_w, img_h, zone, mean_img, wm_color))
+            logger.info(
+                f"Bucket {img_w}×{img_h} zone {zone}: "
+                f"{int(np.sum(zone_mask == 255)):,} stable px → queued for consensus vote"
+            )
 
-    if not all_candidates:
+    if not all_zone_data:
         logger.warning("No watermark candidates discovered across all buckets")
         return []
-
-    # Aspect-ratio dedup: if multiple candidates have similar aspect ratios
-    # (symmetric relative difference < 10%), keep only the largest.
-    deduped: List[np.ndarray] = []
-    for crop in sorted(all_candidates, key=lambda c: c.shape[0] * c.shape[1], reverse=True):
-        r1 = _aspect_ratio(crop)
-        if not any(
-            2 * abs(r1 - _aspect_ratio(kept)) / (r1 + _aspect_ratio(kept)) < 0.10
-            for kept in deduped
-        ):
-            deduped.append(crop)
-    all_candidates = deduped
 
     if qualifying_count <= 1:
         logger.info("Only one qualifying bucket — cross-validation unavailable")
 
-    families = select_best_family(all_candidates)
-    logger.info(f"Discovery complete: {len(families)} watermark family/families found")
-    return families
+    logger.info(
+        f"Consensus vote across {len(all_zone_data)} zone candidate(s) "
+        f"from {qualifying_count} bucket(s)"
+    )
+    result = _consensus_vote(all_zone_data, debug_dir=debug_dir)
+    logger.info(f"Discovery complete: {len(result)} watermark crop(s) after consensus vote")
+    return result

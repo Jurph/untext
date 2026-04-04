@@ -26,6 +26,7 @@ import untextre.metrics as metrics_mod
 import untextre.preprocessor as preprocessor_mod
 from untextre.cli import (
     _apply_color_enhancement,
+    _save_discovered_watermark_candidates,
     _save_clean_timing_report,
     find_known_mask_in_image,
     load_watermark_templates,
@@ -241,24 +242,28 @@ class TestTryWatermarkCascade:
         try_watermark_cascade(image, [])
         np.testing.assert_array_equal(image, orig)
 
-    def test_first_successful_template_wins(self, monkeypatch):
+    def test_all_templates_tried_best_wins(self, monkeypatch):
+        """All templates are evaluated; the one with the most inliers is returned."""
         image = np.zeros((60, 60, 3), dtype=np.uint8)
         templates = [
             ("a.png", np.zeros((8, 8, 4), dtype=np.uint8)),
             ("b.png", np.zeros((8, 8, 4), dtype=np.uint8)),
             ("c.png", np.zeros((8, 8, 4), dtype=np.uint8)),
         ]
-        matched_mask = np.ones((60, 60), dtype=np.uint8) * 255
-        matched_bbox = (10, 20, 15, 12)
+        mask_b = np.ones((60, 60), dtype=np.uint8) * 128
+        bbox_b = (10, 20, 15, 12)
+        mask_c = np.ones((60, 60), dtype=np.uint8) * 255
+        bbox_c = (5, 5, 20, 20)
         calls = []
 
         def fake_find_known_mask_in_image(_image, _tmpl, min_matches=6, dilation_pixels=7):
             calls.append((min_matches, dilation_pixels))
             if len(calls) == 1:
-                return None
+                return None               # a: no match
             if len(calls) == 2:
-                return matched_mask, matched_bbox
-            raise AssertionError("Cascade should stop after first successful template")
+                return mask_b, bbox_b, 5  # b: weak match
+            if len(calls) == 3:
+                return mask_c, bbox_c, 10 # c: stronger match — should win
 
         monkeypatch.setattr(
             cli_mod,
@@ -270,10 +275,34 @@ class TestTryWatermarkCascade:
 
         assert result is not None
         mask, bbox, template_name = result
-        assert template_name == "b.png"
-        np.testing.assert_array_equal(mask, matched_mask)
-        assert bbox == matched_bbox
-        assert calls == [(9, 5), (9, 5)]
+        assert template_name == "c.png", "Template with more inliers should win"
+        np.testing.assert_array_equal(mask, mask_c)
+        assert bbox == bbox_c
+        assert len(calls) == 3, "All three templates must be tried"
+        assert calls == [(9, 5), (9, 5), (9, 5)]
+
+
+class TestSaveDiscoveredWatermarkCandidates:
+    def test_exports_orb_prepped_candidates_only(self, tmp_path):
+        raw = np.zeros((11, 11, 4), dtype=np.uint8)
+        raw[:, :, :3] = 177
+        raw[3:8, 3:8, :3] = 220
+        raw[3:8, 3:8, 3] = 255
+        raw[5, 5, 3] = 0
+        raw[0, 0, 3] = 255
+
+        templates = _save_discovered_watermark_candidates(tmp_path, [raw])
+
+        assert len(templates) == 1
+        name, bgra = templates[0]
+        assert name == "watermark_candidate.png"
+        assert bgra.shape == (15, 15, 4)
+        assert np.all(bgra[:2, :, 3] == 0)
+        assert np.all(bgra[:, :2, 3] == 0)
+        assert bgra[7, 7, 3] == 255
+
+        saved = cv2.imread(str(tmp_path / "watermark_candidate.png"), cv2.IMREAD_UNCHANGED)
+        np.testing.assert_array_equal(saved, bgra)
 
 
 # =========================================================================
@@ -687,7 +716,7 @@ class TestProcessWithKnownMask:
         monkeypatch.setattr(
             cli_mod,
             "find_known_mask_in_image",
-            lambda *_args, **_kwargs: (mask, bbox),
+            lambda *_args, **_kwargs: (mask, bbox, 10),
         )
 
         import untextre.inpaint as inpaint_mod
@@ -856,6 +885,39 @@ class TestFindKnownMaskValidation:
         known_rgba[:, :, 3] = 255
         result = find_known_mask_in_image(target, known_rgba, min_matches=3)
         assert result is None
+
+    def test_known_mask_goes_through_orb_prep_before_descriptor_extraction(self, monkeypatch):
+        target = np.zeros((80, 100, 3), dtype=np.uint8)
+        known_rgba = np.zeros((20, 20, 4), dtype=np.uint8)
+        known_rgba[4:16, 4:16, :3] = 200
+        known_rgba[4:16, 4:16, 3] = 255
+
+        prepared_mask = np.zeros((20, 20), dtype=np.uint8)
+        prepared_mask[6:14, 6:14] = 255
+        helper_called = {"value": False}
+        orb_masks = []
+
+        def fake_prepare_candidate_for_orb(_bgra):
+            helper_called["value"] = True
+            prepared_bgr = np.zeros((20, 20, 3), dtype=np.uint8)
+            prepared_bgr[prepared_mask > 0] = 200
+            prepared_gray = cv2.cvtColor(prepared_bgr, cv2.COLOR_BGR2GRAY)
+            return prepared_bgr, prepared_mask, prepared_gray
+
+        class FakeORB:
+            def detectAndCompute(self, _image, mask):
+                orb_masks.append(None if mask is None else mask.copy())
+                return [], None
+
+        monkeypatch.setattr(cli_mod, "prepare_candidate_for_orb", fake_prepare_candidate_for_orb)
+        monkeypatch.setattr(cv2, "ORB_create", lambda nfeatures=1000: FakeORB())
+
+        result = find_known_mask_in_image(target, known_rgba)
+
+        assert result is None
+        assert helper_called["value"] is True
+        assert len(orb_masks) >= 1
+        assert np.array_equal(orb_masks[0], prepared_mask)
 
 
 # =========================================================================

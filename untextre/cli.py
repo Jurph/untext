@@ -22,8 +22,43 @@ from .utils import (
     get_image_files, load_image, save_image, setup_logger, pad_bbox_to_multiple,
     MODEL_CONFIDENCE_FLOOR, CLI_DEFAULT_CONFIDENCE,
 )
+from .orb_prep import prepare_candidate_bgra_for_orb, prepare_candidate_for_orb
 
 logger = setup_logger(__name__)
+
+
+def _save_discovered_watermark_candidates(
+    output_path: Path,
+    candidates: List[np.ndarray],
+) -> List[Tuple[str, np.ndarray]]:
+    """Save discovered candidates in the same orb-prepped form that -K will use."""
+    watermark_templates: List[Tuple[str, np.ndarray]] = []
+
+    for i, bgra in enumerate(candidates):
+        suffix = "" if i == 0 else f"_{i + 1}"
+        candidate_path = output_path / f"watermark_candidate{suffix}.png"
+        prepared_bgra = prepare_candidate_bgra_for_orb(bgra)
+        if candidate_path.exists():
+            logger.warning(f"Overwriting existing candidate: {candidate_path.name}")
+        cv2.imwrite(str(candidate_path), prepared_bgra)
+        logger.info(f"Saved watermark candidate: {candidate_path.name}")
+        watermark_templates.append((candidate_path.name, prepared_bgra))
+
+    written_names = {
+        f"watermark_candidate{'' if j == 0 else f'_{j+1}'}.png"
+        for j in range(len(candidates))
+    }
+    stale = [
+        p for p in sorted(output_path.glob("watermark_candidate*.png"))
+        if p.name not in written_names
+    ]
+    if stale:
+        logger.warning(
+            "Stale candidate file(s) from prior run still present: "
+            + ", ".join(p.name for p in stale)
+        )
+
+    return watermark_templates
 
 def _apply_color_enhancement(image: np.ndarray, target_hex: str, sensitivity: int = 3) -> np.ndarray:
     """Apply color-based enhancement to make subtle watermarks more visible.
@@ -265,7 +300,7 @@ def find_known_mask_in_image(
     known_mask_rgba: np.ndarray,
     min_matches: int = 6,
     dilation_pixels: int = 15,
-) -> Optional[Tuple[np.ndarray, Tuple[int, int, int, int]]]:
+) -> Optional[Tuple[np.ndarray, Tuple[int, int, int, int], int]]:
     """Find a known watermark/logo in target image using ORB feature matching.
 
     Uses ORB (Oriented FAST and Rotated BRIEF) to detect keypoints and match
@@ -280,30 +315,28 @@ def find_known_mask_in_image(
         known_mask_rgba: Known watermark as RGBA image (H×W×4, alpha channel is mask)
         min_matches: Minimum number of good matches required (default: 6)
         dilation_pixels: Pixels to dilate the mask for safety margin (default: 15)
-        
+
     Returns:
-        Tuple of (warped_mask, bbox) where:
+        Tuple of (warped_mask, bbox, inliers) where:
             - warped_mask: Binary mask (H×W) positioned on target image
             - bbox: Bounding box (x, y, w, h) of the detected region
+            - inliers: Number of RANSAC inliers (higher = stronger match)
         Returns None if no match found.
     """
     if known_mask_rgba.shape[2] != 4:
         raise ValueError("Known mask must be RGBA image (4 channels)")
     
-    # Extract BGR and alpha from known mask
-    # (cv2.imread with IMREAD_UNCHANGED reads PNGs as BGRA, not RGBA)
-    known_bgr = known_mask_rgba[:, :, :3]
-    known_alpha = known_mask_rgba[:, :, 3]
-    
-    # Convert to grayscale for ORB — both are BGR from cv2
-    known_gray = cv2.cvtColor(known_bgr, cv2.COLOR_BGR2GRAY)
+    # Extract a cleaned ORB view from the known mask. This strips transparent
+    # junk, heals isolated single-pixel dropouts, and adds a tiny transparent
+    # border so ORB does not learn crop-edge artifacts.
+    _, known_alpha, known_gray = prepare_candidate_for_orb(known_mask_rgba)
     target_gray = cv2.cvtColor(target_image, cv2.COLOR_BGR2GRAY)
     
     # Create ORB detector
     orb = cv2.ORB_create(nfeatures=1000)
     
     # Detect keypoints and compute descriptors
-    kp1, des1 = orb.detectAndCompute(known_gray, None)
+    kp1, des1 = orb.detectAndCompute(known_gray, known_alpha)
     kp2, des2 = orb.detectAndCompute(target_gray, None)
     
     if des1 is None or des2 is None:
@@ -447,7 +480,7 @@ def find_known_mask_in_image(
     mask_pixels = np.sum(binary_mask > 0)
     logger.info(f"Mask covers {mask_pixels:,} pixels")
     
-    return binary_mask, bbox
+    return binary_mask, bbox, int(inliers)
 
 
 def try_watermark_cascade(
@@ -456,7 +489,10 @@ def try_watermark_cascade(
     min_matches: int = 6,
     dilation_pixels: int = 15,
 ) -> Optional[Tuple[np.ndarray, Tuple[int, int, int, int], str]]:
-    """Try each watermark template against a loaded image. First match wins.
+    """Try every watermark template against a loaded image; return the best match.
+
+    All templates are evaluated.  The one with the most RANSAC inliers wins,
+    ensuring that a stronger match later in the list beats a weaker earlier hit.
 
     This is the matching-only step with no file I/O.  The caller decides
     what to do with the result (inpaint, save, fall back to detection, etc.).
@@ -468,8 +504,11 @@ def try_watermark_cascade(
         dilation_pixels: Pixels to dilate the matched mask.
 
     Returns:
-        Tuple of (mask, bbox, template_name) on first match, or None.
+        Tuple of (mask, bbox, template_name) for the best-matching template, or None.
     """
+    best: Optional[Tuple[np.ndarray, Tuple[int, int, int, int], str]] = None
+    best_inliers = -1
+
     for tmpl_name, tmpl_rgba in templates:
         logger.info(f"Trying template: {tmpl_name}")
         result = find_known_mask_in_image(
@@ -478,9 +517,15 @@ def try_watermark_cascade(
             dilation_pixels=dilation_pixels,
         )
         if result is not None:
-            mask, bbox = result
-            logger.info(f"Matched template: {tmpl_name}")
-            return mask, bbox, tmpl_name
+            mask, bbox, inliers = result
+            logger.info(f"Template {tmpl_name} matched with {inliers} inliers")
+            if inliers > best_inliers:
+                best = (mask, bbox, tmpl_name)
+                best_inliers = inliers
+
+    if best is not None:
+        logger.info(f"Best template: {best[2]} ({best_inliers} inliers)")
+        return best
 
     logger.info(f"No template matched (tried {len(templates)})")
     return None
@@ -550,7 +595,7 @@ def process_with_known_mask(
         timings['total_time'] = time.time() - start_time
         return timings
     
-    mask, bbox = match_result
+    mask, bbox, _inliers = match_result
     timings['mask_found'] = True
     
     # Save mask if requested
@@ -693,7 +738,8 @@ def main() -> None:
         from .discovery import discover_watermark_candidates
 
         logger.info("Running watermark discovery (-U mode)...")
-        candidates = discover_watermark_candidates(image_files)
+        debug_dir = output_path if args.debug_discovery else None
+        candidates = discover_watermark_candidates(image_files, debug_dir=debug_dir)
 
         if not candidates:
             logger.error(
@@ -702,30 +748,8 @@ def main() -> None:
             )
             sys.exit(1)
 
-        # Write candidates to output dir before processing
-        watermark_templates = []
-        for i, bgra in enumerate(candidates):
-            suffix = "" if i == 0 else f"_{i + 1}"
-            candidate_path = output_path / f"watermark_candidate{suffix}.png"
-            if candidate_path.exists():
-                logger.warning(f"Overwriting existing candidate: {candidate_path.name}")
-            # Array is BGRA — cv2.imwrite saves channel 3 as alpha automatically
-            cv2.imwrite(str(candidate_path), bgra)
-            logger.info(f"Saved watermark candidate: {candidate_path.name}")
-            watermark_templates.append((candidate_path.name, bgra))
-
-        # Warn about stale candidates from prior runs
-        written_names = {
-            f"watermark_candidate{'' if j == 0 else f'_{j+1}'}.png"
-            for j in range(len(candidates))
-        }
-        stale = [p for p in sorted(output_path.glob("watermark_candidate*.png"))
-                 if p.name not in written_names]
-        if stale:
-            logger.warning(
-                "Stale candidate file(s) from prior run still present: "
-                + ", ".join(p.name for p in stale)
-            )
+        # Export candidates in orb-prepped form so on-disk templates match -K inputs.
+        watermark_templates = _save_discovered_watermark_candidates(output_path, candidates)
 
     # ── Load watermark templates ─────────────────────────────────────
     # Priority: -U (already loaded above) > -K flag > auto-check watermarks/ dir
@@ -1295,6 +1319,14 @@ def create_parser() -> argparse.ArgumentParser:
         help="Auto-discover watermark from input directory via low-variance stacking, "
              "save candidate BGRA template(s) to output dir, then process with ORB matching. "
              "Requires directory input. Mutually exclusive with -K."
+    )
+
+    parser.add_argument(
+        "--debug-discovery",
+        action="store_true",
+        default=False,
+        help="Save per-bucket debug images (log-variance map and mean image) to the output "
+             "directory during -U discovery. Useful for diagnosing threshold issues."
     )
 
     parser.add_argument(

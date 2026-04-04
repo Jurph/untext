@@ -147,7 +147,7 @@ class TestWatermarkCompositedPipeline:
             composited, watermark_rgba, min_matches=6, dilation_pixels=7
         )
         assert result is not None, "Known-mask detection should find the watermark"
-        mask, bbox = result
+        mask, bbox, _inliers = result
         cleaned = inpaint_image(
             composited, mask, bbox=bbox, method=method, auto_retry=False
         )

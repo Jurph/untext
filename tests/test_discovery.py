@@ -5,7 +5,11 @@ import random
 import cv2
 from pathlib import Path
 from unittest.mock import patch, MagicMock
-from untextre.discovery import bucket_images_by_size, assign_zone
+from untextre.discovery import (
+    bucket_images_by_size,
+    assign_zone,
+    _candidate_meets_consensus_minimums,
+)
 
 def test_bucket_images_by_size_groups_correctly(tmp_path):
     # Create fake image files with known sizes
@@ -54,6 +58,72 @@ def test_assign_zone_portrait():
 
 
 from untextre.discovery import crop_zone_to_bgra
+
+
+def _make_orb_ready_candidate(size: int = 128) -> np.ndarray:
+    bgr = np.zeros((size, size, 3), dtype=np.uint8)
+    alpha = np.zeros((size, size), dtype=np.uint8)
+    center = (size // 2, size // 2)
+    corner_size = max(6, size // 10)
+    cv2.circle(bgr, center, size // 3, (220, 220, 220), 6, cv2.LINE_AA)
+    cv2.circle(bgr, center, size // 7, (220, 220, 220), -1, cv2.LINE_AA)
+    cv2.line(
+        bgr,
+        (size // 5, size // 2),
+        (size - size // 5, size // 2),
+        (220, 220, 220),
+        4,
+        cv2.LINE_AA,
+    )
+    cv2.circle(alpha, center, size // 3, 255, 6, cv2.LINE_AA)
+    cv2.circle(alpha, center, size // 7, 255, -1, cv2.LINE_AA)
+    cv2.line(
+        alpha,
+        (size // 5, size // 2),
+        (size - size // 5, size // 2),
+        255,
+        4,
+        cv2.LINE_AA,
+    )
+    for x, y in (
+        (size // 4, size // 4),
+        (size - size // 4 - corner_size, size // 4),
+        (size // 4, size - size // 4 - corner_size),
+        (size - size // 4 - corner_size, size - size // 4 - corner_size),
+    ):
+        cv2.rectangle(bgr, (x, y), (x + corner_size, y + corner_size), (220, 220, 220), -1)
+        cv2.rectangle(alpha, (x, y), (x + corner_size, y + corner_size), 255, -1)
+    return np.dstack([bgr, alpha])
+
+
+def _make_orb_dead_bar(width: int = 160, height: int = 40) -> np.ndarray:
+    bgra = np.zeros((height, width, 4), dtype=np.uint8)
+    bgra[10:30, 20:140, :3] = 220
+    bgra[10:30, 20:140, 3] = 255
+    return bgra
+
+
+def _stamp_transparent_patch(
+    image: np.ndarray,
+    patch_bgra: np.ndarray,
+    top: int,
+    left: int,
+) -> None:
+    h, w = patch_bgra.shape[:2]
+    alpha = patch_bgra[:, :, 3:4].astype(np.float32) / 255.0
+    region = image[top:top + h, left:left + w].astype(np.float32)
+    patch = patch_bgra[:, :, :3].astype(np.float32)
+    image[top:top + h, left:left + w] = np.clip(
+        patch * alpha + region * (1.0 - alpha),
+        0,
+        255,
+    ).astype(np.uint8)
+
+
+def _accept_candidate_for_consensus(bgra: np.ndarray):
+    alpha = bgra[:, :, 3] > 0
+    area = int(alpha.sum())
+    return True, area, bgra.shape[1], bgra.shape[0], 128, 0.25, 12
 
 def test_crop_zone_to_bgra_shape_and_alpha():
     # 100x100 mean image, blob occupying rows 30-60, cols 40-70
@@ -111,6 +181,34 @@ def test_crop_zone_to_bgra_channel_order():
     # Channel 0 should be 255 (blue), channel 2 should be 0 (red) — BGRA order
     assert bgra[b, b, 0] == 255  # B channel
     assert bgra[b, b, 2] == 0    # R channel
+
+
+def test_candidate_minimums_reject_orb_unusable_bar():
+    candidate = _make_orb_dead_bar()
+
+    is_valid, area, bbox_w, bbox_h, edge_px, fill_ratio, orb_keypoints = _candidate_meets_consensus_minimums(candidate)
+
+    assert area > 0
+    assert bbox_w >= 120
+    assert bbox_h >= 20
+    assert edge_px >= 64
+    assert fill_ratio > 0.01
+    assert orb_keypoints < 6
+    assert is_valid is False
+
+
+def test_candidate_minimums_accept_orb_ready_candidate():
+    candidate = _make_orb_ready_candidate()
+
+    is_valid, area, bbox_w, bbox_h, edge_px, fill_ratio, orb_keypoints = _candidate_meets_consensus_minimums(candidate)
+
+    assert area > 0
+    assert bbox_w >= 80
+    assert bbox_h >= 80
+    assert edge_px >= 64
+    assert fill_ratio > 0.01
+    assert orb_keypoints >= 6
+    assert is_valid is True
 
 def test_crop_zone_to_bgra_blob_at_edge_clamps_border():
     # Blob touching top-left corner — border cannot extend beyond (0,0)
@@ -335,7 +433,699 @@ def test_build_watermark_score_unstable_region_scores_zero(tmp_path):
     )
 
 
-from untextre.discovery import discover_watermark_candidates
+from untextre.discovery import compute_median_gradient
+
+
+def test_compute_median_gradient_watermark_survives_background_cancellation(tmp_path):
+    """Watermark edges should produce high median gradient; varied backgrounds cancel.
+
+    Setup: a white rectangle overlaid on random-valued images.  The overlay
+    creates consistent Sobel edges at its boundary in every image.  The random
+    background creates large but uncorrelated gradients everywhere else.
+
+    Under the median, uncorrelated values converge toward the median of the
+    background gradient distribution (~0 for zero-mean noise), while the
+    constant watermark edges persist.
+    """
+    rng = np.random.RandomState(17)
+    wm_slice = (slice(30, 60), slice(40, 100))
+    paths = []
+    for i in range(9):
+        bg = rng.randint(0, 255, (100, 150, 3), dtype=np.uint8)
+        bg[wm_slice] = 230
+        p = tmp_path / f"mg_{i}.png"
+        cv2.imwrite(str(p), bg)
+        paths.append(p)
+
+    med_grad = compute_median_gradient(paths)
+
+    assert med_grad is not None
+    assert med_grad.shape == (100, 150)
+
+    # Top edge of watermark rectangle: persistent horizontal step in every image
+    edge_score = float(med_grad[30, 40:100].mean())
+    # Well inside the watermark: constant value → near-zero gradient
+    interior_score = float(med_grad[35:55, 45:95].mean())
+    # Background region with no watermark: varied backgrounds cancel
+    bg_score = float(med_grad[5:25, 5:30].mean())
+
+    assert edge_score > interior_score * 3, (
+        f"Watermark edge ({edge_score:.4f}) should substantially exceed "
+        f"watermark interior ({interior_score:.4f})"
+    )
+    assert edge_score > bg_score, (
+        f"Watermark edge ({edge_score:.4f}) should exceed background "
+        f"median gradient ({bg_score:.4f})"
+    )
+
+
+def test_compute_median_gradient_returns_none_for_insufficient_images(tmp_path):
+    """Returns None when fewer than 3 images can be loaded."""
+    rng = np.random.RandomState(3)
+    paths = []
+    for i in range(2):
+        img = rng.randint(0, 255, (50, 50, 3), dtype=np.uint8)
+        p = tmp_path / f"few_{i}.png"
+        cv2.imwrite(str(p), img)
+        paths.append(p)
+
+    assert compute_median_gradient(paths) is None
+
+
+def test_build_watermark_score_boosted_by_median_gradient(tmp_path):
+    """Score at watermark boundary must be higher when median_grad is provided.
+
+    With varied backgrounds, the median gradient adds genuine signal at
+    watermark edges.  The score at those edges must be at least as high with
+    median_grad as without it (product of two positive values in [0,1] cannot
+    increase the score, but the normalized factors redistribute weight so that
+    the watermark edge, which is high in both var_boundary AND median_grad,
+    is preferentially boosted relative to background noise).
+
+    We test the structural property: with median_grad, the watermark-edge score
+    must dominate the background score by a larger margin than without it.
+    """
+    from untextre.discovery import compute_stack_statistics, build_watermark_score
+
+    rng = np.random.RandomState(55)
+    wm_slice = (slice(30, 60), slice(40, 100))
+    paths = []
+    for i in range(9):
+        bg = rng.randint(0, 200, (100, 150, 3), dtype=np.uint8)
+        bg[wm_slice] = 230
+        p = tmp_path / f"boost_{i}.png"
+        cv2.imwrite(str(p), bg)
+        paths.append(p)
+
+    stats = compute_stack_statistics(paths)
+    var_gray = stats["var_gray"].astype(np.float64)
+    log_var = np.log10(var_gray + 1e-8)
+    var_norm = cv2.normalize(log_var, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+    med_grad = compute_median_gradient(paths)
+
+    score_without = build_watermark_score(stats, var_norm, median_grad=None)
+    score_with    = build_watermark_score(stats, var_norm, median_grad=med_grad)
+
+    edge_row = 30  # top boundary of watermark rectangle
+    edge_without = float(score_without[edge_row, 40:100].mean())
+    edge_with    = float(score_with[edge_row, 40:100].mean())
+    bg_without   = float(score_without[5:25, 5:35].mean())
+    bg_with      = float(score_with[5:25, 5:35].mean())
+
+    snr_without = edge_without / (bg_without + 1e-8)
+    snr_with    = edge_with    / (bg_with    + 1e-8)
+
+    assert snr_with >= snr_without, (
+        f"Median gradient should not reduce watermark SNR: "
+        f"SNR without={snr_without:.2f}, SNR with={snr_with:.2f}"
+    )
+
+
+def test_select_candidate_prefers_structured_zone_over_flat_zone():
+    """Gradient-weighted ranking must prefer a text-like zone over a flat stable zone.
+
+    Setup: two zones with equal stable pixel count.
+      Zone A (top-left): flat uniform stable pixels — zero internal gradient.
+      Zone B (bottom-right): stable pixels arranged as a stripe pattern with
+        persistent edges — high median gradient at the stripe boundaries.
+
+    Without gradient weighting both zones rank equally.
+    With gradient weighting, Zone B must rank first.
+    """
+    from untextre.discovery import select_candidate_components, score_to_mask
+
+    H, W = 200, 300
+    labels_img = np.zeros((H, W), dtype=np.int32)
+    cc_stats = []
+    centroids = []
+
+    # Background label 0 (required by connectedComponentsWithStats format)
+    cc_stats.append([0, 0, W, H, H * W])
+    centroids.append([W / 2, H / 2])
+
+    # Zone A: flat block in top-left (zone (0,0)) — 5 components of 100px each
+    for i in range(5):
+        y, x = 10 + i * 15, 10 + i * 5
+        label = i + 1
+        labels_img[y : y + 10, x : x + 10] = label
+        cc_stats.append([x, y, 10, 10, 100])
+        centroids.append([x + 5, y + 5])
+
+    # Zone B: stripe in bottom-right (zone (2,1) for landscape) — 5 components of 100px each
+    for i in range(5):
+        y, x = 150 + i * 5, 230 + i * 5
+        label = i + 6
+        labels_img[y : y + 10, x : x + 10] = label
+        cc_stats.append([x, y, 10, 10, 100])
+        centroids.append([x + 5, y + 5])
+
+    num_labels = 11
+    mask_data = {
+        "num_labels": num_labels,
+        "labels": labels_img,
+        "stats": np.array(cc_stats, dtype=np.int32),
+        "centroids": np.array(centroids, dtype=np.float64),
+        "mask_raw": np.zeros((H, W), dtype=np.uint8),
+        "mask_clean": np.zeros((H, W), dtype=np.uint8),
+        "score_closed": np.zeros((H, W), dtype=np.uint8),
+    }
+    dummy_score = np.zeros((H, W), dtype=np.float32)
+
+    # Build a median_grad that is zero everywhere except Zone B pixels
+    median_grad = np.zeros((H, W), dtype=np.float32)
+    for i in range(5):
+        y, x = 150 + i * 5, 230 + i * 5
+        median_grad[y : y + 10, x : x + 10] = 1.0   # high persistent gradient
+
+    # Without gradient: both zones have equal area; zone A appears first (lower label index)
+    without = select_candidate_components(mask_data, dummy_score, W, H, max_zones=2)
+    # With gradient: Zone B must rank first
+    with_grad = select_candidate_components(
+        mask_data, dummy_score, W, H, max_zones=2, median_grad=median_grad
+    )
+
+    # In the gradient-weighted result, Zone B pixels must appear in the first candidate
+    zone_b_pixels_in_first = int(np.sum(with_grad[0][150:200, 220:300]))
+    assert zone_b_pixels_in_first > 0, (
+        "With gradient weighting, the structured zone (B) must be the top candidate"
+    )
+
+
+def test_select_candidate_components_avoids_full_frame_blob_per_component(monkeypatch):
+    from untextre.discovery import select_candidate_components
+
+    H, W = 80, 120
+    labels_img = np.zeros((H, W), dtype=np.int32)
+    cc_stats = [[0, 0, W, H, H * W]]
+    centroids = [[W / 2, H / 2]]
+
+    components = [
+        (1, 8, 8, 8, 8),
+        (2, 24, 12, 8, 8),
+        (3, 72, 48, 10, 10),
+        (4, 88, 52, 10, 10),
+    ]
+    for label, x, y, w, h in components:
+        labels_img[y : y + h, x : x + w] = label
+        cc_stats.append([x, y, w, h, w * h])
+        centroids.append([x + w / 2, y + h / 2])
+
+    mask_data = {
+        "num_labels": 5,
+        "labels": labels_img,
+        "stats": np.array(cc_stats, dtype=np.int32),
+        "centroids": np.array(centroids, dtype=np.float64),
+        "mask_raw": np.zeros((H, W), dtype=np.uint8),
+        "mask_clean": np.zeros((H, W), dtype=np.uint8),
+        "score_closed": np.zeros((H, W), dtype=np.uint8),
+    }
+    dummy_score = np.zeros((H, W), dtype=np.float32)
+
+    original_zeros = np.zeros
+    full_frame_uint8_calls = []
+
+    def tracking_zeros(shape, dtype=float, *args, **kwargs):
+        array = original_zeros(shape, dtype=dtype, *args, **kwargs)
+        if tuple(shape) == labels_img.shape and np.dtype(dtype) == np.uint8:
+            full_frame_uint8_calls.append(1)
+        return array
+
+    monkeypatch.setattr(np, "zeros", tracking_zeros)
+
+    candidates = select_candidate_components(mask_data, dummy_score, W, H, max_zones=2)
+
+    assert len(candidates) == 2
+    assert len(full_frame_uint8_calls) <= 2, (
+        "select_candidate_components should only allocate one full-frame union mask "
+        "per retained zone, not one temporary blob mask per component"
+    )
+
+
+from untextre.discovery import (
+    discover_watermark_candidates,
+    extract_watermark_colors,
+    _deblot_mask_by_area,
+)
+
+
+def test_deblot_removes_small_components_in_bimodal_distribution():
+    """Otsu on log(area) should remove tiny blotches while keeping glyph-sized components.
+
+    Signal: 10 components of ~120 px each (letter-sized).
+    Noise:  40 components of ~4 px each (satellite blotches).
+    After deblotting, the signal components must survive intact and the noise
+    components must be removed or nearly all removed.
+    """
+    rng = np.random.RandomState(7)
+    mask = np.zeros((300, 300), dtype=np.uint8)
+
+    # 10 large signal components (12×10 = 120 px each), well-separated
+    signal_region = (slice(10, 260), slice(10, 20))
+    for i in range(10):
+        y = 10 + i * 25
+        mask[y : y + 12, 10:20] = 255
+
+    # 40 tiny blotch components (2×2 = 4 px each), placed away from signal
+    for _ in range(40):
+        y = rng.randint(150, 290)
+        x = rng.randint(50, 290)
+        mask[y : y + 2, x : x + 2] = 255
+
+    clean = _deblot_mask_by_area(mask)
+
+    # Signal region must be fully preserved
+    assert np.array_equal(clean[signal_region], mask[signal_region]), (
+        "Signal components should survive deblotching unchanged"
+    )
+
+    # At least half the blotches should have been removed
+    n_before = int(cv2.connectedComponentsWithStats(mask)[0]) - 1
+    n_after  = int(cv2.connectedComponentsWithStats(clean)[0]) - 1
+    assert n_after <= n_before // 2, (
+        f"Expected roughly half or fewer components after deblotching: "
+        f"{n_before} → {n_after}"
+    )
+
+
+def test_deblot_preserves_uniform_components():
+    """When all components are the same size (unimodal), the mask is returned unchanged.
+
+    la_max − la_min < 0.5 triggers the early-return guard — no Otsu cut is made.
+    """
+    mask = np.zeros((200, 400), dtype=np.uint8)
+    # 12 identical 10×10 = 100 px blocks
+    for i in range(12):
+        x = 10 + i * 30
+        mask[50:60, x : x + 10] = 255
+
+    clean = _deblot_mask_by_area(mask)
+
+    n_before = int(cv2.connectedComponentsWithStats(mask)[0]) - 1
+    n_after  = int(cv2.connectedComponentsWithStats(clean)[0]) - 1
+    assert n_after == n_before, (
+        f"Uniform components should not be filtered: {n_before} → {n_after}"
+    )
+
+
+def test_deblot_skips_otsu_when_too_few_components():
+    """With fewer than 4 components, deblotching returns the mask unchanged.
+
+    Otsu needs at least 2 samples per class (minimum 4 total) to have any meaning.
+    """
+    mask = np.zeros((200, 200), dtype=np.uint8)
+    # 3 components: 1 large and 2 tiny — bimodal shape but below the floor.
+    mask[10:30, 10:30] = 255             # 20×20 = 400 px
+    mask[100:102, 100:102] = 255         # 2×2 = 4 px
+    mask[150:152, 150:152] = 255         # 2×2 = 4 px
+
+    clean = _deblot_mask_by_area(mask)
+
+    assert np.array_equal(clean, mask), (
+        "Mask with 3 components should be returned unchanged (too few for Otsu)"
+    )
+
+
+def test_deblot_keeps_single_surviving_component():
+    """A single large component after Otsu is a valid result and must be kept.
+
+    Previously, the `kept < 2` guard incorrectly reverted the result when Otsu
+    correctly found only one large component. The fix changes this to `kept < 1`.
+    """
+    mask = np.zeros((300, 300), dtype=np.uint8)
+    # 1 large signal component (100×20 = 2000 px)
+    mask[10:30, 10:110] = 255
+    # 20 tiny blotches (2×2 = 4 px each) — clearly bimodal distribution
+    rng = np.random.RandomState(42)
+    for _ in range(20):
+        y = rng.randint(150, 285)
+        x = rng.randint(150, 285)
+        mask[y : y + 2, x : x + 2] = 255
+
+    clean = _deblot_mask_by_area(mask)
+
+    # The large component must survive; the tiny blotches should be removed.
+    assert np.array_equal(clean[10:30, 10:110], mask[10:30, 10:110]), (
+        "Large signal component must be preserved"
+    )
+    n_clean = int(cv2.connectedComponentsWithStats(clean)[0]) - 1
+    assert n_clean == 1, (
+        f"Only the large component should survive deblotching, got {n_clean}"
+    )
+
+
+def test_extract_watermark_colors_reduces_background_bleed(tmp_path):
+    """Extracted WM color should be closer to the true watermark than the raw mean.
+
+    For α=0.4 (white watermark on random [40,160] background):
+      mean pixel ≈ 0.4·255 + 0.6·100 = 162  (heavily background-contaminated)
+    After transparency inversion, wm_color should recover a value much closer
+    to 255, demonstrating that background bleed has been substantially removed.
+    """
+    from untextre.discovery import compute_stack_statistics
+
+    rng = np.random.RandomState(99)
+    alpha = 0.4
+    wm_slice = (slice(40, 60), slice(60, 110))
+
+    paths = []
+    for i in range(8):
+        bg = rng.randint(40, 160, (100, 150, 3), dtype=np.uint8).astype(np.float32)
+        img = bg.copy()
+        img[wm_slice] = alpha * 255.0 + (1.0 - alpha) * bg[wm_slice]
+        p = tmp_path / f"bleed_{i}.png"
+        cv2.imwrite(str(p), img.clip(0, 255).astype(np.uint8))
+        paths.append(p)
+
+    stats = compute_stack_statistics(paths)
+    mean_bgr = stats["mean_bgr"]
+    var_gray = stats["var_gray"]
+
+    # Pass the known watermark region as the precision mask.
+    # extract_watermark_colors is agnostic to how the mask was obtained.
+    precision_mask = np.zeros((100, 150), dtype=np.uint8)
+    precision_mask[wm_slice] = 255
+
+    wm_color, alpha_hat = extract_watermark_colors(mean_bgr, var_gray, precision_mask)
+
+    # Extracted color at WM pixels should be closer to white (255) than the
+    # raw mean, which is contaminated with ~60% background content.
+    mean_error = float(np.abs(mean_bgr[wm_slice].astype(float) - 255).mean())
+    extracted_error = float(np.abs(wm_color[wm_slice].astype(float) - 255).mean())
+    assert extracted_error < mean_error, (
+        f"extract_watermark_colors error ({extracted_error:.1f}) should be < "
+        f"raw mean error ({mean_error:.1f}) for a semi-transparent watermark"
+    )
+
+    # Alpha should register as substantially positive in the WM region.
+    wm_alpha = float(alpha_hat[wm_slice].mean())
+    assert wm_alpha > 0.2, (
+        f"Expected alpha_hat > 0.2 at watermark pixels, got {wm_alpha:.3f}"
+    )
+
+
+def test_extract_watermark_colors_opaque_watermark_unchanged(tmp_path):
+    """For an opaque watermark (α=1.0), extracted color should match the WM exactly."""
+    from untextre.discovery import compute_stack_statistics
+
+    rng = np.random.RandomState(77)
+    wm_slice = (slice(30, 50), slice(50, 100))
+    wm_true = np.array([200, 180, 160], dtype=np.uint8)
+
+    paths = []
+    for i in range(6):
+        img = rng.randint(30, 180, (80, 120, 3), dtype=np.uint8)
+        img[wm_slice] = wm_true
+        p = tmp_path / f"opaque_{i}.png"
+        cv2.imwrite(str(p), img)
+        paths.append(p)
+
+    stats = compute_stack_statistics(paths)
+    mean_bgr = stats["mean_bgr"]
+    var_gray = stats["var_gray"]
+
+    precision_mask = np.zeros((80, 120), dtype=np.uint8)
+    precision_mask[wm_slice] = 255
+
+    wm_color, alpha_hat = extract_watermark_colors(mean_bgr, var_gray, precision_mask)
+
+    # Opaque watermark: mean_bgr already equals WM color; extracted should not
+    # introduce new error relative to the raw mean.
+    mean_error = float(np.abs(mean_bgr[wm_slice].astype(float) - wm_true.astype(float)).mean())
+    extracted_error = float(np.abs(wm_color[wm_slice].astype(float) - wm_true.astype(float)).mean())
+    assert extracted_error <= mean_error + 5, (
+        f"Opaque case: extracted error ({extracted_error:.1f}) should not greatly exceed "
+        f"mean error ({mean_error:.1f})"
+    )
+
+    # Alpha should be near 1.0 (opaque) at watermark pixels.
+    wm_alpha = float(alpha_hat[wm_slice].mean())
+    assert wm_alpha > 0.8, f"Expected alpha_hat ≈ 1.0 for opaque watermark, got {wm_alpha:.3f}"
+
+from untextre.discovery import _consensus_vote
+from untextre.watermark_consensus import ConsensusTemplate
+
+
+def _template_from_crop(label: str, crop: np.ndarray, member_indices=(0,), family_count: int = 1):
+    return ConsensusTemplate(
+        label=label,
+        bgra=crop,
+        alpha_mass=float(crop[:, :, 3].astype(np.float32).sum() / 255.0),
+        member_indices=tuple(member_indices),
+        family_count=family_count,
+    )
+
+
+def test_consensus_vote_delegates_cross_bucket_candidates_to_graph_builder(monkeypatch):
+    H_a, W_a = 500, 700
+    H_b, W_b = 400, 560
+    mask_a = np.zeros((H_a, W_a), dtype=np.uint8)
+    mask_b = np.zeros((H_b, W_b), dtype=np.uint8)
+    mask_a[50:100, 500:600] = 255
+    mask_b[250:290, 10:80] = 255
+
+    mean_a = np.full((H_a, W_a, 3), 128, dtype=np.uint8)
+    mean_b = np.full((H_b, W_b, 3), 144, dtype=np.uint8)
+    wm_a = np.full((H_a, W_a, 3), 200, dtype=np.uint8)
+    wm_b = np.full((H_b, W_b, 3), 210, dtype=np.uint8)
+
+    expected = crop_zone_to_bgra(mean_a, mask_a, wm_color=wm_a)
+    captured = {}
+
+    def fake_build_final_templates(records, debug_dir=None):
+        assert debug_dir is None
+        assert len(records) == 2
+        captured["family_keys"] = [record.metadata.family_key for record in records]
+        captured["zones"] = [record.metadata.zone for record in records]
+        return [_template_from_crop("consensus", expected, member_indices=(0, 1), family_count=2)]
+
+    monkeypatch.setattr("untextre.discovery._candidate_meets_consensus_minimums", _accept_candidate_for_consensus)
+    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
+
+    crops = _consensus_vote([
+        (mask_a, W_a, H_a, (2, 0), mean_a, wm_a),
+        (mask_b, W_b, H_b, (0, 1), mean_b, wm_b),
+    ])
+
+    assert captured["family_keys"] == [(W_a, H_a), (W_b, H_b)]
+    assert captured["zones"] == [(2, 0), (0, 1)]
+    assert len(crops) == 1
+    assert np.array_equal(crops[0], expected)
+
+
+def test_consensus_vote_same_bucket_different_zone_remains_separate_input(monkeypatch):
+    H, W = 500, 700
+    mask_1 = np.zeros((H, W), dtype=np.uint8)
+    mask_2 = np.zeros((H, W), dtype=np.uint8)
+    mask_1[50:100, 500:600] = 255
+    mask_2[300:380, 10:110] = 255
+
+    dummy = np.full((H, W, 3), 128, dtype=np.uint8)
+    crop_1 = crop_zone_to_bgra(dummy, mask_1, wm_color=dummy)
+    crop_2 = crop_zone_to_bgra(dummy, mask_2, wm_color=dummy)
+
+    def fake_build_final_templates(records, debug_dir=None):
+        assert len(records) == 2
+        assert records[0].metadata.family_key == (W, H)
+        assert records[1].metadata.family_key == (W, H)
+        assert {records[0].metadata.zone, records[1].metadata.zone} == {(2, 0), (0, 1)}
+        return [
+            _template_from_crop("consensus", crop_1, member_indices=(0,), family_count=1),
+            _template_from_crop("consensus", crop_2, member_indices=(1,), family_count=1),
+        ]
+
+    monkeypatch.setattr("untextre.discovery._candidate_meets_consensus_minimums", _accept_candidate_for_consensus)
+    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
+
+    crops = _consensus_vote([
+        (mask_1, W, H, (2, 0), dummy, dummy),
+        (mask_2, W, H, (0, 1), dummy, dummy),
+    ])
+
+    assert len(crops) == 2
+    assert all(crop.shape[2] == 4 for crop in crops)
+
+
+def test_consensus_vote_singleton_returned_through_graph_builder(monkeypatch):
+    H, W = 100, 150
+    mask = np.zeros((H, W), dtype=np.uint8)
+    mask[20:40, 60:110] = 255
+    dummy_mean = np.full((H, W, 3), 100, dtype=np.uint8)
+    dummy_wm = np.full((H, W, 3), 200, dtype=np.uint8)
+    expected = crop_zone_to_bgra(dummy_mean, mask, wm_color=dummy_wm)
+
+    def fake_build_final_templates(records, debug_dir=None):
+        assert len(records) == 1
+        assert records[0].metadata.family_key == (W, H)
+        return [_template_from_crop("consensus", expected, member_indices=(0,), family_count=1)]
+
+    monkeypatch.setattr("untextre.discovery._candidate_meets_consensus_minimums", _accept_candidate_for_consensus)
+    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
+
+    crops = _consensus_vote([(mask, W, H, (0, 0), dummy_mean, dummy_wm)])
+
+    assert len(crops) == 1
+    assert np.array_equal(crops[0], expected)
+
+
+def test_consensus_vote_returns_stingy_and_generous_outputs(monkeypatch):
+    H, W = 500, 700
+    mask = np.zeros((H, W), dtype=np.uint8)
+    mask[50:100, 500:600] = 255
+    mean_img = np.full((H, W, 3), 128, dtype=np.uint8)
+    wm_img = np.full((H, W, 3), 200, dtype=np.uint8)
+    stingy = crop_zone_to_bgra(mean_img, mask, wm_color=wm_img)
+    generous = stingy.copy()
+    generous[:, :, 3] = np.maximum(generous[:, :, 3], 128)
+
+    def fake_build_final_templates(records, debug_dir=None):
+        assert len(records) == 1
+        return [
+            _template_from_crop("stingy", stingy, member_indices=(0,), family_count=1),
+            _template_from_crop("generous", generous, member_indices=(0,), family_count=1),
+        ]
+
+    monkeypatch.setattr("untextre.discovery._candidate_meets_consensus_minimums", _accept_candidate_for_consensus)
+    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
+
+    crops = _consensus_vote([(mask, W, H, (2, 0), mean_img, wm_img)])
+
+    assert len(crops) == 2
+    assert crops[0].shape[2] == 4
+    assert crops[1].shape[2] == 4
+
+
+def test_consensus_vote_skips_tiny_candidates_before_graph_builder(monkeypatch):
+    H, W = 500, 700
+    tiny_mask = np.zeros((H, W), dtype=np.uint8)
+    big_mask = np.zeros((H, W), dtype=np.uint8)
+    tiny_mask[20:27, 30:37] = 255
+    big_mask[50:100, 500:600] = 255
+    mean_img = np.full((H, W, 3), 128, dtype=np.uint8)
+    wm_img = np.full((H, W, 3), 200, dtype=np.uint8)
+
+    expected = crop_zone_to_bgra(mean_img, big_mask, wm_color=wm_img)
+
+    def fake_build_final_templates(records, debug_dir=None):
+        assert len(records) == 1
+        assert records[0].metadata.zone == (2, 0)
+        return [_template_from_crop("consensus", expected, member_indices=(1,), family_count=1)]
+
+    def accept_only_nontrivial_candidates(bgra):
+        area = int((bgra[:, :, 3] > 0).sum())
+        return (area >= 100), area, bgra.shape[1], bgra.shape[0], 128, 0.25, 12 if area >= 100 else 0
+
+    monkeypatch.setattr("untextre.discovery._candidate_meets_consensus_minimums", accept_only_nontrivial_candidates)
+    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
+
+    crops = _consensus_vote([
+        (tiny_mask, W, H, (0, 0), mean_img, wm_img),
+        (big_mask, W, H, (2, 0), mean_img, wm_img),
+    ])
+
+    assert len(crops) == 1
+    assert np.array_equal(crops[0], expected)
+
+
+def test_consensus_vote_skips_sparse_spray_candidates_before_graph_builder(monkeypatch):
+    H, W = 500, 700
+    spray_mask = np.zeros((H, W), dtype=np.uint8)
+    big_mask = np.zeros((H, W), dtype=np.uint8)
+
+    spray_mask[20:24, 30:34] = 255
+    spray_mask[80:84, 220:224] = 255
+    spray_mask[150:154, 410:414] = 255
+    spray_mask[260:264, 560:564] = 255
+    spray_mask[340:344, 120:124] = 255
+    spray_mask[420:424, 640:644] = 255
+
+    big_mask[50:100, 500:600] = 255
+    mean_img = np.full((H, W, 3), 128, dtype=np.uint8)
+    wm_img = np.full((H, W, 3), 200, dtype=np.uint8)
+
+    expected = crop_zone_to_bgra(mean_img, big_mask, wm_color=wm_img)
+
+    def fake_build_final_templates(records, debug_dir=None):
+        assert len(records) == 1
+        assert records[0].metadata.zone == (2, 0)
+        return [_template_from_crop("consensus", expected, member_indices=(1,), family_count=1)]
+
+    def accept_only_nontrivial_candidates(bgra):
+        area = int((bgra[:, :, 3] > 0).sum())
+        return (area >= 100), area, bgra.shape[1], bgra.shape[0], 128, 0.25, 12 if area >= 100 else 0
+
+    monkeypatch.setattr("untextre.discovery._candidate_meets_consensus_minimums", accept_only_nontrivial_candidates)
+    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
+
+    crops = _consensus_vote([
+        (spray_mask, W, H, (0, 0), mean_img, wm_img),
+        (big_mask, W, H, (2, 0), mean_img, wm_img),
+    ])
+
+    assert len(crops) == 1
+    assert np.array_equal(crops[0], expected)
+
+
+def test_consensus_vote_skips_orb_unusable_candidate_before_graph_builder(monkeypatch):
+    H, W = 500, 700
+    dummy_mask = np.zeros((H, W), dtype=np.uint8)
+    dummy_mask[50:100, 500:600] = 255
+    mean_img = np.full((H, W, 3), 128, dtype=np.uint8)
+    wm_img = np.full((H, W, 3), 200, dtype=np.uint8)
+
+    bad_candidate = _make_orb_dead_bar()
+    good_candidate = _make_orb_ready_candidate()
+
+    def fake_crop_zone_to_bgra(*args, **kwargs):
+        if not hasattr(fake_crop_zone_to_bgra, "calls"):
+            fake_crop_zone_to_bgra.calls = 0
+        fake_crop_zone_to_bgra.calls += 1
+        return bad_candidate.copy() if fake_crop_zone_to_bgra.calls == 1 else good_candidate.copy()
+
+    def fake_build_final_templates(records, debug_dir=None):
+        assert len(records) == 1
+        return [_template_from_crop("consensus", good_candidate, member_indices=(0,), family_count=1)]
+
+    monkeypatch.setattr("untextre.discovery.crop_zone_to_bgra", fake_crop_zone_to_bgra)
+    monkeypatch.setattr("untextre.discovery.split_candidate_bgra", lambda bgra: [bgra])
+    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
+
+    crops = _consensus_vote([
+        (dummy_mask, W, H, (0, 0), mean_img, wm_img),
+        (dummy_mask, W, H, (2, 0), mean_img, wm_img),
+    ])
+
+    assert len(crops) == 1
+    assert np.array_equal(crops[0], good_candidate)
+
+
+def test_consensus_vote_splits_one_raw_candidate_into_multiple_records(monkeypatch):
+    H, W = 240, 320
+    mask = np.zeros((H, W), dtype=np.uint8)
+    mean_img = np.full((H, W, 3), 128, dtype=np.uint8)
+    wm_img = np.full((H, W, 3), 200, dtype=np.uint8)
+
+    mask[120:132, 40:48] = 255
+    mask[120:132, 50:58] = 255
+    mask[120:132, 60:68] = 255
+    mask[24:42, 250:268] = 255
+
+    def fake_build_final_templates(records, debug_dir=None):
+        assert len(records) == 2
+        assert all(record.metadata.family_key == (W, H) for record in records)
+        assert all(record.metadata.zone == (1, 0) for record in records)
+        return [
+            _template_from_crop("consensus", records[0].bgra, member_indices=(0,), family_count=1),
+            _template_from_crop("consensus", records[1].bgra, member_indices=(1,), family_count=1),
+        ]
+
+    monkeypatch.setattr("untextre.discovery._candidate_meets_consensus_minimums", _accept_candidate_for_consensus)
+    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
+
+    crops = _consensus_vote([(mask, W, H, (1, 0), mean_img, wm_img)])
+
+    assert len(crops) == 2
+    assert all(crop.shape[2] == 4 for crop in crops)
+
 
 def test_discover_two_pass_processes_all_qualifying_buckets(tmp_path, monkeypatch):
     """Pass-1 pooling: both qualifying buckets are processed in pass 2.
@@ -348,19 +1138,20 @@ def test_discover_two_pass_processes_all_qualifying_buckets(tmp_path, monkeypatc
     calls = []
     real_build = __import__("untextre.discovery", fromlist=["build_watermark_score"]).build_watermark_score
 
-    def tracking_build(stats, var_norm):
+    def tracking_build(stats, var_norm, **kwargs):
         calls.append(True)
-        return real_build(stats, var_norm)
+        return real_build(stats, var_norm, **kwargs)
 
     monkeypatch.setattr("untextre.discovery.build_watermark_score", tracking_build)
 
     rng = np.random.RandomState(50)
-    wm = np.array([240, 240, 240], dtype=np.uint8)
+    wm_patch_a = _make_orb_ready_candidate(140)
+    wm_patch_b = _make_orb_ready_candidate(160)
 
     paths_a = []
     for i in range(4):
         img = rng.randint(40, 160, (150, 200, 3), dtype=np.uint8)
-        img[130:145, 170:195] = wm
+        _stamp_transparent_patch(img, wm_patch_a, 5, 55)
         p = tmp_path / f"a_{i}.png"
         cv2.imwrite(str(p), img)
         paths_a.append(p)
@@ -368,7 +1159,7 @@ def test_discover_two_pass_processes_all_qualifying_buckets(tmp_path, monkeypatc
     paths_b = []
     for i in range(4):
         img = rng.randint(40, 160, (200, 300, 3), dtype=np.uint8)
-        img[185:196, 275:295] = wm
+        _stamp_transparent_patch(img, wm_patch_b, 18, 112)
         p = tmp_path / f"b_{i}.png"
         cv2.imwrite(str(p), img)
         paths_b.append(p)
@@ -381,14 +1172,13 @@ def test_discover_two_pass_processes_all_qualifying_buckets(tmp_path, monkeypatc
 
 def test_discover_finds_watermark_in_homogeneous_batch(tmp_path):
     """Integration test: batch of images with a consistent watermark blob."""
-    wm = np.array([220, 220, 220], dtype=np.uint8)
+    wm_patch = _make_orb_ready_candidate(160)
     paths = []
     np.random.seed(0)
     random.seed(0)
     for i in range(6):
         img = np.random.randint(30, 180, (300, 400, 3), dtype=np.uint8)
-        # Fixed watermark: 50x30 block at bottom-right corner
-        img[260:290, 340:390] = wm
+        _stamp_transparent_patch(img, wm_patch, 130, 230)
         p = tmp_path / f"img{i}.png"
         cv2.imwrite(str(p), img)
         paths.append(p)
@@ -450,15 +1240,14 @@ def test_discover_finds_candidate_near_watermark_despite_adjacent_stable_mass(tm
     rng = np.random.RandomState(20)
 
     stable_color = np.array([210, 210, 210], dtype=np.int16)
-    watermark_color = np.array([238, 238, 238], dtype=np.uint8)
-    wm_slice = (slice(220, 250), slice(320, 390))
+    watermark_patch = _make_orb_ready_candidate(160)
     mass_slice = (slice(120, 250), slice(170, 340))
 
     for i in range(6):
         img = rng.randint(20, 180, (300, 400, 3), dtype=np.uint8)
         stable_region = stable_color + rng.randint(-8, 9, (130, 170, 3))
         img[mass_slice] = np.clip(stable_region, 0, 255).astype(np.uint8)
-        img[wm_slice] = watermark_color
+        _stamp_transparent_patch(img, watermark_patch, 130, 230)
         path = tmp_path / f"attached_{i}.png"
         cv2.imwrite(str(path), img)
         paths.append(path)
@@ -623,13 +1412,12 @@ def test_discovery_end_to_end_with_real_images(tmp_path):
     """
     np.random.seed(42)
     random.seed(42)
-    wm_patch = np.full((40, 80, 3), 210, dtype=np.uint8)
+    wm_patch = _make_orb_ready_candidate(160)
     paths = []
     for i in range(6):
         # Randomize background to simulate real photos
         img = np.random.randint(20, 200, (400, 600, 3), dtype=np.uint8)
-        # Place identical watermark bottom-right
-        img[350:390, 510:590] = wm_patch
+        _stamp_transparent_patch(img, wm_patch, 220, 400)
         p = tmp_path / f"photo_{i:02d}.png"  # PNG to avoid JPEG compression artifacts
         cv2.imwrite(str(p), img)
         paths.append(p)
