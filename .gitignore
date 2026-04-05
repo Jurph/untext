@@ -214,5 +214,10 @@ experiments/
 watermarks/*
 !watermarks/.gitkeep
 
+# Test fixture images (local experiments; not committed)
+# Directory is tracked via .gitkeep; image contents are local only.
+tests/images/fixtures/*
+!tests/images/fixtures/.gitkeep
+
 # Claude Code project instructions (local only)
 CLAUDE.md

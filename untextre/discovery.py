@@ -204,23 +204,21 @@ def select_best_family(candidates: List[np.ndarray]) -> List[np.ndarray]:
         return []
 
     families: List[List[np.ndarray]] = []
+    family_reps: List[np.ndarray] = []   # parallel list: family_reps[i] is the rep for families[i]
 
     sorted_candidates = sorted(candidates, key=lambda c: c.shape[0] * c.shape[1], reverse=True)
     for crop in sorted_candidates:
         assigned = False
-        for family in families:
-            rep = max(family, key=lambda c: c.shape[0] * c.shape[1])
+        for i, rep in enumerate(family_reps):
             if compute_alpha_iou(crop, rep) >= CROSS_BUCKET_IOU_THRESHOLD:
-                family.append(crop)
+                families[i].append(crop)
                 assigned = True
                 break
         if not assigned:
             families.append([crop])
+            family_reps.append(crop)   # first (and so far largest) crop in this new family
 
-    representatives = [
-        max(family, key=lambda c: c.shape[0] * c.shape[1])
-        for family in families
-    ]
+    representatives = list(family_reps)
     representatives.sort(key=lambda c: c.shape[0] * c.shape[1], reverse=True)
     return representatives
 
@@ -284,19 +282,19 @@ def _precision_outlier_threshold(var_gray: np.ndarray) -> float:
         return 0.0
 
     log_prec = -np.log10(flat + 1e-8)
-    q1, q3 = float(np.percentile(log_prec, 25)), float(np.percentile(log_prec, 75))
+    q1, q3 = np.percentile(log_prec, [25, 75]).tolist()
     fence = q3 + 3.0 * (q3 - q1)      # Tukey extreme-outlier upper fence
     return float(10.0 ** (-fence))     # convert back to variance threshold
 
 
 def _normalize_01(arr: np.ndarray) -> np.ndarray:
     """Min-max normalize arr to [0, 1] float32. Returns zeros if range is degenerate."""
-    a = arr.astype(np.float64)
+    a = arr.astype(np.float32)
     lo = float(a.min())
     hi = float(a.max())
-    if hi - lo < 1e-12:
+    if hi - lo < 1e-9:
         return np.zeros_like(a, dtype=np.float32)
-    return ((a - lo) / (hi - lo)).astype(np.float32)
+    return (a - lo) / (hi - lo)
 
 
 def compute_stack_statistics(paths: List[Path]) -> Optional[Dict[str, np.ndarray]]:
@@ -313,7 +311,7 @@ def compute_stack_statistics(paths: List[Path]) -> Optional[Dict[str, np.ndarray
     Returns:
         Dict with keys:
             mean_bgr  H×W×3 uint8
-            var_gray  H×W float32 population variance
+            var_gray  H×W float32 sample variance (Bessel-corrected, denominator n−1)
         or None if fewer than 3 images loaded.
     """
     n = 0
@@ -345,7 +343,7 @@ def compute_stack_statistics(paths: List[Path]) -> Optional[Dict[str, np.ndarray
         return None
 
     mean_bgr = bgr_mean.astype(np.uint8)
-    var_gray = (gray_M2 / n).astype(np.float32)
+    var_gray = (gray_M2 / (n - 1)).astype(np.float32) if n > 1 else np.zeros_like(gray_M2, dtype=np.float32)
 
     return {
         "n_loaded": n,
@@ -854,349 +852,6 @@ def _top_n_alpha_components(alpha: np.ndarray, n: int = 1) -> np.ndarray:
     return out
 
 
-def _filter_alpha_by_area(alpha: np.ndarray, min_area: int) -> np.ndarray:
-    """Return alpha with components smaller than min_area zeroed out.
-
-    Removes isolated noise pixels while preserving the distributed structure
-    of real watermarks, whose individual glyphs/components are each typically
-    several hundred pixels.
-
-    Args:
-        alpha: H×W uint8 alpha channel.
-        min_area: Minimum connected-component area (in pixels) to keep.
-
-    Returns:
-        H×W uint8 alpha with sub-threshold components set to 0.
-    """
-    _, labels, stats, _ = cv2.connectedComponentsWithStats(
-        (alpha > 0).astype(np.uint8), connectivity=8
-    )
-    out = np.zeros_like(alpha)
-    for cid in range(1, stats.shape[0]):
-        if stats[cid, cv2.CC_STAT_AREA] >= min_area:
-            out[labels == cid] = alpha[labels == cid]
-    return out
-
-
-def _geom_from_alpha(alpha: np.ndarray) -> np.ndarray:
-    """Convert an alpha channel into a soft edge-likelihood geometry field.
-
-    Pipeline:
-      alpha → soft binarization → Canny edges → distance transform
-      → exp(-dist / 4.0)
-
-    The resulting field has soft peaks at edge locations and smooth falloff
-    into the interior.  It gives phase correlation a clean high-frequency
-    signal regardless of whether the watermark is text, logo, solid, or
-    semi-transparent.
-
-    Args:
-        alpha: H×W uint8 alpha channel.
-
-    Returns:
-        H×W float32 geometry field in [0, 1].  All-zero if alpha is empty.
-    """
-    a = alpha.astype(np.float32) / 255.0
-    soft = cv2.GaussianBlur(a, (0, 0), 1.0)
-    nonzero = soft[soft > 0]
-    if len(nonzero) == 0:
-        return np.zeros_like(soft)
-    thresh = float(np.quantile(nonzero, 0.25))
-    mask = (soft > thresh).astype(np.uint8) * 255
-    edges = cv2.Canny(mask, 50, 150)
-    dist = cv2.distanceTransform(255 - edges, cv2.DIST_L2, 3)
-    return np.exp(-dist / 4.0).astype(np.float32)
-
-
-def _register_pair(
-    geom_ref: np.ndarray,
-    geom_mov: np.ndarray,
-    min_scale: float = 0.1,
-    max_scale: float = 10.0,
-) -> Optional[Tuple[float, float, float, float]]:
-    """Register geom_mov onto geom_ref via log-polar + phase correlation.
-
-    Step 1: Pad both geometry fields to a common power-of-2 canvas.
-    Step 2: Compute FFT log-magnitude spectra; shift DC to centre.
-    Step 3: Convert spectra to log-polar coordinates.
-            In log-polar space a spatial scale factor s becomes a column shift
-            of ln(s) * W / ln(maxRadius) — algebraic consequence of the
-            similarity theorem for the Fourier transform.
-    Step 4: Phase-correlate the log-polar spectra; the column peak gives s.
-            Scale formula:  s = exp(col_shift * ln(maxRadius) / W)
-    Step 5: Resize geom_mov by s; pad to a fresh common canvas.
-    Step 6: Phase-correlate the rescaled pair; the x/y peak gives (tx_pc, ty_pc).
-
-    The response from step 6 (resp_trans) is used as the quality score.
-    A bad scale estimate produces a poorly-aligned rescaled pair → low
-    resp_trans, so resp_trans alone captures end-to-end registration quality.
-
-    Warp convention: to place crop_mov onto crop_ref's canvas, use
-        M = [[s, 0, -tx_pc], [0, s, -ty_pc]]
-    in cv2.warpAffine(crop_mov, M, (ref_w, ref_h)).
-
-    Args:
-        geom_ref: H×W float32 geometry field (reference, crop coordinates).
-        geom_mov: H×W float32 geometry field (moving, crop coordinates).
-        min_scale: Reject if estimated s < min_scale.
-        max_scale: Reject if estimated s > max_scale.
-
-    Returns:
-        (s, tx_pc, ty_pc, score) or None if registration fails or s is
-        out of bounds.  score ∈ (0, 1] is the translation peak response.
-    """
-    if geom_ref.max() < 1e-3 or geom_mov.max() < 1e-3:
-        return None
-
-    # ── Step 1: common power-of-2 canvas for efficient FFT ────────────────
-    H = max(geom_ref.shape[0], geom_mov.shape[0], 64)
-    W = max(geom_ref.shape[1], geom_mov.shape[1], 64)
-    H2 = 1 << (H - 1).bit_length()
-    W2 = 1 << (W - 1).bit_length()
-
-    def _pad(img: np.ndarray, h: int, w: int) -> np.ndarray:
-        out = np.zeros((h, w), dtype=np.float32)
-        out[:img.shape[0], :img.shape[1]] = img
-        return out
-
-    ref_p = _pad(geom_ref, H2, W2)
-    mov_p = _pad(geom_mov, H2, W2)
-
-    # ── Steps 2+3: FFT log-magnitude → log-polar ──────────────────────────
-    def _log_mag_lp(img: np.ndarray) -> np.ndarray:
-        F = np.fft.fft2(img)
-        mag = np.log1p(np.abs(np.fft.fftshift(F))).astype(np.float32)
-        center = (W2 / 2.0, H2 / 2.0)
-        max_r = min(H2, W2) / 2.0
-        return cv2.warpPolar(
-            mag, (W2, H2), center, max_r,
-            cv2.WARP_POLAR_LOG | cv2.INTER_LINEAR,
-        )
-
-    ref_lp = _log_mag_lp(ref_p)
-    mov_lp = _log_mag_lp(mov_p)
-
-    # ── Step 4: scale from log-polar phase correlation ─────────────────────
-    # Column axis of warpPolar log-polar output spans log(r) ∈ [0, ln(maxR)].
-    # A spatial scale s → radial expansion of FFT magnitude by s
-    #   → column shift of ln(s) · W2 / ln(maxR).
-    # Therefore s = exp(col_shift · ln(maxR) / W2).  Algebraic from the
-    # Fourier similarity theorem: F[f(x/s)](ξ) = s·F(sξ).
-    max_r = min(H2, W2) / 2.0
-    if max_r <= 1.0:
-        return None
-    hann_lp = cv2.createHanningWindow((W2, H2), cv2.CV_32F)
-    (col_shift, _row_shift), _resp_scale = cv2.phaseCorrelate(
-        ref_lp * hann_lp, mov_lp * hann_lp
-    )
-    s = float(np.exp(col_shift * np.log(max_r) / W2))
-    if not (min_scale <= s <= max_scale):
-        return None
-
-    # ── Steps 5+6: translation from phase correlation of rescaled mov ──────
-    new_h = max(1, round(geom_mov.shape[0] * s))
-    new_w = max(1, round(geom_mov.shape[1] * s))
-    mov_scaled = cv2.resize(geom_mov, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
-
-    H3 = max(geom_ref.shape[0], mov_scaled.shape[0], 64)
-    W3 = max(geom_ref.shape[1], mov_scaled.shape[1], 64)
-    H4 = 1 << (H3 - 1).bit_length()
-    W4 = 1 << (W3 - 1).bit_length()
-
-    ref_c = _pad(geom_ref, H4, W4)
-    mov_c = _pad(mov_scaled, H4, W4)
-
-    hann_c = cv2.createHanningWindow((W4, H4), cv2.CV_32F)
-    (tx_pc, ty_pc), resp_trans = cv2.phaseCorrelate(ref_c * hann_c, mov_c * hann_c)
-
-    return (s, float(tx_pc), float(ty_pc), float(resp_trans))
-
-
-def _find_largest_clique(adj: np.ndarray) -> List[int]:
-    """Find the largest clique in a graph defined by an adjacency matrix.
-
-    Bron-Kerbosch algorithm without pivoting.  Practical for N ≤ ~15 (expected
-    range of candidates in this pipeline is 3–12).
-
-    Args:
-        adj: (N, N) boolean symmetric array; adj[i,j] True means i and j
-             are compatible (RANSAC succeeded between them).
-
-    Returns:
-        Indices of the largest clique found.  Empty list if N=0.
-    """
-    n = adj.shape[0]
-    best: List[int] = []
-
-    def bk(current: List[int], candidates: List[int]) -> None:
-        nonlocal best
-        if not candidates:
-            if len(current) > len(best):
-                best = current[:]
-            return
-        for i in candidates:
-            new_cands = [j for j in candidates if j != i and adj[i, j]]
-            current.append(i)
-            bk(current, new_cands)
-            current.pop()
-
-    bk([], list(range(n)))
-    return best
-
-
-def _consensus_vote(
-    zone_data: List[Tuple[np.ndarray, int, int, Tuple[int, int], np.ndarray, np.ndarray]],
-    debug_dir: Optional[Path] = None,
-) -> List[np.ndarray]:
-    """Merge zone candidates via log-polar phase-correlation registration.
-
-    Two candidates from the same bucket (img_w, img_h) are from different spatial
-    zones of the same images — they are definitionally different watermarks and
-    must never be compared.  All cross-bucket pairs are attempted regardless of
-    zone position, since a watermark may land in different zones of differently-
-    sized images.
-
-    Algorithm:
-    1. Generate BGRA crops; extract per-crop geometry fields from alpha channels.
-    2. For every cross-bucket pair (i, j), call _register_pair(geom_i, geom_j).
-       The registration works entirely in crop-local coordinates; no full-image
-       step is needed because phase correlation has no minimum image size.
-    3. Accept a pair if its translation peak response exceeds a minimum floor.
-       Build a binary adjacency matrix and find the largest clique.
-    4. Register all clique members onto the reference crop (largest area) using
-       the crop-space transforms:
-           M = [[s, 0, -tx_pc], [0, s, -ty_pc]]
-       phaseCorrelate(ref, mov) returns (tx_pc, ty_pc) where mov is shifted by
-       (tx_pc, ty_pc) relative to ref, so negating brings mov into ref's frame.
-    5. Vote: keep pixels where ≥ 2 registered alpha masks agree.
-    6. Average color at surviving pixels; tight-crop the result.
-
-    Fallback: if no corroborated group is found, return all crops sorted by area.
-
-    Args:
-        zone_data: List of (zone_mask, img_w, img_h, zone, mean_bgr, wm_color).
-        debug_dir: Unused; kept for signature compatibility with caller.
-
-    Returns:
-        List containing one consensus BGRA crop, or all crops if fallback.
-    """
-    # ── Step 1: BGRA crops + geometry fields ──────────────────────────────
-    crops: List[np.ndarray] = []
-    buckets: List[Tuple[int, int]] = []
-    zones: List[Tuple[int, int]] = []
-
-    for zone_mask, img_w, img_h, zone, mean_img, wm_color in zone_data:
-        bgra = crop_zone_to_bgra(mean_img, zone_mask, wm_color=wm_color)
-        if bgra is None:
-            continue
-        crops.append(bgra)
-        buckets.append((img_w, img_h))
-        zones.append(zone)
-
-    if len(crops) <= 1:
-        return crops
-
-    n = len(crops)
-
-    # ── Step 2: per-candidate alpha filtering ─────────────────────────────
-    # Strip isolated noise pixels (area < 100 px) from each crop's alpha.
-    # This suppresses background artefacts that the Welford estimator picks up
-    # while preserving multi-component watermark structures (text, logos) whose
-    # individual components are each typically hundreds of pixels.
-    # 100 px is a structural lower bound: a recognisable glyph cannot be
-    # meaningfully represented below roughly 10×10 px (algebraic: 10*10 = 100).
-    _MIN_COMPONENT_AREA = 100
-
-    filtered_alphas: List[np.ndarray] = []
-    for crop in crops:
-        filtered_alphas.append(_filter_alpha_by_area(crop[:, :, 3], _MIN_COMPONENT_AREA))
-
-    # ── Step 3: corner-anchored overlay + pixel voting ────────────────────
-    # Watermarks are placed at a fixed offset from a corner of their source
-    # image.  Aligning crops by that corner brings the watermark pixels into
-    # register without any explicit transformation search.
-    #
-    # Anchor direction is determined per-candidate from its zone and image
-    # orientation.  zone = (col_bin, row_bin) from assign_zone.
-    #   Landscape (img_w >= img_h): col bins 0-2, row bins 0-1.
-    #   Portrait  (img_h  > img_w): col bins 0-1, row bins 0-2.
-    # Last-bin in each dimension → right/bottom anchor; otherwise left/top.
-    #
-    # Watermark pixels from same-watermark candidates land at the same canvas
-    # position regardless of source-image size.  Background artefacts in each
-    # candidate are at different canvas positions (different image heights shift
-    # their rows) and therefore accumulate fewer votes.
-
-    canvas_h = max(c.shape[0] for c in crops)
-    canvas_w = max(c.shape[1] for c in crops)
-
-    # Vote by distinct bucket: a pixel must be corroborated by candidates from
-    # at least 2 different (img_w, img_h) buckets.  Two candidates from the same
-    # bucket are definitionally different watermarks, so they cannot corroborate
-    # each other.  We implement this by OR-ing all same-bucket masks into one
-    # layer before counting.
-    unique_buckets = list(dict.fromkeys(buckets))   # preserves insertion order
-    bucket_idx_map = {b: i for i, b in enumerate(unique_buckets)}
-    n_b = len(unique_buckets)
-
-    # Shape: (n_buckets, canvas_h, canvas_w)
-    bucket_layers = np.zeros((n_b, canvas_h, canvas_w), dtype=bool)
-    color_sum   = np.zeros((canvas_h, canvas_w, 3), dtype=np.float64)
-    color_count = np.zeros((canvas_h, canvas_w), dtype=np.int32)
-
-    for crop, (img_w, img_h), zone, fa in zip(crops, buckets, zones, filtered_alphas):
-        h, w = crop.shape[:2]
-        col_bin, row_bin = zone
-        if img_w >= img_h:  # landscape
-            n_col_bins, n_row_bins = ZONE_LONG_DIVISIONS, ZONE_SHORT_DIVISIONS
-        else:               # portrait
-            n_col_bins, n_row_bins = ZONE_SHORT_DIVISIONS, ZONE_LONG_DIVISIONS
-
-        y0 = canvas_h - h if row_bin == n_row_bins - 1 else 0
-        x0 = canvas_w - w if col_bin == n_col_bins - 1 else 0
-
-        mask = fa > 127
-        bi = bucket_idx_map[(img_w, img_h)]
-        bucket_layers[bi, y0:y0+h, x0:x0+w] |= mask
-        color_sum[y0:y0+h, x0:x0+w] += (
-            crop[:, :, :3].astype(np.float64) * mask[:, :, np.newaxis]
-        )
-        color_count[y0:y0+h, x0:x0+w] += mask
-
-    # Count how many distinct buckets voted for each pixel.
-    vote = bucket_layers.sum(axis=0).astype(np.int32)
-
-    logger.debug(
-        f"Consensus: {n} crop(s), {n_b} bucket(s), canvas {canvas_w}×{canvas_h}, "
-        f"vote≥2: {int((vote >= 2).sum())} px"
-    )
-
-    # ── Step 4: consensus mask, color average, tight crop ─────────────────
-    consensus_alpha = (vote >= 2).astype(np.uint8) * 255
-    if not np.any(consensus_alpha):
-        logger.warning(
-            "Consensus: no pixel received ≥ 2 votes; returning all candidates."
-        )
-        return sorted(crops, key=lambda c: c.shape[0] * c.shape[1], reverse=True)
-
-    safe_count = np.maximum(color_count, 1)
-    consensus_bgr = (color_sum / safe_count[:, :, np.newaxis]).astype(np.uint8)
-    result = np.zeros((canvas_h, canvas_w, 4), dtype=np.uint8)
-    result[:, :, :3] = consensus_bgr
-    result[:, :, 3] = consensus_alpha
-
-    ys, xs = np.where(consensus_alpha == 255)
-    y0_c, y1_c = int(ys.min()), int(ys.max()) + 1
-    x0_c, x1_c = int(xs.min()), int(xs.max()) + 1
-    result = result[y0_c:y1_c, x0_c:x1_c]
-
-    logger.info(
-        f"Consensus: {n} candidate(s) → 1 crop ({result.shape[1]}×{result.shape[0]} px) "
-        f"from corner-anchored vote"
-    )
-    return [result]
-
-
 def _consensus_vote(
     zone_data: List[Tuple[np.ndarray, int, int, Tuple[int, int], np.ndarray, np.ndarray]],
     debug_dir: Optional[Path] = None,
@@ -1318,7 +973,7 @@ def discover_watermark_candidates(
     # All non-watermark pixels across all buckets contribute to Q1/Q3/IQR, making
     # the estimate robust against any single bucket's idiosyncrasies.
     pooled = np.concatenate(all_log_prec)
-    q1_p, q3_p = float(np.percentile(pooled, 25)), float(np.percentile(pooled, 75))
+    q1_p, q3_p = np.percentile(pooled, [25, 75]).tolist()
     global_stable_threshold = float(10.0 ** (-(q3_p + 3.0 * (q3_p - q1_p))))
 
     qualifying_count = len(bucket_data)
@@ -1332,7 +987,6 @@ def discover_watermark_candidates(
         logger.info("Single qualifying bucket — pooled threshold equals per-bucket threshold")
 
     # ── Pass 2: process each bucket using the shared global threshold ─────────
-    all_candidates: List[np.ndarray] = []   # kept for debug output only
     all_zone_data: List[Tuple[np.ndarray, int, int, Tuple[int, int], np.ndarray, np.ndarray]] = []
     # Each entry: (zone_mask, img_w, img_h, zone, mean_bgr, wm_color)
 

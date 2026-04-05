@@ -26,6 +26,26 @@ venv/Scripts/python -m pytest -m "not slow"
 
 The venv has TF 2.19, protobuf 6.x, scikit-image, streamlit, torch, and all other dependencies. It is the only Python environment on this machine that should be used for development or testing.
 
+## Never Invent Statistical Thresholds
+
+Every numerical constant in statistical or algorithmic code is a claim about the world. A claim without evidence is a guess. **Guessed thresholds are not neutral — they are actively harmful.** When you write `if n < 8` or `if confidence > 0.7` without a derivation, you are silently partitioning the input space into "things that will work" and "things that will silently fail," and you have no idea where that line actually falls.
+
+**The only acceptable sources for a numerical constant are:**
+
+1. **Peer-reviewed derivation** — a published result that bounds the quantity (e.g., Cochran's rule for chi-square validity, the CLT threshold for normal approximation, Otsu's own analysis of his method's convergence). Cite it in a comment.
+2. **Algebraic necessity** — a value that follows logically from the structure of the algorithm (e.g., `< 2` for Otsu because you cannot have two classes with one sample). The comment should show the algebra, not just state the number.
+3. **Empirical calibration** — a value measured against a representative, diverse dataset and documented as such. "I tried a few cases and it seemed fine" is not calibration.
+
+**What to do instead of guessing:**
+
+- If you don't know the right threshold, say so. "I don't know what minimum N guarantees reliable Otsu performance on a 1-D area histogram — this needs a citation or an experiment" is a correct and useful answer.
+- If an algorithm has a known degenerate input (e.g., dividing by zero, log of a negative), guard exactly against that degenerate case and nothing more.
+- If a guard is intended to avoid bad statistical behavior, flag it explicitly as provisional: `# EMPIRICAL — not yet validated` until it is.
+
+Fabricated thresholds create a false sense of rigor. They survive code review because they look like engineering. They fail silently in production because they were never true. The damage compounds when tests are written to confirm the fabricated threshold rather than to probe the underlying behavior.
+
+**In architecture discussions and code reviews:** do not propose specific numbers unless you can trace them. "We probably need at least N samples" followed by a specific N is a guess dressed as engineering. State the uncertainty instead: "Otsu reliability as a function of N is an empirical question we haven't answered."
+
 ## Verify, Don't Guess
 
 NEVER assume API behavior — verify it through documentation or testing. NEVER guess about data structures, return types, or method signatures. If you haven't seen it run, you don't know it works.

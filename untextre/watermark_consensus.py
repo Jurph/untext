@@ -19,7 +19,7 @@ class CandidateMetadata:
     source_kind: str
 
 
-@dataclass(frozen=True)
+@dataclass
 class CandidateGeometry:
     alpha_soft: np.ndarray
     support_mask: np.ndarray
@@ -58,7 +58,7 @@ class ScaleProposal:
     mov_bbox: tuple[int, int, int, int] | None
 
 
-@dataclass(frozen=True)
+@dataclass
 class CandidateRecord:
     bgra: np.ndarray
     geometry: CandidateGeometry
@@ -80,11 +80,11 @@ class PairwiseScore:
     scale_proposals: tuple[ScaleProposal, ...] = ()
 
 
-@dataclass(frozen=True)
+@dataclass
 class CandidateGraph:
     records: tuple[CandidateRecord, ...]
     weights: np.ndarray
-    directed_scores: np.ndarray
+    directed_scores: dict
 
 
 @dataclass(frozen=True)
@@ -95,7 +95,7 @@ class ClusterRecord:
     family_count: int
 
 
-@dataclass(frozen=True)
+@dataclass
 class ConsensusTemplate:
     label: str
     bgra: np.ndarray
@@ -570,7 +570,6 @@ def _alignment_metrics(
     ref_area = float(ref_mask.sum())
     mov_area = float(mov_mask.sum())
     inter = float(np.logical_and(ref_mask, mov_mask).sum())
-    union = float(np.logical_or(ref_mask, mov_mask).sum())
 
     if ref_area == 0.0 or mov_area == 0.0:
         return 0.0, 1.0, 1.0, 0.0
@@ -830,6 +829,7 @@ def score_candidate_pair(
     min_scale: float = 0.25,
     max_scale: float = 4.0,
     num_scales: int = 25,
+    _precomputed_proposals: "tuple[ScaleProposal, ...] | None" = None,
 ) -> PairwiseScore:
     ref = candidate_a.geometry
     mov = candidate_b.geometry
@@ -839,12 +839,15 @@ def score_candidate_pair(
         max_scale = min_scale
     if max_scale < min_scale:
         min_scale = max_scale
-    scale_proposals = propose_pair_scales(
-        candidate_a,
-        candidate_b,
-        min_scale=min_scale,
-        max_scale=max_scale,
-    )
+    if _precomputed_proposals is not None:
+        scale_proposals = _precomputed_proposals
+    else:
+        scale_proposals = propose_pair_scales(
+            candidate_a,
+            candidate_b,
+            min_scale=min_scale,
+            max_scale=max_scale,
+        )
 
     aspect_a = candidate_a.bgra.shape[1] / max(candidate_a.bgra.shape[0], 1)
     aspect_b = candidate_b.bgra.shape[1] / max(candidate_b.bgra.shape[0], 1)
@@ -952,7 +955,7 @@ def build_candidate_graph(
     graph_records = tuple(records)
     count = len(graph_records)
     weights = np.zeros((count, count), dtype=np.float32)
-    directed_scores = np.empty((count, count), dtype=object)
+    directed_scores: dict[tuple[int, int], "PairwiseScore | None"] = {}
     total_pairs = count * (count - 1) // 2
 
     logger.info(
@@ -975,12 +978,27 @@ def build_candidate_graph(
     started_at = time.perf_counter()
 
     for i in range(count):
-        directed_scores[i, i] = None
+        directed_scores[(i, i)] = None
         for j in range(i + 1, count):
             score_ij = score_candidate_pair(graph_records[i], graph_records[j])
-            score_ji = score_candidate_pair(graph_records[j], graph_records[i])
-            directed_scores[i, j] = score_ij
-            directed_scores[j, i] = score_ji
+            proposals_ji = tuple(
+                ScaleProposal(
+                    scale=1.0 / p.scale,
+                    weight=p.weight,
+                    view_name=p.view_name,
+                    feature_name=p.feature_name,
+                    ref_bbox=p.mov_bbox,
+                    mov_bbox=p.ref_bbox,
+                )
+                for p in score_ij.scale_proposals
+                if p.scale > 0
+            )
+            score_ji = score_candidate_pair(
+                graph_records[j], graph_records[i],
+                _precomputed_proposals=proposals_ji,
+            )
+            directed_scores[(i, j)] = score_ij
+            directed_scores[(j, i)] = score_ji
             weight = min(score_ij.compatibility, score_ji.compatibility)
             if weight < min_weight_floor:
                 weight = 0.0
@@ -1136,8 +1154,8 @@ def extract_candidate_clusters(
     pair_strengths = np.zeros((count, count), dtype=np.float32)
     for i in range(count):
         for j in range(i + 1, count):
-            score_ij = graph.directed_scores[i, j]
-            score_ji = graph.directed_scores[j, i]
+            score_ij = graph.directed_scores[(i, j)]
+            score_ji = graph.directed_scores[(j, i)]
             compat_ij = 0.0 if score_ij is None else float(score_ij.compatibility)
             compat_ji = 0.0 if score_ji is None else float(score_ji.compatibility)
             pair_strength = max(compat_ij, compat_ji)
@@ -1192,7 +1210,7 @@ def _cluster_canvas_shape(graph: CandidateGraph, cluster: ClusterRecord) -> tupl
     for member_index in cluster.member_indices:
         if member_index == cluster.anchor_index:
             continue
-        score = graph.directed_scores[cluster.anchor_index, member_index]
+        score = graph.directed_scores[(cluster.anchor_index, member_index)]
         if score is None:
             continue
         scaled_h, scaled_w = _scaled_shape(
@@ -1216,7 +1234,7 @@ def _align_record_to_anchor(
         tx = 0.0
         ty = 0.0
     else:
-        score = graph.directed_scores[anchor_index, member_index]
+        score = graph.directed_scores[(anchor_index, member_index)]
         if score is None:
             raise ValueError(f"missing directed score for anchor {anchor_index} <- member {member_index}")
         scale = score.scale
