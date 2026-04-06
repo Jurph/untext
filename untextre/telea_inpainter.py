@@ -1,11 +1,11 @@
-from __future__ import annotations
-
 """Light-weight wrapper around OpenCV's fast Telea in-painting algorithm.
 
 This exists mainly to give a uniform interface (`inpaint(image, mask, …)`) so
 `ImagePatcher` can treat Telea the same way it treats LaMa or DIP.
 It has **no external dependencies** beyond OpenCV.
 """
+
+from __future__ import annotations
 
 from typing import Optional, Tuple
 import logging

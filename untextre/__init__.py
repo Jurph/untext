@@ -41,7 +41,7 @@ def __getattr__(name: str):
         "MODEL_CONFIDENCE_FLOOR", "CLI_DEFAULT_CONFIDENCE",
         "WEB_DEFAULT_CONFIDENCE",
     ):
-        from .utils import (
+        from .utils import (  # noqa: F401
             load_image, save_image, setup_logger,
             MODEL_CONFIDENCE_FLOOR, CLI_DEFAULT_CONFIDENCE,
             WEB_DEFAULT_CONFIDENCE,
