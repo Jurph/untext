@@ -15,6 +15,7 @@ import cv2
 import numpy as np
 from pathlib import Path
 import tempfile
+from PIL import Image, ImageCms
 
 from untextre.find_text_colors import hex_to_bgr, html_to_bgr, find_mask_by_spatial_tf_idf
 from untextre.utils import load_image, save_image
@@ -193,6 +194,33 @@ class TestImageLoading:
             # Should be identical (PNG is lossless)
             assert np.array_equal(reloaded, original), \
                 "Reloaded image should match original for PNG"
+
+    def test_save_image_preserves_rendering_metadata_from_source_jpeg(self, tmp_path):
+        """Cleaned JPEGs should keep color-management metadata, not full EXIF."""
+        icc_profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+        source_path = tmp_path / "source.jpg"
+        output_path = tmp_path / "cleaned.jpg"
+        source = Image.new("RGB", (12, 10), (128, 64, 32))
+        exif = Image.Exif()
+        exif[305] = "Unit Test Camera Raw Editor"
+        source.save(
+            source_path,
+            "JPEG",
+            quality=90,
+            dpi=(300, 300),
+            icc_profile=icc_profile,
+            exif=exif,
+        )
+
+        output_bgr = np.zeros((10, 12, 3), dtype=np.uint8)
+        output_bgr[:, :] = (32, 64, 128)
+
+        save_image(output_bgr, output_path, source_path=source_path)
+
+        saved = Image.open(output_path)
+        assert saved.info.get("icc_profile") == icc_profile
+        assert saved.info.get("dpi") == (300, 300)
+        assert saved.getexif().get(305) is None, "Full EXIF should not be copied blindly"
 
 
 class TestPreprocessing:

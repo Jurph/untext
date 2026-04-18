@@ -682,8 +682,8 @@ class TestProcessWithKnownMask:
         monkeypatch.setattr(cli_mod, "find_known_mask_in_image", lambda *_args, **_kwargs: None)
         saved = {}
 
-        def fake_save(arr, path):
-            saved[str(path)] = arr.copy()
+        def fake_save(arr, path, **kwargs):
+            saved[str(path)] = (arr.copy(), kwargs.get("source_path"))
 
         monkeypatch.setattr(cli_mod, "save_image", fake_save)
 
@@ -698,8 +698,11 @@ class TestProcessWithKnownMask:
         assert timings is not None
         assert timings["mask_found"] is False
         assert any(name.endswith("input_clean.png") for name in saved)
-        saved_image = next(arr for name, arr in saved.items() if name.endswith("input_clean.png"))
+        saved_image, source_path = next(
+            data for name, data in saved.items() if name.endswith("input_clean.png")
+        )
         np.testing.assert_array_equal(saved_image, image)
+        assert source_path == image_path
         assert not any(name.endswith("input_mask.png") for name in saved)
 
     def test_match_path_saves_mask_and_inpainted_output(self, monkeypatch, tmp_path):
@@ -732,7 +735,11 @@ class TestProcessWithKnownMask:
         monkeypatch.setattr(inpaint_mod, "inpaint_image", fake_inpaint)
 
         saved_paths = []
-        monkeypatch.setattr(cli_mod, "save_image", lambda _arr, p: saved_paths.append(p.name))
+
+        def fake_save(_arr, p, **kwargs):
+            saved_paths.append((p.name, kwargs.get("source_path")))
+
+        monkeypatch.setattr(cli_mod, "save_image", fake_save)
 
         timings = process_with_known_mask(
             image_path=image_path,
@@ -746,8 +753,8 @@ class TestProcessWithKnownMask:
         assert timings["mask_found"] is True
         assert inpaint_calls["bbox"] == bbox
         assert inpaint_calls["method"] == "telea"
-        assert "photo_mask.png" in saved_paths
-        assert "photo_clean.png" in saved_paths
+        assert ("photo_mask.png", None) in saved_paths
+        assert ("photo_clean.png", image_path) in saved_paths
 
 
 # =========================================================================
@@ -1032,15 +1039,15 @@ class TestMainIntegrationPaths:
             lambda **kw: {"total_time": 0.1, "skipped": True},
         )
         saved = {}
-        original_save = cli_mod.save_image
 
-        def tracking_save(arr, path):
-            saved[str(path)] = arr
+        def tracking_save(arr, path, **kwargs):
+            saved[str(path)] = (arr, kwargs.get("source_path"))
 
         monkeypatch.setattr(cli_mod, "save_image", tracking_save)
         main()
         # Should have saved a "_clean" file (the original copied as-is)
         assert any("_clean" in str(p) for p in saved.keys())
+        assert all(source_path is not None for _arr, source_path in saved.values())
 
     def test_timing_flag_saves_report(self, monkeypatch, tmp_path):
         """--timing produces timing_report.txt."""

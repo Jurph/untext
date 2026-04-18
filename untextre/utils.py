@@ -3,8 +3,10 @@
 import cv2
 import numpy as np
 from pathlib import Path
-from typing import List, Tuple, Union, Optional
+from typing import Any, Dict, List, Tuple, Union, Optional
 import logging
+from PIL import Image, JpegImagePlugin, PngImagePlugin
+import struct
 
 # Type aliases for clarity
 ImageArray = np.ndarray  # H×W×3 BGR uint8
@@ -87,17 +89,148 @@ def load_image(image_path: ImagePath) -> ImageArray:
         raise ValueError(f"Could not load image: {image_path}")
     return image
 
-def save_image(image: ImageArray, output_path: ImagePath, quality: int = 97) -> None:
+def _as_pillow_image(image: ImageArray, output_suffix: str) -> Image.Image:
+    """Convert an OpenCV-style array to a Pillow image."""
+    if image.ndim == 2:
+        return Image.fromarray(image)
+
+    if image.ndim != 3:
+        raise ValueError(f"Unsupported image shape for save: {image.shape}")
+
+    if image.shape[2] == 3:
+        return Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+
+    if image.shape[2] == 4:
+        pil_image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGRA2RGBA))
+        if output_suffix in {'.jpg', '.jpeg'}:
+            return pil_image.convert("RGB")
+        return pil_image
+
+    raise ValueError(f"Unsupported channel count for save: {image.shape[2]}")
+
+
+def _safe_dpi(info: Dict[str, Any]) -> Optional[Tuple[float, float]]:
+    """Return a Pillow-compatible DPI tuple when the source provides one."""
+    dpi = info.get("dpi")
+    if not dpi or len(dpi) < 2:
+        return None
+
+    try:
+        x_dpi = float(dpi[0])
+        y_dpi = float(dpi[1])
+    except (TypeError, ValueError):
+        return None
+
+    if x_dpi <= 0 or y_dpi <= 0:
+        return None
+    return (x_dpi, y_dpi)
+
+
+def _png_color_fallback_chunks(info: Dict[str, Any]) -> Optional[PngImagePlugin.PngInfo]:
+    """Carry PNG color-rendering chunks when no ICC profile is available."""
+    pnginfo = PngImagePlugin.PngInfo()
+    added = False
+
+    srgb = info.get("srgb")
+    if srgb is not None:
+        try:
+            pnginfo.add(b"sRGB", bytes([int(srgb) & 0xFF]))
+            added = True
+        except (TypeError, ValueError):
+            pass
+
+    gamma = info.get("gamma")
+    if gamma is not None:
+        try:
+            pnginfo.add(b"gAMA", int(round(float(gamma) * 100000)).to_bytes(4, "big"))
+            added = True
+        except (OverflowError, TypeError, ValueError):
+            pass
+
+    chromaticity = info.get("chromaticity")
+    if chromaticity and len(chromaticity) == 8:
+        try:
+            values = [int(round(float(value) * 100000)) for value in chromaticity]
+            pnginfo.add(b"cHRM", struct.pack(">8I", *values))
+            added = True
+        except (struct.error, TypeError, ValueError):
+            pass
+
+    return pnginfo if added else None
+
+
+def _pillow_save_kwargs(source_path: ImagePath, output_suffix: str, quality: int) -> Dict[str, Any]:
+    """Build a whitelisted rendering-metadata bundle from the source image."""
+    kwargs: Dict[str, Any] = {}
+    with Image.open(source_path) as source:
+        icc_profile = source.info.get("icc_profile")
+        dpi = _safe_dpi(source.info)
+
+        if output_suffix in {'.jpg', '.jpeg'}:
+            kwargs["quality"] = quality
+            sampling = JpegImagePlugin.get_sampling(source)
+            if sampling in {0, 1, 2}:
+                kwargs["subsampling"] = sampling
+        elif output_suffix == '.png':
+            kwargs["compress_level"] = 8
+            if not icc_profile:
+                pnginfo = _png_color_fallback_chunks(source.info)
+                if pnginfo is not None:
+                    kwargs["pnginfo"] = pnginfo
+        elif output_suffix == '.webp':
+            kwargs["quality"] = quality
+
+        if icc_profile:
+            kwargs["icc_profile"] = icc_profile
+        if dpi:
+            kwargs["dpi"] = dpi
+
+    return kwargs
+
+
+def _save_image_with_source_metadata(
+    image: ImageArray,
+    output_path: Path,
+    quality: int,
+    source_path: ImagePath,
+) -> bool:
+    """Save with selected source rendering metadata; return False if unsupported."""
+    output_suffix = output_path.suffix.lower()
+    if output_suffix not in {'.jpg', '.jpeg', '.png', '.tif', '.tiff', '.webp'}:
+        return False
+
+    pil_image = _as_pillow_image(image, output_suffix)
+    save_kwargs = _pillow_save_kwargs(source_path, output_suffix, quality)
+    pil_image.save(output_path, **save_kwargs)
+    return True
+
+
+def save_image(
+    image: ImageArray,
+    output_path: ImagePath,
+    quality: int = 97,
+    source_path: Optional[ImagePath] = None,
+) -> None:
     """Save an image to file with quality control.
     
     Args:
         image: Image array in BGR format
         output_path: Path where to save the image
+        source_path: Optional original image path whose rendering metadata
+            (ICC profile, density, and PNG color fallback chunks) should be
+            carried forward. Full EXIF/XMP is intentionally not copied.
         
     Raises:
         ValueError: If image cannot be saved
     """
     output_path = Path(output_path)
+
+    if source_path is not None:
+        try:
+            if _save_image_with_source_metadata(image, output_path, quality, source_path):
+                return
+        except Exception as exc:  # pragma: no cover - exercised through caller failure path
+            raise ValueError(f"Could not save image to: {output_path}") from exc
     
     # Set compression parameters based on file extension
     if output_path.suffix.lower() in {'.jpg', '.jpeg'}:
@@ -379,4 +512,4 @@ def calculate_bbox_superset(bboxes: List[BBox], image_shape: Optional[Tuple[int,
     if image_shape is not None:
         superset = clamp_bbox_to_image(superset, image_shape)
     
-    return superset 
+    return superset

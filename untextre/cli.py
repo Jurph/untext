@@ -591,7 +591,7 @@ def process_with_known_mask(
         logger.warning(f"Known mask not found in {image_path.name} - saving original")
         # Save original image unchanged
         output_path = output_dir / f"{image_path.stem}_clean{image_path.suffix}"
-        save_image(image, output_path)
+        save_image(image, output_path, source_path=image_path)
         timings['total_time'] = time.time() - start_time
         return timings
     
@@ -613,7 +613,7 @@ def process_with_known_mask(
     
     # Save result
     output_path = output_dir / f"{image_path.stem}_clean{image_path.suffix}"
-    save_image(result, output_path)
+    save_image(result, output_path, source_path=image_path)
     logger.info(f"Saved cleaned image to {output_path}")
     
     timings['total_time'] = time.time() - start_time
@@ -819,7 +819,7 @@ def main() -> None:
 
                         result = inpaint_image(image, mask, bbox=bbox, method=args.paint)
                         output_file = output_path / f"{image_path.stem}_clean{image_path.suffix}"
-                        save_image(result, output_file)
+                        save_image(result, output_file, source_path=image_path)
                         logger.info(f"Saved cleaned image to {output_file}")
                         if args.keep_masks:
                             mask_file = output_path / f"{image_path.stem}_mask.png"
@@ -858,7 +858,7 @@ def main() -> None:
                 if args.force_output:
                     # Copy the original unchanged so every input has output
                     output_file = output_path / f"{image_path.stem}_clean{image_path.suffix}"
-                    save_image(load_image(image_path), output_file)
+                    save_image(load_image(image_path), output_file, source_path=image_path)
                     logger.info(f"No text detected — copied original to {output_file}")
                 else:
                     logger.info(f"Skipped {image_path.name} (no text detected)")
@@ -1190,7 +1190,7 @@ def process_single_image(
     
     # Save results
     output_path = output_dir / f"{image_path.stem}_clean{image_path.suffix}"
-    save_image(result, output_path)
+    save_image(result, output_path, source_path=image_path)
     logger.info(f"Saved result to: {output_path.name}")
     
     # Optionally save mask for debugging
