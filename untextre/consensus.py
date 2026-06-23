@@ -448,29 +448,38 @@ def initialize_consensus_models(confidence_threshold: float = MODEL_CONFIDENCE_F
     logger.info("Pre-loading all detection models...")
     
     # Initialize DocTR with MODEL_CONFIDENCE_FLOOR -- actual threshold applied as post-filter
-    try:
-        _global_doctr_detector = TextDetector(confidence_threshold=MODEL_CONFIDENCE_FLOOR, min_text_size=3)
-        logger.info("[OK] DocTR model loaded")
-    except Exception as e:
-        logger.error(f"Failed to load DocTR: {e}")
-        _global_doctr_detector = None
+    if _global_doctr_detector is None:
+        try:
+            _global_doctr_detector = TextDetector(confidence_threshold=MODEL_CONFIDENCE_FLOOR, min_text_size=3)
+            logger.info("[OK] DocTR model loaded")
+        except Exception as e:
+            logger.error(f"Failed to load DocTR: {e}")
+            _global_doctr_detector = None
+    else:
+        logger.info("[OK] DocTR model already loaded")
     
-    # Initialize EasyOCR  
-    try:
-        import easyocr
-        _global_easyocr_reader = easyocr.Reader(['en'], verbose=False)
-        logger.info("[OK] EasyOCR model loaded")
-    except Exception as e:
-        logger.error(f"Failed to load EasyOCR: {e}")
-        _global_easyocr_reader = None
+    # Initialize EasyOCR
+    if _global_easyocr_reader is None:
+        try:
+            import easyocr
+            _global_easyocr_reader = easyocr.Reader(['en'], verbose=False)
+            logger.info("[OK] EasyOCR model loaded")
+        except Exception as e:
+            logger.error(f"Failed to load EasyOCR: {e}")
+            _global_easyocr_reader = None
+    else:
+        logger.info("[OK] EasyOCR model already loaded")
     
     # Initialize EAST
-    try:
-        from .detector import _load_east_model
-        _global_east_model = _load_east_model()
-        logger.info("[OK] EAST model loaded")
-    except Exception as e:
-        logger.error(f"Failed to load EAST: {e}")
-        _global_east_model = None
+    if _global_east_model is None:
+        try:
+            from .detector import _load_east_model
+            _global_east_model = _load_east_model()
+            logger.info("[OK] EAST model loaded")
+        except Exception as e:
+            logger.error(f"Failed to load EAST: {e}")
+            _global_east_model = None
+    else:
+        logger.info("[OK] EAST model already loaded")
     
     logger.info("Detection model initialization complete")

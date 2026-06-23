@@ -7,6 +7,7 @@ with the existing codebase.
 """
 
 import cv2
+import gc
 import numpy as np
 from typing import Optional, Tuple, Literal
 
@@ -103,17 +104,28 @@ def reset_lama_model() -> None:
     
     logger.info("Resetting LaMa model state")
     
-    # Clear any GPU memory if the model was using CUDA
-    if _lama_inpainter is not None:
-        try:
-            import torch
-            if hasattr(_lama_inpainter, 'device') and _lama_inpainter.device.type == 'cuda':
-                torch.cuda.empty_cache()
-        except Exception as e:
-            logger.warning(f"Error during GPU cleanup: {e}")
-    
+    # Drop the model reference before asking CUDA to release cached blocks.
+    # Emptying the cache while the model is still strongly referenced cannot
+    # free its tensors and can make OOM recovery reinitialize on top of itself.
+    old_inpainter = _lama_inpainter
+    was_cuda = (
+        old_inpainter is not None
+        and hasattr(old_inpainter, 'device')
+        and old_inpainter.device.type == 'cuda'
+    )
     _lama_inpainter = None
     _lama_init_failed = False
+
+    try:
+        del old_inpainter
+        gc.collect()
+        if was_cuda:
+            import torch
+            torch.cuda.empty_cache()
+            torch.cuda.synchronize()
+    except Exception as e:
+        logger.warning(f"Error during GPU cleanup: {e}")
+
     logger.info("LaMa model state reset")
 
 def initialize_lama_model(device: str = "cuda", force_reinit: bool = False) -> bool:
@@ -407,4 +419,4 @@ def _calculate_inpainting_subregion(
     subregion = (x, y, x + w, y + h)
     
     logger.info(f"Final inpainting subregion: {subregion}")
-    return subregion 
+    return subregion
