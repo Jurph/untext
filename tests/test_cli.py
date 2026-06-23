@@ -205,6 +205,8 @@ class TestLoadWatermarkTemplates:
         assert len(templates) == 1
         assert templates[0][0] == "logo.png"
         assert templates[0][1].shape == (8, 8, 4)
+        assert len(templates[0].orb_variants) == 3
+        assert templates[0].orb_variants[0].keypoint_count >= templates[0].orb_variants[-1].keypoint_count
 
     def test_directory_with_rgba_png_only_includes_png(self, tmp_path):
         rgba = np.zeros((6, 6, 4), dtype=np.uint8)
@@ -893,7 +895,7 @@ class TestFindKnownMaskValidation:
         result = find_known_mask_in_image(target, known_rgba, min_matches=3)
         assert result is None
 
-    def test_known_mask_goes_through_orb_prep_before_descriptor_extraction(self, monkeypatch):
+    def test_known_mask_builds_orb_variants_before_matching(self, monkeypatch):
         target = np.zeros((80, 100, 3), dtype=np.uint8)
         known_rgba = np.zeros((20, 20, 4), dtype=np.uint8)
         known_rgba[4:16, 4:16, :3] = 200
@@ -901,30 +903,105 @@ class TestFindKnownMaskValidation:
 
         prepared_mask = np.zeros((20, 20), dtype=np.uint8)
         prepared_mask[6:14, 6:14] = 255
-        helper_called = {"value": False}
+        builder_called = {"value": False}
         orb_masks = []
 
-        def fake_prepare_candidate_for_orb(_bgra):
-            helper_called["value"] = True
-            prepared_bgr = np.zeros((20, 20, 3), dtype=np.uint8)
-            prepared_bgr[prepared_mask > 0] = 200
-            prepared_gray = cv2.cvtColor(prepared_bgr, cv2.COLOR_BGR2GRAY)
-            return prepared_bgr, prepared_mask, prepared_gray
+        def fake_build_candidate_orb_variants(_bgra):
+            builder_called["value"] = True
+            variant = type("Variant", (), {})()
+            variant.name = "outside_0"
+            variant.outside_value = 0
+            variant.alpha = prepared_mask
+            variant.gray = np.zeros((20, 20), dtype=np.uint8)
+            variant.keypoints = tuple()
+            variant.descriptors = None
+            variant.keypoint_count = 0
+            return [variant]
 
         class FakeORB:
             def detectAndCompute(self, _image, mask):
                 orb_masks.append(None if mask is None else mask.copy())
                 return [], None
 
-        monkeypatch.setattr(cli_mod, "prepare_candidate_for_orb", fake_prepare_candidate_for_orb)
-        monkeypatch.setattr(cv2, "ORB_create", lambda nfeatures=1000: FakeORB())
+        monkeypatch.setattr(cli_mod, "build_candidate_orb_variants", fake_build_candidate_orb_variants)
+        monkeypatch.setattr(cv2, "ORB_create", lambda *args, **kwargs: FakeORB())
 
         result = find_known_mask_in_image(target, known_rgba)
 
         assert result is None
-        assert helper_called["value"] is True
+        assert builder_called["value"] is True
         assert len(orb_masks) >= 1
-        assert np.array_equal(orb_masks[0], prepared_mask)
+        assert orb_masks[0] is None
+
+    def test_known_mask_falls_back_to_later_prepared_variant(self, monkeypatch):
+        target = np.zeros((80, 100, 3), dtype=np.uint8)
+        known_rgba = np.zeros((20, 20, 4), dtype=np.uint8)
+        known_rgba[4:16, 4:16, :3] = 200
+        known_rgba[4:16, 4:16, 3] = 255
+
+        alpha = np.zeros((20, 20), dtype=np.uint8)
+        alpha[4:16, 4:16] = 255
+        weak = type("Variant", (), {})()
+        weak.name = "outside_0"
+        weak.outside_value = 0
+        weak.alpha = alpha
+        weak.gray = np.zeros((20, 20), dtype=np.uint8)
+        weak.keypoints = tuple(cv2.KeyPoint(float(i), float(i), 1) for i in range(4))
+        weak.descriptors = np.ones((4, 32), dtype=np.uint8)
+        weak.keypoint_count = 4
+
+        strong = type("Variant", (), {})()
+        strong.name = "outside_255"
+        strong.outside_value = 255
+        strong.alpha = alpha
+        strong.gray = np.zeros((20, 20), dtype=np.uint8)
+        strong.keypoints = tuple(cv2.KeyPoint(float(i + 5), float(i + 5), 1) for i in range(8))
+        strong.descriptors = np.full((8, 32), 2, dtype=np.uint8)
+        strong.keypoint_count = 8
+
+        target_keypoints = tuple(cv2.KeyPoint(float(i + 20), float(i + 20), 1) for i in range(8))
+        target_descriptors = np.full((8, 32), 2, dtype=np.uint8)
+
+        class FakeORB:
+            def detectAndCompute(self, _image, _mask):
+                return list(target_keypoints), target_descriptors
+
+        class FakeMatcher:
+            def knnMatch(self, descriptors, _target_descriptors, k=2):
+                assert k == 2
+                if int(descriptors[0, 0]) != 2:
+                    return []
+                return [
+                    [
+                        cv2.DMatch(_queryIdx=i, _trainIdx=i, _distance=1),
+                        cv2.DMatch(_queryIdx=i, _trainIdx=(i + 1) % 8, _distance=100),
+                    ]
+                    for i in range(8)
+                ]
+
+        calls = []
+
+        def fake_build_variants(_bgra):
+            calls.append("built")
+            return [weak, strong]
+
+        monkeypatch.setattr(cli_mod, "build_candidate_orb_variants", fake_build_variants, raising=False)
+        monkeypatch.setattr(cli_mod, "create_orb_detector", lambda: FakeORB(), raising=False)
+        monkeypatch.setattr(cv2, "BFMatcher", lambda *args, **kwargs: FakeMatcher())
+        monkeypatch.setattr(
+            cv2,
+            "estimateAffine2D",
+            lambda *args, **kwargs: (np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]), np.ones((8, 1), dtype=np.uint8)),
+        )
+
+        result = find_known_mask_in_image(target, known_rgba, min_matches=6, dilation_pixels=0)
+
+        assert calls == ["built"]
+        assert result is not None
+        mask, bbox, inliers = result
+        assert inliers == 8
+        assert bbox == (4, 4, 12, 12)
+        assert np.count_nonzero(mask) > 0
 
 
 # =========================================================================

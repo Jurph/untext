@@ -37,6 +37,7 @@ MIN_CONSENSUS_CANDIDATE_SHORT_SIDE_PX = 10
 MIN_CONSENSUS_CANDIDATE_LONG_SIDE_PX = 14
 MIN_CONSENSUS_CANDIDATE_EDGE_PX = 64
 MIN_CONSENSUS_CANDIDATE_FILL_RATIO = 0.01
+MAX_CONSENSUS_CANDIDATE_FILL_RATIO = 0.95
 MIN_CONSENSUS_CANDIDATE_ORB_KEYPOINTS = 6
 
 
@@ -143,6 +144,7 @@ def _candidate_meets_consensus_minimums(
         and long_side >= MIN_CONSENSUS_CANDIDATE_LONG_SIDE_PX
         and edge_px >= MIN_CONSENSUS_CANDIDATE_EDGE_PX
         and fill_ratio >= MIN_CONSENSUS_CANDIDATE_FILL_RATIO
+        and fill_ratio <= MAX_CONSENSUS_CANDIDATE_FILL_RATIO
     )
     if not structural_valid:
         return False, area, bbox_w, bbox_h, edge_px, fill_ratio, 0

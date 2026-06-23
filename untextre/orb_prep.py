@@ -2,8 +2,42 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import cv2
 import numpy as np
+
+ORB_NFEATURES = 5000
+ORB_EDGE_THRESHOLD = 8
+ORB_FAST_THRESHOLD = 20
+ORB_PREP_PADDING = 32
+ORB_EXPORT_PADDING = 2
+ORB_OUTSIDE_VALUES = (0, 127, 255)
+
+
+@dataclass(frozen=True)
+class CandidateOrbVariant:
+    """Prepared reference view and descriptors for one transparent-background fill."""
+
+    name: str
+    outside_value: int
+    bgr: np.ndarray
+    alpha: np.ndarray
+    gray: np.ndarray
+    keypoints: tuple[cv2.KeyPoint, ...]
+    descriptors: np.ndarray | None
+
+    @property
+    def keypoint_count(self) -> int:
+        return len(self.keypoints)
+
+
+def create_orb_detector() -> cv2.ORB:
+    return cv2.ORB_create(
+        nfeatures=ORB_NFEATURES,
+        edgeThreshold=ORB_EDGE_THRESHOLD,
+        fastThreshold=ORB_FAST_THRESHOLD,
+    )
 
 
 def _remove_small_components(mask: np.ndarray, min_area: int) -> np.ndarray:
@@ -25,7 +59,8 @@ def prepare_candidate_for_orb(
     bgra: np.ndarray,
     min_component_area: int = 2,
     fill_neighbor_threshold: int = 6,
-    padding: int = 2,
+    padding: int = ORB_PREP_PADDING,
+    outside_value: int = 0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Prepare a BGRA watermark candidate for ORB feature extraction.
 
@@ -53,7 +88,7 @@ def prepare_candidate_for_orb(
 
     clean_mask = (cleaned * 255).astype(np.uint8)
     prepared_bgr = bgra[:, :, :3].copy()
-    prepared_bgr[clean_mask == 0] = 0
+    prepared_bgr[clean_mask == 0] = outside_value
     if padding > 0:
         prepared_bgr = cv2.copyMakeBorder(
             prepared_bgr,
@@ -62,7 +97,7 @@ def prepare_candidate_for_orb(
             padding,
             padding,
             cv2.BORDER_CONSTANT,
-            value=(0, 0, 0),
+            value=(outside_value, outside_value, outside_value),
         )
         clean_mask = cv2.copyMakeBorder(
             clean_mask,
@@ -82,7 +117,7 @@ def prepare_candidate_bgra_for_orb(
     bgra: np.ndarray,
     min_component_area: int = 2,
     fill_neighbor_threshold: int = 6,
-    padding: int = 2,
+    padding: int = ORB_EXPORT_PADDING,
 ) -> np.ndarray:
     """Return an orb-prepped BGRA candidate suitable for disk export and -K reuse."""
     prepared_bgr, clean_mask, _ = prepare_candidate_for_orb(
@@ -94,17 +129,37 @@ def prepare_candidate_bgra_for_orb(
     return np.dstack([prepared_bgr, clean_mask])
 
 
+def build_candidate_orb_variants(
+    bgra: np.ndarray,
+    outside_values: tuple[int, ...] = ORB_OUTSIDE_VALUES,
+) -> list[CandidateOrbVariant]:
+    """Build black/gray/white ORB reference variants ordered by keypoint count."""
+    variants: list[CandidateOrbVariant] = []
+    orb = create_orb_detector()
+    for outside_value in outside_values:
+        bgr, alpha, gray = prepare_candidate_for_orb(
+            bgra,
+            outside_value=outside_value,
+        )
+        keypoints, descriptors = orb.detectAndCompute(gray, alpha)
+        variants.append(
+            CandidateOrbVariant(
+                name=f"outside_{outside_value}",
+                outside_value=outside_value,
+                bgr=bgr,
+                alpha=alpha,
+                gray=gray,
+                keypoints=tuple(keypoints or ()),
+                descriptors=descriptors,
+            )
+        )
+    return sorted(variants, key=lambda variant: variant.keypoint_count, reverse=True)
+
+
 def count_candidate_orb_keypoints(
     bgra: np.ndarray,
-    nfeatures: int = 1000,
+    nfeatures: int = ORB_NFEATURES,
 ) -> int:
-    prepared_bgr, clean_mask, prepared_gray = prepare_candidate_for_orb(bgra)
-    del prepared_bgr
-    if not np.any(clean_mask):
-        return 0
-
-    orb = cv2.ORB_create(nfeatures=nfeatures)
-    keypoints, descriptors = orb.detectAndCompute(prepared_gray, clean_mask)
-    if descriptors is None or keypoints is None:
-        return 0
-    return int(len(keypoints))
+    del nfeatures  # Kept for API compatibility; variants use the shared ORB config.
+    variants = build_candidate_orb_variants(bgra)
+    return max((variant.keypoint_count for variant in variants), default=0)

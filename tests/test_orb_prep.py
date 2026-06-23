@@ -5,6 +5,7 @@ from untextre.orb_prep import (
     prepare_candidate_for_orb,
     prepare_candidate_bgra_for_orb,
     count_candidate_orb_keypoints,
+    build_candidate_orb_variants,
 )
 
 
@@ -61,24 +62,24 @@ def test_prepare_candidate_for_orb_zeroes_transparent_bgr_and_heals_single_pixel
 
     prepped_bgr, prepped_mask, prepped_gray = prepare_candidate_for_orb(bgra)
 
-    assert prepped_mask.shape == (15, 15)
+    assert prepped_mask.shape == (75, 75)
     assert prepped_mask[0, 0] == 0
-    assert np.all(prepped_mask[:2, :] == 0)
-    assert np.all(prepped_mask[:, :2] == 0)
-    assert prepped_mask[7, 7] == 255
+    assert np.all(prepped_mask[:32, :] == 0)
+    assert np.all(prepped_mask[:, :32] == 0)
+    assert prepped_mask[37, 37] == 255
     assert np.all(prepped_bgr[prepped_mask == 0] == 0)
     assert prepped_gray.shape == prepped_mask.shape
 
 
-def test_count_candidate_orb_keypoints_distinguishes_orb_ready_from_orb_dead():
+def test_count_candidate_orb_keypoints_recovers_border_heavy_candidates():
     ready = _make_orb_ready_candidate()
-    dead = _make_orb_dead_bar()
+    border_heavy = _make_orb_dead_bar()
 
     ready_keypoints = count_candidate_orb_keypoints(ready)
-    dead_keypoints = count_candidate_orb_keypoints(dead)
+    border_heavy_keypoints = count_candidate_orb_keypoints(border_heavy)
 
     assert ready_keypoints >= 6
-    assert dead_keypoints < 6
+    assert border_heavy_keypoints >= 6
 
 
 def test_prepare_candidate_bgra_for_orb_returns_clean_alpha_with_padding():
@@ -96,3 +97,20 @@ def test_prepare_candidate_bgra_for_orb_returns_clean_alpha_with_padding():
     assert np.all(prepared[:, :2, 3] == 0)
     assert prepared[7, 7, 3] == 255
     assert np.all(prepared[prepared[:, :, 3] == 0, :3] == 0)
+
+
+def test_build_candidate_orb_variants_orders_outside_fills_by_keypoint_count():
+    bgra = np.zeros((96, 96, 4), dtype=np.uint8)
+    alpha = np.zeros((96, 96), dtype=np.uint8)
+    cv2.putText(alpha, "B", (18, 76), cv2.FONT_HERSHEY_SIMPLEX, 2.5, 255, 8, cv2.LINE_AA)
+    bgra[:, :, 3] = alpha
+
+    variants = build_candidate_orb_variants(bgra)
+
+    assert [variant.outside_value for variant in variants] == sorted(
+        [variant.outside_value for variant in variants],
+        key=lambda outside: next(v.keypoint_count for v in variants if v.outside_value == outside),
+        reverse=True,
+    )
+    assert {variant.outside_value for variant in variants} == {0, 127, 255}
+    assert variants[0].keypoint_count > variants[-1].keypoint_count
