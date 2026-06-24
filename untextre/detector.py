@@ -32,29 +32,78 @@ _doctr_detector: Optional['TextDetector'] = None
 _easyocr_reader: Optional[object] = None
 _east_net: Optional[cv2.dnn_Net] = None
 
-def initialize_models(detector_methods: List[str]) -> None:
+
+def get_doctr_detector(
+    confidence_threshold: float = CLI_DEFAULT_CONFIDENCE,
+    min_text_size: int = 10,
+) -> 'TextDetector':
+    """Return the shared DocTR detector, upgrading to a more permissive config if needed."""
+    global _doctr_detector
+
+    needs_init = _doctr_detector is None
+    if _doctr_detector is not None:
+        needs_init = (
+            _doctr_detector.confidence_threshold > confidence_threshold
+            or _doctr_detector.min_text_size > min_text_size
+        )
+
+    if needs_init:
+        logger.info("Initializing DocTR model...")
+        _doctr_detector = TextDetector(
+            confidence_threshold=confidence_threshold,
+            min_text_size=min_text_size,
+        )
+        logger.info("DocTR model ready")
+
+    return _doctr_detector
+
+
+def get_easyocr_reader() -> object:
+    """Return the shared EasyOCR reader."""
+    global _easyocr_reader
+
+    if _easyocr_reader is None:
+        logger.info("Initializing EasyOCR model...")
+        import easyocr
+        _easyocr_reader = easyocr.Reader(['en'], verbose=False)
+        logger.info("EasyOCR model ready")
+
+    return _easyocr_reader
+
+
+def get_east_net() -> cv2.dnn_Net:
+    """Return the shared EAST text detector network."""
+    global _east_net
+
+    if _east_net is None:
+        logger.info("Initializing EAST text detector...")
+        _east_net = _load_east_model()
+        logger.info("EAST model ready")
+
+    return _east_net
+
+
+def initialize_models(
+    detector_methods: List[str],
+    doctr_confidence_threshold: float = CLI_DEFAULT_CONFIDENCE,
+    doctr_min_text_size: int = 10,
+) -> None:
     """Initialize detection models once for reuse across multiple images.
     
     Args:
         detector_methods: List of methods to initialize ("doctr", "easyocr", "east", or combinations)
     """
-    global _doctr_detector, _easyocr_reader, _east_net
-    
-    if "doctr" in detector_methods and _doctr_detector is None:
-        logger.info("Initializing DocTR model...")
-        _doctr_detector = TextDetector()
-        logger.info("DocTR model ready")
-    
-    if "easyocr" in detector_methods and _easyocr_reader is None:
-        logger.info("Initializing EasyOCR model...")
-        import easyocr
-        _easyocr_reader = easyocr.Reader(['en'], verbose=False)
-        logger.info("EasyOCR model ready")
-    
-    if "east" in detector_methods and _east_net is None:
-        logger.info("Initializing EAST text detector...")
-        _east_net = _load_east_model()
-        logger.info("EAST model ready")
+    if "doctr" in detector_methods:
+        get_doctr_detector(
+            confidence_threshold=doctr_confidence_threshold,
+            min_text_size=doctr_min_text_size,
+        )
+
+    if "easyocr" in detector_methods:
+        get_easyocr_reader()
+
+    if "east" in detector_methods:
+        get_east_net()
 
 
 def cleanup_vram() -> None:
@@ -87,23 +136,18 @@ def detect_text_regions(image: ImageArray, method: str = "doctr", confidence_thr
         ValueError: If image is invalid or method is unsupported
         RuntimeError: If detection fails
     """
-    global _doctr_detector, _easyocr_reader, _east_net
-    
     if method == "doctr":
-        if _doctr_detector is None:
-            initialize_models(["doctr"])
+        detector = get_doctr_detector()
         # Reuse global detector - confidence threshold is applied as post-filter
-        detections = _doctr_detector.detect(image)
+        detections = detector.detect(image)
         # Filter by confidence threshold
         detections = [d for d in detections if d.get('confidence', 0) >= confidence_threshold]
     elif method == "easyocr":
-        if _easyocr_reader is None:
-            initialize_models(["easyocr"])
-        detections = _detect_with_easyocr(image, _easyocr_reader, confidence_threshold=confidence_threshold)
+        reader = get_easyocr_reader()
+        detections = _detect_with_easyocr(image, reader, confidence_threshold=confidence_threshold)
     elif method == "east":
-        if _east_net is None:
-            initialize_models(["east"])
-        detections = _detect_with_east(image, _east_net, min_confidence=confidence_threshold)
+        net = get_east_net()
+        detections = _detect_with_east(image, net, min_confidence=confidence_threshold)
     else:
         raise ValueError(f"Unsupported detection method: {method}")
     

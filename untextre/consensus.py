@@ -10,14 +10,10 @@ import numpy as np
 from typing import List, Tuple, Dict
 
 from .utils import setup_logger, pad_bbox_to_multiple, MODEL_CONFIDENCE_FLOOR, CLI_DEFAULT_CONFIDENCE
-from .detector import TextDetector, cleanup_vram
+from . import detector as detector_mod
+from .detector import cleanup_vram
 
 logger = setup_logger(__name__)
-
-# Global model instances for persistent loading
-_global_doctr_detector = None
-_global_easyocr_reader = None
-_global_east_model = None
 
 
 def detect_with_doctr(image: np.ndarray, confidence_threshold: float = CLI_DEFAULT_CONFIDENCE) -> List[Tuple[int, int, int, int, float]]:
@@ -30,17 +26,15 @@ def detect_with_doctr(image: np.ndarray, confidence_threshold: float = CLI_DEFAU
     Returns:
         List of (x, y, width, height, confidence_pct) tuples
     """
-    global _global_doctr_detector
     try:
-        # Create detector only once - confidence threshold is applied as post-filter
-        # (Recreating the detector loads the model again, wasting VRAM)
-        if _global_doctr_detector is None:
-            # Use MODEL_CONFIDENCE_FLOOR so the model captures everything;
-            # the caller's confidence_threshold is applied as a post-filter.
-            _global_doctr_detector = TextDetector(confidence_threshold=MODEL_CONFIDENCE_FLOOR, min_text_size=3)
-            logger.debug("Created DocTR detector (one-time initialization)")
+        # Use MODEL_CONFIDENCE_FLOOR so the model captures everything;
+        # the caller's confidence_threshold is applied as a post-filter.
+        doctr_detector = detector_mod.get_doctr_detector(
+            confidence_threshold=MODEL_CONFIDENCE_FLOOR,
+            min_text_size=3,
+        )
         
-        detections = _global_doctr_detector.detect(image)
+        detections = doctr_detector.detect(image)
         # Apply confidence threshold as post-filter
         detections = [d for d in detections if d.get('confidence', 0) >= confidence_threshold]
         
@@ -75,16 +69,11 @@ def detect_with_easyocr(image: np.ndarray, confidence_threshold: float = CLI_DEF
     Returns:
         List of (x, y, width, height, confidence_pct) tuples
     """
-    global _global_easyocr_reader
     try:
-        # Create reader only once - confidence filtering happens later
-        if _global_easyocr_reader is None:
-            import easyocr
-            _global_easyocr_reader = easyocr.Reader(['en'], verbose=False)
-            logger.debug("Created EasyOCR reader")
+        reader = detector_mod.get_easyocr_reader()
         
         rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        results_raw = _global_easyocr_reader.readtext(rgb_image)
+        results_raw = reader.readtext(rgb_image)
         
         results = []
         for bbox_points, text, confidence in results_raw:
@@ -149,21 +138,16 @@ def detect_with_east(image: np.ndarray, confidence_threshold: float = 0.3) -> Li
     Returns:
         List of (x, y, width, height, confidence_pct) tuples
     """
-    global _global_east_model
     try:
-        from .detector import _load_east_model
-
-        if _global_east_model is None:
-            _global_east_model = _load_east_model()
-            logger.debug("Loaded EAST model")
+        east_model = detector_mod.get_east_net()
 
         boxes = _run_east_at_resolution(
-            image, _global_east_model, resolution=640, confidence_threshold=confidence_threshold
+            image, east_model, resolution=640, confidence_threshold=confidence_threshold
         )
         if not boxes:
             logger.debug("EAST at 640px found nothing; re-running at 1280px")
             boxes = _run_east_at_resolution(
-                image, _global_east_model, resolution=1280, confidence_threshold=confidence_threshold
+                image, east_model, resolution=1280, confidence_threshold=confidence_threshold
             )
         logger.debug(f"EAST found {len(boxes)} detections")
         return boxes
@@ -443,43 +427,30 @@ def initialize_consensus_models(confidence_threshold: float = MODEL_CONFIDENCE_F
     Args:
         confidence_threshold: Deprecated -- ignored; kept for API compatibility.
     """
-    global _global_doctr_detector, _global_easyocr_reader, _global_east_model
-    
     logger.info("Pre-loading all detection models...")
     
     # Initialize DocTR with MODEL_CONFIDENCE_FLOOR -- actual threshold applied as post-filter
-    if _global_doctr_detector is None:
-        try:
-            _global_doctr_detector = TextDetector(confidence_threshold=MODEL_CONFIDENCE_FLOOR, min_text_size=3)
-            logger.info("[OK] DocTR model loaded")
-        except Exception as e:
-            logger.error(f"Failed to load DocTR: {e}")
-            _global_doctr_detector = None
-    else:
-        logger.info("[OK] DocTR model already loaded")
+    try:
+        detector_mod.get_doctr_detector(
+            confidence_threshold=MODEL_CONFIDENCE_FLOOR,
+            min_text_size=3,
+        )
+        logger.info("[OK] DocTR model loaded")
+    except Exception as e:
+        logger.error(f"Failed to load DocTR: {e}")
     
     # Initialize EasyOCR
-    if _global_easyocr_reader is None:
-        try:
-            import easyocr
-            _global_easyocr_reader = easyocr.Reader(['en'], verbose=False)
-            logger.info("[OK] EasyOCR model loaded")
-        except Exception as e:
-            logger.error(f"Failed to load EasyOCR: {e}")
-            _global_easyocr_reader = None
-    else:
-        logger.info("[OK] EasyOCR model already loaded")
+    try:
+        detector_mod.get_easyocr_reader()
+        logger.info("[OK] EasyOCR model loaded")
+    except Exception as e:
+        logger.error(f"Failed to load EasyOCR: {e}")
     
     # Initialize EAST
-    if _global_east_model is None:
-        try:
-            from .detector import _load_east_model
-            _global_east_model = _load_east_model()
-            logger.info("[OK] EAST model loaded")
-        except Exception as e:
-            logger.error(f"Failed to load EAST: {e}")
-            _global_east_model = None
-    else:
-        logger.info("[OK] EAST model already loaded")
+    try:
+        detector_mod.get_east_net()
+        logger.info("[OK] EAST model loaded")
+    except Exception as e:
+        logger.error(f"Failed to load EAST: {e}")
     
     logger.info("Detection model initialization complete")
