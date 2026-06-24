@@ -16,7 +16,6 @@ from typing import Dict, List, Optional, Tuple
 from doctr.models import detection
 from doctr.models.detection.predictor import DetectionPredictor
 from doctr.models.preprocessor.pytorch import PreProcessor
-import easyocr
 
 from .utils import ImageArray, BBox, setup_logger, CLI_DEFAULT_CONFIDENCE
 
@@ -30,7 +29,7 @@ Detection = Dict[str, np.ndarray]  # {'geometry': points, 'confidence': score}
 
 # Module-level model instances for persistent loading
 _doctr_detector: Optional['TextDetector'] = None
-_easyocr_reader: Optional[easyocr.Reader] = None
+_easyocr_reader: Optional[object] = None
 _east_net: Optional[cv2.dnn_Net] = None
 
 def initialize_models(detector_methods: List[str]) -> None:
@@ -48,6 +47,7 @@ def initialize_models(detector_methods: List[str]) -> None:
     
     if "easyocr" in detector_methods and _easyocr_reader is None:
         logger.info("Initializing EasyOCR model...")
+        import easyocr
         _easyocr_reader = easyocr.Reader(['en'], verbose=False)
         logger.info("EasyOCR model ready")
     
@@ -127,7 +127,7 @@ def detect_text_regions(image: ImageArray, method: str = "doctr", confidence_thr
     
     return bboxes
 
-def _detect_with_easyocr(image: ImageArray, reader: easyocr.Reader, confidence_threshold: float = CLI_DEFAULT_CONFIDENCE) -> List[Detection]:
+def _detect_with_easyocr(image: ImageArray, reader: object, confidence_threshold: float = CLI_DEFAULT_CONFIDENCE) -> List[Detection]:
     """Detect text regions using EasyOCR with pre-initialized reader.
     
     Args:
