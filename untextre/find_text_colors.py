@@ -337,6 +337,8 @@ def find_mask_by_spatial_tf_idf(
     num_clusters: int = 4,
     debug: bool = False,
     target_color: Optional[Color] = None,
+    # EMPIRICAL: FOM weights and this 0.30 threshold were calibrated together
+    # against the 18K watermark/color-cluster experiment set.
     fom_threshold: float = 0.30,
     cc_guard: float = 0.85,
     use_grabcut: bool = False,
