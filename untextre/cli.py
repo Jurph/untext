@@ -434,7 +434,9 @@ def _find_known_mask_in_image_single_variant(
     
     # ── Reject degenerate or implausible transforms ───────────────
     MIN_SCALE, MAX_SCALE = 0.05, 20.0
-    MAX_STRETCH = 1.25  # largest allowed ratio between the two scale axes
+    # EMPIRICAL: pristine branding turns "knock-off" well before 5:4 stretch.
+    # 1.25 keeps margin while rejecting transforms that no longer match the watermark.
+    MAX_STRETCH = 1.25
 
     if scale_major < MIN_SCALE or scale_minor < MIN_SCALE:
         logger.warning(f"Scale too small ({scale_major:.3f}, {scale_minor:.3f})")
@@ -604,6 +606,8 @@ def find_known_mask_in_image(
             continue
 
         min_scale, max_scale = 0.05, 20.0
+        # EMPIRICAL: pristine branding turns "knock-off" well before 5:4 stretch.
+        # 1.25 keeps margin while rejecting transforms that no longer match the watermark.
         max_stretch = 1.25
         if scale_major < min_scale or scale_minor < min_scale:
             logger.warning(f"Scale too small ({scale_major:.3f}, {scale_minor:.3f})")
