@@ -21,7 +21,7 @@ from typing import Optional, List, Tuple
 # watermark-only runs don't pay the TF/PyTorch startup cost.
 from .utils import (
     get_image_files, load_image, save_image, setup_logger, pad_bbox_to_multiple,
-    MODEL_CONFIDENCE_FLOOR, CLI_DEFAULT_CONFIDENCE,
+    CLI_DEFAULT_CONFIDENCE, calculate_bbox_superset,
 )
 from .orb_prep import (
     CandidateOrbVariant,
@@ -270,15 +270,7 @@ def _generate_masks_and_inpaint(
 
     logger.info(f"Processed {regions_processed}/{len(consensus_boxes)} regions with g={g_value}")
 
-    # Determine inpaint region (single box or bounding superset)
-    if len(consensus_boxes) == 1:
-        inpaint_region = consensus_boxes[0]
-    else:
-        min_x = min(bbox[0] for bbox in consensus_boxes)
-        min_y = min(bbox[1] for bbox in consensus_boxes)
-        max_x = max(bbox[0] + bbox[2] for bbox in consensus_boxes)
-        max_y = max(bbox[1] + bbox[3] for bbox in consensus_boxes)
-        inpaint_region = (min_x, min_y, max_x - min_x, max_y - min_y)
+    inpaint_region = calculate_bbox_superset(consensus_boxes, image.shape[:2])
 
     inpainted = inpaint_image(image, combined_mask, bbox=inpaint_region, method=method)
     return combined_mask, inpainted
@@ -651,19 +643,15 @@ def process_with_known_mask(
     return timings
 
 
-def initialize_consensus_models(confidence_threshold: float = MODEL_CONFIDENCE_FLOOR, device: str = "cuda") -> None:
+def initialize_consensus_models(device: str = "cuda") -> None:
     """Initialize all models (detection and inpainting) to avoid per-image startup costs.
-    
-    Note: confidence_threshold is deprecated and ignored by the underlying
-    consensus initializer.  Default is MODEL_CONFIDENCE_FLOOR to match the
-    value actually used internally.  See utils.py for the full explanation.
     """
     from .consensus import initialize_consensus_models as init_consensus_models_base
 
     logger.info("Pre-loading all detection and inpainting models...")
     
     # Initialize consensus detection models (EAST, DocTR, EasyOCR)
-    init_consensus_models_base(confidence_threshold)
+    init_consensus_models_base()
     
     # Initialize LaMa inpainting model
     try:
@@ -824,7 +812,7 @@ def main() -> None:
     else:
         # Auto-detected templates (or none): load everything so detection
         # fallback works if no template matches
-        initialize_consensus_models(args.confidence_threshold, args.device)
+        initialize_consensus_models(device=args.device)
 
     model_init_time = time.time() - model_init_start
     logger.info(f"Models ready in {model_init_time:.1f} seconds")
@@ -832,6 +820,7 @@ def main() -> None:
     # Process each image
     for i, image_path in enumerate(image_files, 1):
         logger.info(f"Processing image {i}/{len(image_files)}: {image_path.name}")
+        image_start = time.perf_counter()
         image = None
         result = None
         mask = None
@@ -862,7 +851,7 @@ def main() -> None:
                             "image": image_path.name,
                             "matched_template": tmpl_name,
                             "mask_found": True,
-                            "total_time": 0,  # not timed in this path yet
+                            "total_time": time.perf_counter() - image_start,
                         }
                     elif explicit_known_mask:
                         logger.warning(f"No template matched {image_path.name}")
@@ -1152,14 +1141,7 @@ def process_single_image(
 
         # Inpaint using the loaded mask
         inpaint_start = time.time()
-        if len(consensus_boxes) == 1:
-            inpaint_region = consensus_boxes[0]
-        else:
-            min_x = min(bbox[0] for bbox in consensus_boxes)
-            min_y = min(bbox[1] for bbox in consensus_boxes)
-            max_x = max(bbox[0] + bbox[2] for bbox in consensus_boxes)
-            max_y = max(bbox[1] + bbox[3] for bbox in consensus_boxes)
-            inpaint_region = (min_x, min_y, max_x - min_x, max_y - min_y)
+        inpaint_region = calculate_bbox_superset(consensus_boxes, image.shape[:2])
         result = inpaint_image(image, mask, bbox=inpaint_region, method=method)
         timings['inpaint_time'] = time.time() - inpaint_start
     else:

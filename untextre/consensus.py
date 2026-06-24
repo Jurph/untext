@@ -413,19 +413,12 @@ def run_consensus_detection(image: np.ndarray, confidence_threshold: float = CLI
     return padded_boxes
 
 
-def initialize_consensus_models(confidence_threshold: float = MODEL_CONFIDENCE_FLOOR) -> None:
+def initialize_consensus_models() -> None:
     """Initialize all detection models to avoid per-image startup costs.
-    
-    The confidence_threshold parameter is **deprecated and ignored**.
+
     Models are always initialized with MODEL_CONFIDENCE_FLOOR internally;
     the real user-facing threshold is applied as a post-filter at detection
     time so users can adjust it without re-initializing (which wastes VRAM).
-    
-    The default is set to MODEL_CONFIDENCE_FLOOR so that call sites match
-    reality and don't mislead future readers.
-    
-    Args:
-        confidence_threshold: Deprecated -- ignored; kept for API compatibility.
     """
     logger.info("Pre-loading all detection models...")
     

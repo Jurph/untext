@@ -1226,6 +1226,63 @@ class TestMainIntegrationPaths:
 
         main()  # Should complete without calling process_single_image
 
+    def test_template_match_timing_reports_elapsed_time(self, monkeypatch, tmp_path):
+        template_path = tmp_path / "template.png"
+        rgba = np.zeros((20, 20, 4), dtype=np.uint8)
+        rgba[:, :, 3] = 255
+        cv2.imwrite(str(template_path), rgba)
+
+        img_path = tmp_path / "photo.png"
+        cv2.imwrite(str(img_path), np.ones((50, 50, 3), dtype=np.uint8) * 128)
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "prog",
+                "-i",
+                str(img_path),
+                "-o",
+                str(out_dir),
+                "-p",
+                "telea",
+                "-K",
+                str(template_path),
+                "--timing",
+            ],
+        )
+
+        import untextre.inpaint as inpaint_mod
+        monkeypatch.setattr(inpaint_mod, "initialize_lama_model", lambda **kw: True)
+        monkeypatch.setattr(
+            cli_mod,
+            "try_watermark_cascade",
+            lambda *_a, **_kw: (
+                np.zeros((50, 50), dtype=np.uint8),
+                (5, 5, 20, 20),
+                "template.png",
+            ),
+        )
+        monkeypatch.setattr(inpaint_mod, "inpaint_image", lambda image, *_a, **_kw: image.copy())
+        monkeypatch.setattr(cli_mod, "save_image", lambda *_a, **_kw: None)
+
+        captured = {}
+
+        def fake_save_timing_report(detailed_timings, *_args, **_kwargs):
+            captured["timings"] = detailed_timings
+
+        monkeypatch.setattr(cli_mod, "_save_clean_timing_report", fake_save_timing_report)
+
+        import untextre.detector as detector_mod
+        monkeypatch.setattr(detector_mod, "cleanup_vram", lambda: None)
+
+        main()
+
+        assert captured["timings"][0]["matched_template"] == "template.png"
+        assert captured["timings"][0]["total_time"] > 0
+
 
 # =========================================================================
 # process_single_image — edge cases

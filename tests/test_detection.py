@@ -40,10 +40,10 @@ def setup_models():
     """Initialize all detection models once before running tests."""
     # Initialize consensus models to avoid repeated loading
     try:
-        init_all_models(confidence_threshold=0.3, device="cuda")
+        init_all_models(device="cuda")
     except Exception:
         # Fall back to CPU if CUDA is not available
-        init_all_models(confidence_threshold=0.3, device="cpu")
+        init_all_models(device="cpu")
 
 
 @pytest.fixture
@@ -465,4 +465,3 @@ def test_detector_consistency_across_runs(test_images):
 if __name__ == "__main__":
     # Allow running tests directly
     pytest.main([__file__, "-v"])
-

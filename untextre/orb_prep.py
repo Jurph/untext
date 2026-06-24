@@ -156,10 +156,6 @@ def build_candidate_orb_variants(
     return sorted(variants, key=lambda variant: variant.keypoint_count, reverse=True)
 
 
-def count_candidate_orb_keypoints(
-    bgra: np.ndarray,
-    nfeatures: int = ORB_NFEATURES,
-) -> int:
-    del nfeatures  # Kept for API compatibility; variants use the shared ORB config.
+def count_candidate_orb_keypoints(bgra: np.ndarray) -> int:
     variants = build_candidate_orb_variants(bgra)
     return max((variant.keypoint_count for variant in variants), default=0)

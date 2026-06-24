@@ -1442,9 +1442,7 @@ def _record_to_template(record: CandidateRecord) -> ConsensusTemplate:
 def build_final_templates(
     records: list[CandidateRecord] | tuple[CandidateRecord, ...],
     edge_threshold: float = 0.45,
-    debug_dir: str | None = None,
 ) -> list[ConsensusTemplate]:
-    del debug_dir
     if not records:
         return []
 

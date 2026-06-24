@@ -891,8 +891,7 @@ def test_consensus_vote_delegates_cross_bucket_candidates_to_graph_builder(monke
     expected = crop_zone_to_bgra(mean_a, mask_a, wm_color=wm_a)
     captured = {}
 
-    def fake_build_final_templates(records, debug_dir=None):
-        assert debug_dir is None
+    def fake_build_final_templates(records):
         assert len(records) == 2
         captured["family_keys"] = [record.metadata.family_key for record in records]
         captured["zones"] = [record.metadata.zone for record in records]
@@ -923,7 +922,7 @@ def test_consensus_vote_same_bucket_different_zone_remains_separate_input(monkey
     crop_1 = crop_zone_to_bgra(dummy, mask_1, wm_color=dummy)
     crop_2 = crop_zone_to_bgra(dummy, mask_2, wm_color=dummy)
 
-    def fake_build_final_templates(records, debug_dir=None):
+    def fake_build_final_templates(records):
         assert len(records) == 2
         assert records[0].metadata.family_key == (W, H)
         assert records[1].metadata.family_key == (W, H)
@@ -953,7 +952,7 @@ def test_consensus_vote_singleton_returned_through_graph_builder(monkeypatch):
     dummy_wm = np.full((H, W, 3), 200, dtype=np.uint8)
     expected = crop_zone_to_bgra(dummy_mean, mask, wm_color=dummy_wm)
 
-    def fake_build_final_templates(records, debug_dir=None):
+    def fake_build_final_templates(records):
         assert len(records) == 1
         assert records[0].metadata.family_key == (W, H)
         return [_template_from_crop("consensus", expected, member_indices=(0,), family_count=1)]
@@ -977,7 +976,7 @@ def test_consensus_vote_returns_stingy_and_generous_outputs(monkeypatch):
     generous = stingy.copy()
     generous[:, :, 3] = np.maximum(generous[:, :, 3], 128)
 
-    def fake_build_final_templates(records, debug_dir=None):
+    def fake_build_final_templates(records):
         assert len(records) == 1
         return [
             _template_from_crop("stingy", stingy, member_indices=(0,), family_count=1),
@@ -1005,7 +1004,7 @@ def test_consensus_vote_skips_tiny_candidates_before_graph_builder(monkeypatch):
 
     expected = crop_zone_to_bgra(mean_img, big_mask, wm_color=wm_img)
 
-    def fake_build_final_templates(records, debug_dir=None):
+    def fake_build_final_templates(records):
         assert len(records) == 1
         assert records[0].metadata.zone == (2, 0)
         return [_template_from_crop("consensus", expected, member_indices=(1,), family_count=1)]
@@ -1044,7 +1043,7 @@ def test_consensus_vote_skips_sparse_spray_candidates_before_graph_builder(monke
 
     expected = crop_zone_to_bgra(mean_img, big_mask, wm_color=wm_img)
 
-    def fake_build_final_templates(records, debug_dir=None):
+    def fake_build_final_templates(records):
         assert len(records) == 1
         assert records[0].metadata.zone == (2, 0)
         return [_template_from_crop("consensus", expected, member_indices=(1,), family_count=1)]
@@ -1081,7 +1080,7 @@ def test_consensus_vote_skips_orb_unusable_candidate_before_graph_builder(monkey
         fake_crop_zone_to_bgra.calls += 1
         return bad_candidate.copy() if fake_crop_zone_to_bgra.calls == 1 else good_candidate.copy()
 
-    def fake_build_final_templates(records, debug_dir=None):
+    def fake_build_final_templates(records):
         assert len(records) == 1
         return [_template_from_crop("consensus", good_candidate, member_indices=(0,), family_count=1)]
 
@@ -1109,7 +1108,7 @@ def test_consensus_vote_splits_one_raw_candidate_into_multiple_records(monkeypat
     mask[120:132, 60:68] = 255
     mask[24:42, 250:268] = 255
 
-    def fake_build_final_templates(records, debug_dir=None):
+    def fake_build_final_templates(records):
         assert len(records) == 2
         assert all(record.metadata.family_key == (W, H) for record in records)
         assert all(record.metadata.zone == (1, 0) for record in records)
@@ -1135,8 +1134,7 @@ def test_consensus_vote_logs_prep_cutline_before_graph_scoring(monkeypatch, capl
     wm_img = mean_img.copy()
     captured_records = {}
 
-    def fake_build_final_templates(records, debug_dir=None):
-        del debug_dir
+    def fake_build_final_templates(records):
         captured_records["count"] = len(records)
         template = np.zeros((12, 18, 4), dtype=np.uint8)
         template[:, :, 3] = 255

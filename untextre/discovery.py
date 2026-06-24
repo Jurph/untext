@@ -149,7 +149,7 @@ def _candidate_meets_consensus_minimums(
     if not structural_valid:
         return False, area, bbox_w, bbox_h, edge_px, fill_ratio, 0
 
-    orb_keypoints = count_candidate_orb_keypoints(bgra, nfeatures=1000)
+    orb_keypoints = count_candidate_orb_keypoints(bgra)
     is_valid = orb_keypoints >= MIN_CONSENSUS_CANDIDATE_ORB_KEYPOINTS
     return is_valid, area, bbox_w, bbox_h, edge_px, fill_ratio, orb_keypoints
 
@@ -908,10 +908,7 @@ def _consensus_vote(
         len(kept_buckets),
     )
 
-    templates = build_final_templates(
-        records,
-        debug_dir=None if debug_dir is None else str(debug_dir),
-    )
+    templates = build_final_templates(records)
     logger.info(
         f"Consensus: {len(records)} candidate(s) -> {len(templates)} graph-derived template(s)"
     )

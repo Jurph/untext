@@ -241,7 +241,7 @@ class TestConsensusDetectionE2E:
 
         from untextre.cli import initialize_consensus_models
 
-        initialize_consensus_models(confidence_threshold=0.3, device="cuda")
+        initialize_consensus_models(device="cuda")
 
         clean = load_image(clean_path)
 
