@@ -20,7 +20,6 @@ from untextre.utils import (
     calculate_bbox_superset,
     color_distance,
     dilate_by_pixels,
-    dilate_by_percent,
     get_image_files,
 )
 
@@ -534,34 +533,6 @@ class TestDilateByPixels:
         image = np.ones((100, 100, 3), dtype=np.uint8)
         bbox = (5, 5, 30, 30)
         dilated = dilate_by_pixels(image, bbox, 50)
-        x, y, w, h = dilated
-        assert x >= 0 and y >= 0
-        assert x + w <= 100 and y + h <= 100
-
-
-class TestDilateByPercent:
-    """Tests for dilate_by_percent (percentage-based dilation)."""
-
-    def test_twenty_percent_dilation(self):
-        image = np.ones((400, 400, 3), dtype=np.uint8)
-        bbox = (100, 100, 100, 100)
-        dilated = dilate_by_percent(image, bbox, 0.2)
-        # 20% of 100 = 20; half on each side = 10
-        # dilation = avg of (10, 10) = 10
-        x, y, w, h = dilated
-        assert w > 100, "Width should increase"
-        assert h > 100, "Height should increase"
-
-    def test_zero_percent_unchanged(self):
-        image = np.ones((200, 200, 3), dtype=np.uint8)
-        bbox = (50, 50, 40, 40)
-        dilated = dilate_by_percent(image, bbox, 0.0)
-        assert dilated == bbox
-
-    def test_clamped_to_image_bounds(self):
-        image = np.ones((100, 100, 3), dtype=np.uint8)
-        bbox = (10, 10, 80, 80)
-        dilated = dilate_by_percent(image, bbox, 5.0)  # 500% — way oversized
         x, y, w, h = dilated
         assert x >= 0 and y >= 0
         assert x + w <= 100 and y + h <= 100

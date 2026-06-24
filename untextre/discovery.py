@@ -257,6 +257,17 @@ def _aspect_ratio(crop: np.ndarray) -> float:
     return w / h if h > 0 else 1.0
 
 
+def _precision_outlier_threshold_from_log_precision(log_prec: np.ndarray) -> float:
+    """Convert log-precision samples to a Tukey extreme-outlier variance threshold."""
+    flat = log_prec.flatten().astype(np.float64)
+    if flat.size == 0:
+        return 0.0
+
+    q1, q3 = np.percentile(flat, [25, 75]).tolist()
+    fence = q3 + 3.0 * (q3 - q1)      # Tukey extreme-outlier upper fence
+    return float(10.0 ** (-fence))     # convert back to variance threshold
+
+
 def _precision_outlier_threshold(var_gray: np.ndarray) -> float:
     """Find the variance threshold separating outlier-precision (watermark) pixels.
 
@@ -279,14 +290,8 @@ def _precision_outlier_threshold(var_gray: np.ndarray) -> float:
         Variance threshold.  Pixels with var_gray ≤ this value are statistical
         outliers on the precision axis — watermark candidates.
     """
-    flat = var_gray.flatten().astype(np.float64)
-    if flat.size == 0:
-        return 0.0
-
-    log_prec = -np.log10(flat + 1e-8)
-    q1, q3 = np.percentile(log_prec, [25, 75]).tolist()
-    fence = q3 + 3.0 * (q3 - q1)      # Tukey extreme-outlier upper fence
-    return float(10.0 ** (-fence))     # convert back to variance threshold
+    log_prec = -np.log10(var_gray.astype(np.float64) + 1e-8)
+    return _precision_outlier_threshold_from_log_precision(log_prec)
 
 
 def _normalize_01(arr: np.ndarray) -> np.ndarray:
@@ -975,8 +980,7 @@ def discover_watermark_candidates(
     # All non-watermark pixels across all buckets contribute to Q1/Q3/IQR, making
     # the estimate robust against any single bucket's idiosyncrasies.
     pooled = np.concatenate(all_log_prec)
-    q1_p, q3_p = np.percentile(pooled, [25, 75]).tolist()
-    global_stable_threshold = float(10.0 ** (-(q3_p + 3.0 * (q3_p - q1_p))))
+    global_stable_threshold = _precision_outlier_threshold_from_log_precision(pooled)
 
     qualifying_count = len(bucket_data)
     if qualifying_count > 1:

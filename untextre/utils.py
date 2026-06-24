@@ -447,28 +447,6 @@ def dilate_by_pixels(image: ImageArray, bbox: BBox, pixels: int) -> BBox:
     """
     return dilate_bbox(bbox, pixels, image.shape[:2])
 
-def dilate_by_percent(image: ImageArray, bbox: BBox, percent: float) -> BBox:
-    """Dilate a bounding box by a percentage of its current size.
-    
-    Args:
-        image: Input image to get dimensions from
-        bbox: Bounding box as (x, y, width, height)
-        percent: Percentage to dilate by (e.g., 0.2 for 20%)
-        
-    Returns:
-        Dilated bounding box clamped to image bounds
-    """
-    x, y, w, h = bbox
-    
-    # Calculate dilation amount based on bbox dimensions
-    dilation_w = int(w * percent / 2)  # Divide by 2 since we dilate in both directions
-    dilation_h = int(h * percent / 2)
-    
-    # Use the average of width and height dilation for uniform expansion
-    dilation = (dilation_w + dilation_h) // 2
-    
-    return dilate_bbox(bbox, dilation, image.shape[:2])
-
 def color_distance(color1: Color, color2: Color) -> float:
     """Calculate Euclidean distance between two BGR colors.
     

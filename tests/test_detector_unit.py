@@ -3,7 +3,6 @@
 The consensus tests exercise detectors *through* the consensus API,
 but these tests pin the detector module's own public surface directly:
     - ``TextDetector``  – initialization, parameter validation, detect() return format
-    - ``get_largest_text_region()``  – selection + merge logic
     - ``detect_text_regions()``  – module-level entry point
     - ``cleanup_vram()``  – should not crash regardless of GPU availability
 
@@ -20,9 +19,7 @@ pytestmark = pytest.mark.slow
 from untextre.detector import (
     TextDetector,
     detect_text_regions,
-    get_largest_text_region,
     cleanup_vram,
-    _merge_bboxes,
 )
 
 
@@ -129,52 +126,6 @@ class TestDetectTextRegions:
     def test_blank_image_returns_few_boxes(self, blank_image):
         bboxes = detect_text_regions(blank_image, method="doctr", confidence_threshold=0.3)
         assert len(bboxes) <= 3
-
-
-# =========================================================================
-# get_largest_text_region
-# =========================================================================
-
-class TestGetLargestTextRegion:
-    """Verify the selection + merge logic."""
-
-    def test_returns_bbox_on_text_image(self, image_with_text):
-        bbox = get_largest_text_region(image_with_text, method="doctr", confidence_threshold=0.1)
-        x, y, w, h = bbox
-        assert w > 0 and h > 0
-
-    def test_no_text_raises_value_error(self, blank_image):
-        """Blank image with high threshold should raise ValueError."""
-        with pytest.raises(ValueError, match="No text regions detected"):
-            get_largest_text_region(blank_image, method="doctr", confidence_threshold=0.99)
-
-
-# =========================================================================
-# _merge_bboxes  (internal but important for correctness)
-# =========================================================================
-
-class TestMergeBboxes:
-    """Verify bounding box merge logic."""
-
-    def test_single_bbox_unchanged(self):
-        assert _merge_bboxes([(10, 20, 30, 40)]) == (10, 20, 30, 40)
-
-    def test_two_adjacent_horizontal(self):
-        # Two boxes side by side: (0,0,50,20) and (50,0,50,20)
-        merged = _merge_bboxes([(0, 0, 50, 20), (50, 0, 50, 20)])
-        assert merged == (0, 0, 100, 20)
-
-    def test_two_overlapping(self):
-        merged = _merge_bboxes([(10, 10, 40, 20), (30, 10, 40, 20)])
-        assert merged == (10, 10, 60, 20)
-
-    def test_empty_list_raises(self):
-        with pytest.raises(ValueError, match="empty"):
-            _merge_bboxes([])
-
-    def test_three_scattered_boxes(self):
-        merged = _merge_bboxes([(0, 0, 10, 10), (50, 50, 10, 10), (90, 0, 10, 10)])
-        assert merged == (0, 0, 100, 60)
 
 
 # =========================================================================
