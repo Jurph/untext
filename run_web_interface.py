@@ -7,26 +7,26 @@ for the text watermark removal tool.
 
 import subprocess
 import sys
+from importlib.util import find_spec
 from pathlib import Path
+
 
 def main():
     """Launch the Streamlit web interface."""
-    
+
     # Check if streamlit is installed
-    try:
-        import streamlit
-    except ImportError:
-        print("❌ Streamlit not found. Please install requirements:")
-        print("   pip install -r requirements_streamlit.txt")
+    if find_spec("streamlit") is None:
+        print("❌ Streamlit not found. Please install the web dependencies:")
+        print("   uv sync --extra web")
         sys.exit(1)
-    
+
     # Get the path to the streamlit app
     app_path = Path(__file__).parent / "streamlit_app.py"
-    
+
     if not app_path.exists():
         print(f"❌ Streamlit app not found at {app_path}")
         sys.exit(1)
-    
+
     print("=" * 70)
     print("🚀 Starting UnTextre Web Interface...")
     print("=" * 70)
@@ -45,7 +45,7 @@ def main():
     print("🛑 To stop the server: Press Ctrl+C in this terminal")
     print("=" * 70)
     print()
-    
+
     # Launch streamlit with optimized settings
     cmd = [
         sys.executable, "-m", "streamlit", "run", str(app_path),
@@ -54,7 +54,7 @@ def main():
         "--browser.gatherUsageStats", "false",  # Disable telemetry
         "--theme.base", "dark",  # Dark theme
     ]
-    
+
     try:
         subprocess.run(cmd, check=True)
     except KeyboardInterrupt:
@@ -63,5 +63,6 @@ def main():
         print(f"❌ Error starting Streamlit: {e}")
         sys.exit(1)
 
+
 if __name__ == "__main__":
-    main() 
+    main()

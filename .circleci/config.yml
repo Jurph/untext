@@ -4,32 +4,37 @@ jobs:
   test:
     docker:
       - image: cimg/python:3.10
+    environment:
+      UV_CACHE_DIR: .uv-cache
     steps:
       - checkout
 
       - restore_cache:
           keys:
-            - venv-v1-{{ checksum "requirements.txt" }}-{{ checksum "requirements_dev.txt" }}-{{ checksum "requirements_streamlit.txt" }}
-            - venv-v1-
+            - uv-v1-{{ checksum "uv.lock" }}-{{ checksum "pyproject.toml" }}
+            - uv-v1-
 
       - run:
           name: Install dependencies
           command: |
-            python -m venv venv
-            venv/bin/pip install --upgrade pip
-            venv/bin/pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-            venv/bin/pip install -r requirements.txt -r requirements_dev.txt -r requirements_streamlit.txt
+            python -m pip install --upgrade pip uv
+            uv sync --extra dev --extra web --frozen
 
       - save_cache:
-          key: venv-v1-{{ checksum "requirements.txt" }}-{{ checksum "requirements_dev.txt" }}-{{ checksum "requirements_streamlit.txt" }}
+          key: uv-v1-{{ checksum "uv.lock" }}-{{ checksum "pyproject.toml" }}
           paths:
-            - venv
+            - .uv-cache
+            - .venv
+
+      - run:
+          name: Run Ruff
+          command: |
+            uv run ruff check .
 
       - run:
           name: Run tests with coverage
           command: |
-            source venv/bin/activate
-            python -m pytest -m "not slow" \
+            uv run pytest -m "not slow" \
               --cov=untextre \
               --cov-report=xml:coverage.xml \
               --cov-report=term \
@@ -39,8 +44,7 @@ jobs:
       - run:
           name: Upload coverage to Codecov
           command: |
-            source venv/bin/activate
-            codecovcli do-upload \
+            uv run codecovcli do-upload \
               --token=$CODECOV_TOKEN \
               --sha=$CIRCLE_SHA1 \
               --git-service=github \

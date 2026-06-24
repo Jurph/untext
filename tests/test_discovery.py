@@ -3,8 +3,7 @@ import pytest
 import logging
 import random
 import cv2
-from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from untextre.discovery import (
     bucket_images_by_size,
     assign_zone,
@@ -552,7 +551,7 @@ def test_select_candidate_prefers_structured_zone_over_flat_zone():
     Without gradient weighting both zones rank equally.
     With gradient weighting, Zone B must rank first.
     """
-    from untextre.discovery import select_candidate_components, score_to_mask
+    from untextre.discovery import select_candidate_components
 
     H, W = 200, 300
     labels_img = np.zeros((H, W), dtype=np.int32)
@@ -599,6 +598,7 @@ def test_select_candidate_prefers_structured_zone_over_flat_zone():
 
     # Without gradient: both zones have equal area; zone A appears first (lower label index)
     without = select_candidate_components(mask_data, dummy_score, W, H, max_zones=2)
+    assert int(np.sum(without[0][0:100, 0:150])) > 0
     # With gradient: Zone B must rank first
     with_grad = select_candidate_components(
         mask_data, dummy_score, W, H, max_zones=2, median_grad=median_grad

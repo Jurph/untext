@@ -1,7 +1,6 @@
 from dataclasses import is_dataclass
 import logging
 
-import cv2
 import numpy as np
 
 from untextre.watermark_consensus import (

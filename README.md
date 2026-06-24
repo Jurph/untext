@@ -52,46 +52,54 @@ The underlying engine works as a command-line tool or as a web UI. I've tried to
 - **Python 3.10+**
 - **GPU (recommended)**: NVIDIA GPU with [CUDA toolkit](https://developer.nvidia.com/cuda-downloads) installed. Verify with `nvidia-smi`. CPU-only works but LaMa inpainting will be slow.
 
-### Step 1: Create a virtual environment
+### Recommended: install with uv
 
 ```bash
-python -m venv venv
-
-# Activate it:
-# Windows (PowerShell)
-.\venv\Scripts\Activate.ps1
-# Windows (cmd)
-venv\Scripts\activate.bat
-# Linux / macOS
-source venv/bin/activate
+uv sync --extra web
 ```
 
-### Step 2: Install PyTorch (with CUDA support)
+This creates the project environment at `.venv/`. On Windows, the project uses CUDA 12.4 PyTorch wheels by default. On Linux/macOS, it uses CPU PyTorch wheels so remote CI stays simple.
 
-Install PyTorch **before** the other dependencies. The `requirements.txt` intentionally excludes torch because `pip install torch` from PyPI pulls a CPU-only build that will silently overwrite a CUDA-enabled installation.
-
-Visit the [PyTorch "Get Started" page](https://pytorch.org/get-started/locally/) and select your OS, package manager, Python version, and CUDA version. Then run the generated command:
+For development tools:
 
 ```bash
-# Example for Windows/Linux with CUDA 12.4
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-
-# Example for CPU-only
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+uv sync --extra web --extra dev
 ```
 
-### Step 3: Install remaining dependencies
+### Alternative: install with pip
+
+The repository includes a canonical `requirements.txt` for pip users. It is generated from `pyproject.toml` and `uv.lock`, and includes the PyTorch package indexes needed for the platform-specific Torch wheels.
 
 ```bash
-# Core dependencies (detection, masking, inpainting)
-pip install -r requirements.txt
+python -m venv .venv
 
-# Optional: web interface (Streamlit)
-pip install -r requirements_streamlit.txt
+# Windows PowerShell:
+.\.venv\Scripts\Activate.ps1
 
-# Optional: development tools (pytest, black, flake8, mypy)
-pip install -r requirements_dev.txt
+# Linux / macOS:
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
+
+python -m pip install -r requirements.txt
+python -m pip install -e . --no-deps
 ```
+
+For developer tools with pip, install the project dev extra after the app dependencies:
+
+```bash
+python -m pip install -e ".[dev]" --extra-index-url https://download.pytorch.org/whl/cu124 --extra-index-url https://download.pytorch.org/whl/cpu
+```
+
+### Refresh requirements.txt after dependency changes
+
+The dependency source of truth is `pyproject.toml` plus `uv.lock`. When dependencies change, refresh the committed pip requirements file from the lockfile:
+
+```bash
+uv export --format requirements.txt --extra web --no-dev --no-emit-project --no-hashes --frozen -o requirements.txt
+```
+
+Keep the two PyTorch `--extra-index-url` lines at the top of `requirements.txt` after regenerating it.
 
 ## Usage
 
@@ -103,11 +111,8 @@ The easiest way to use **untextre** is through the web interface — drag and dr
 
 **Quick Start:**
 ```bash
-# Install web interface dependencies
-pip install -r requirements_streamlit.txt
-
 # Launch the web interface
-python run_web_interface.py
+uv run python run_web_interface.py
 ```
 
 The interface will open automatically at `http://localhost:8501`

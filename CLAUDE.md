@@ -8,7 +8,7 @@ The scope of the task is defined by the main verb and object. "Add type hints" m
 
 Out-of-bounds changes (unless explicitly requested):
 - Replacing a core library with a different implementation
-- Any change that impacts `requirements.txt`
+- Any change that impacts `pyproject.toml` or `uv.lock`
 - Writing tests for degenerate or trivial cases with no diagnostic value
 - Changing function/method signatures or types on a whim
 
@@ -16,15 +16,15 @@ You can *recommend* any of those. But you must not take narrow permission as lic
 
 ## Python Environment
 
-**Always use the venv.** The project venv is at `venv/` in the repo root. The correct interpreter is `venv/Scripts/python` (Windows) or `venv/bin/python` (Linux/macOS). Always run tests as:
+**Always use the project environment.** The project environment is at `.venv/` in the repo root and is managed by uv. Always run tests as:
 
 ```bash
-venv/Scripts/python -m pytest -m "not slow"
+uv run pytest -m "not slow"
 ```
 
 **Do not trust the system Python on this machine.** The developer machine has a separate Python installation at `AppData\Local\Programs\Python\Python310\` that carries a broken `tensorflow-intel 2.11.0` (installed as an `.egg`) alongside an incompatible protobuf version. Any test run that accidentally uses the system Python will produce a cascade of `TypeError: Descriptors cannot be created directly` collection errors — those errors mean you are using the wrong interpreter, not that the code is broken.
 
-The venv has TF 2.19, protobuf 6.x, scikit-image, streamlit, torch, and all other dependencies. It is the only Python environment on this machine that should be used for development or testing.
+The uv-managed `.venv` has TF 2.19, protobuf 6.x, scikit-image, streamlit, torch, and all other dependencies. It is the only Python environment on this machine that should be used for development or testing.
 
 ## Never Invent Statistical Thresholds
 

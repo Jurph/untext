@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import cv2
+import pytest
 
 from untextre.watermark_consensus import (
     CandidateMetadata,
@@ -10,6 +11,8 @@ from untextre.watermark_consensus import (
     extract_candidate_clusters,
     score_candidate_pair,
 )
+
+pytestmark = pytest.mark.slow
 
 
 FIXTURE_DIR = Path(__file__).resolve().parent / "images" / "fixtures"

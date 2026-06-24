@@ -559,7 +559,6 @@ class TestLamaHealthAndReset:
         monkeypatch.setattr(inpaint_mod, "_lama_init_failed", False)
         # Even if torch.cuda.empty_cache fails, reset should complete
         import torch
-        original_empty_cache = torch.cuda.empty_cache
         monkeypatch.setattr(torch.cuda, "empty_cache", lambda: (_ for _ in ()).throw(RuntimeError("cleanup boom")))
         reset_lama_model()
         assert inpaint_mod._lama_inpainter is None
@@ -584,7 +583,6 @@ class TestInitializeLamaModel:
     def test_force_reinit_calls_reset(self, monkeypatch):
         """force_reinit=True resets and reinitializes."""
         reset_called = {"n": 0}
-        original_reset = reset_lama_model
 
         def tracking_reset():
             reset_called["n"] += 1
