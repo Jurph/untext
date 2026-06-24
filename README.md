@@ -256,7 +256,7 @@ python -m untextre.cli -i photos/ -o cleaned/ -g 8
 ## Performance Tips
 
 * **First run**: Model loading takes 10-15 seconds, then processing is fast
-* **Batch processing**: Models loaded once, subsequent images process in 2-5 seconds. VRAM is automatically cleaned between images.
+* **Batch processing**: Detection and inpainting models are cached once and reused across images. Consensus detection and direct detector calls share the same DocTR, EasyOCR, and EAST instances to avoid duplicate VRAM use. VRAM is automatically cleaned between images.
 * **Granularity**: CLI uses g=4 by default with auto-retry at g=8 if remnants detected. Web UI lets you choose (3-20).
 * **Confidence**: Start with 0.3, increase to 0.4-0.5 if too many false positives
 * **Speed vs Quality**: Use `--no-retry` for faster processing, or `--paint telea` for CPU-only inpainting
