@@ -28,6 +28,7 @@ from untextre.cli import (
     _apply_color_enhancement,
     _save_discovered_watermark_candidates,
     _save_clean_timing_report,
+    _translate_rotated_bbox_to_original,
     find_known_mask_in_image,
     load_watermark_templates,
     main,
@@ -36,6 +37,15 @@ from untextre.cli import (
     process_single_image,
     try_watermark_cascade,
 )
+
+
+def test_translate_rotated_bbox_to_original_uses_hand_calculated_inverse():
+    """A bbox from a 90-degree-clockwise image maps back to original coordinates."""
+    # Original image is 80w x 40h. Rotated bbox covers original x=[7,13), y=[25,35).
+    assert _translate_rotated_bbox_to_original(
+        rotated_bbox=(5, 7, 10, 6),
+        original_shape=(40, 80),
+    ) == (7, 25, 6, 10)
 
 
 # =========================================================================

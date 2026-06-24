@@ -52,6 +52,17 @@ def _make_watermark_template(name: str, rgba: np.ndarray) -> WatermarkTemplate:
     return WatermarkTemplate(name, rgba, tuple(build_candidate_orb_variants(rgba)))
 
 
+def _translate_rotated_bbox_to_original(
+    rotated_bbox: Tuple[int, int, int, int],
+    original_shape: Tuple[int, int],
+) -> Tuple[int, int, int, int]:
+    """Map bbox from cv2.ROTATE_90_CLOCKWISE image back to original image coordinates."""
+    x_rot, y_rot, w_rot, h_rot = rotated_bbox
+    original_h, _original_w = original_shape
+    # Clockwise rotation maps original (x, y) -> rotated (H - 1 - y, x).
+    return (y_rot, original_h - x_rot - w_rot, h_rot, w_rot)
+
+
 def _save_discovered_watermark_candidates(
     output_path: Path,
     candidates: List[np.ndarray],
@@ -1267,24 +1278,11 @@ def process_single_image(
                 timings['failover_type'] = 'rotation'
                 logger.info(f"Found {len(rotated_consensus_boxes)} consensus regions in rotated image")
                 
-                # Translate consensus boxes back to original coordinate system
-                # For 90° clockwise rotation then back: need to reverse the transformation
-                # Forward: (x, y) -> (y, W - x - 1) where W is original width
-                # Reverse: (x_rot, y_rot) -> (H - y_rot - 1, x_rot) where H is original height
+                # Translate consensus boxes back to original coordinates.
+                # cv2.ROTATE_90_CLOCKWISE maps original (x, y) -> rotated (H - 1 - y, x).
                 consensus_boxes = []
                 for bbox in rotated_consensus_boxes:
-                    x_rot, y_rot, w_rot, h_rot = bbox
-                    # Transform coordinates back to original orientation
-                    # For 90° clockwise rotation: point (x,y) -> (y, W-x-1)
-                    # Reverse: point (x_rot, y_rot) -> (H-y_rot-1, x_rot) where H is original height
-                    # Wait, let me think about this differently...
-                    # If we rotate 90° clockwise then back, we need the inverse transformation
-                    x_orig = y_rot
-                    y_orig = h - x_rot - w_rot  # h is original height, w_rot is width of detected box
-                    w_orig = h_rot  # dimensions swap back
-                    h_orig = w_rot
-                    
-                    translated_bbox = (x_orig, y_orig, w_orig, h_orig)
+                    translated_bbox = _translate_rotated_bbox_to_original(bbox, (h, w))
                     consensus_boxes.append(translated_bbox)
                     logger.info(f"Translated rotated bbox {bbox} -> {translated_bbox}")
                 
