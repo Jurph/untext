@@ -314,11 +314,8 @@ def _detect_with_east(image: ImageArray, net: cv2.dnn_Net,
             logger.debug("No text regions found by EAST")
             return []
         
-        # Apply non-maximum suppression to remove overlapping detections
-        # Convert rectangles to (x, y, w, h) format for NMS
-        boxes = []
-        for (x, y, w, h) in rectangles:
-            boxes.append([x, y, x + w, y + h])
+        # Apply non-maximum suppression to remove overlapping detections.
+        boxes = [[x, y, w, h] for (x, y, w, h) in rectangles]
         
         # Apply OpenCV's NMS if available, otherwise use simple overlap removal
         try:
@@ -331,10 +328,13 @@ def _detect_with_east(image: ImageArray, net: cv2.dnn_Net,
             else:
                 selected_indices = []
         except Exception:
-            # Fallback to simple confidence-based selection if NMS fails
-            logger.warning("OpenCV NMS failed, using confidence-based selection")
-            conf_threshold = min_confidence + 0.1  # Slightly higher threshold
-            selected_indices = [i for i, conf in enumerate(confidences) if conf >= conf_threshold]
+            logger.warning(
+                "OpenCV NMS failed; using local NMS fallback "
+                f"(score_threshold={min_confidence:.3f}, nms_threshold={nms_threshold:.3f})"
+            )
+            selected_indices = _non_max_suppression_indices(
+                boxes, confidences, min_confidence, nms_threshold
+            )
         
         # Convert selected rectangles to our detection format
         detections = []
@@ -368,6 +368,54 @@ def _detect_with_east(image: ImageArray, net: cv2.dnn_Net,
     except Exception as e:
         logger.error(f"EAST detection failed: {e}")
         raise RuntimeError("EAST detection failed") from e
+
+
+def _non_max_suppression_indices(
+    boxes: List[List[int]],
+    confidences: List[float],
+    min_confidence: float,
+    nms_threshold: float,
+) -> List[int]:
+    """Return kept indices for axis-aligned (x, y, w, h) boxes."""
+    candidate_indices = [
+        idx for idx, confidence in enumerate(confidences)
+        if confidence >= min_confidence
+    ]
+    candidate_indices.sort(key=lambda idx: confidences[idx], reverse=True)
+
+    selected: List[int] = []
+    while candidate_indices:
+        current = candidate_indices.pop(0)
+        selected.append(current)
+        candidate_indices = [
+            idx for idx in candidate_indices
+            if _calculate_xywh_iou(boxes[current], boxes[idx]) <= nms_threshold
+        ]
+
+    return selected
+
+
+def _calculate_xywh_iou(box_a: List[int], box_b: List[int]) -> float:
+    """Calculate IoU for axis-aligned boxes stored as (x, y, w, h)."""
+    ax, ay, aw, ah = box_a
+    bx, by, bw, bh = box_b
+
+    a_x2 = ax + aw
+    a_y2 = ay + ah
+    b_x2 = bx + bw
+    b_y2 = by + bh
+
+    inter_w = max(0, min(a_x2, b_x2) - max(ax, bx))
+    inter_h = max(0, min(a_y2, b_y2) - max(ay, by))
+    intersection = inter_w * inter_h
+    if intersection == 0:
+        return 0.0
+
+    area_a = aw * ah
+    area_b = bw * bh
+    union = area_a + area_b - intersection
+    return intersection / union if union > 0 else 0.0
+
 
 def _decode_east_predictions(scores: np.ndarray, geometry: np.ndarray, 
                            min_confidence: float) -> Tuple[List[Tuple[int, int, int, int]], List[float]]:
