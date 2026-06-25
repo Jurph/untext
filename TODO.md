@@ -50,7 +50,7 @@ The goal of this tool is fast and accurate watermark removal. We detect text-bas
 - [x] **Delete dead `_find_known_mask_in_image_single_variant`**: Zero callers outside the definition file; 185 lines of logic ~85% duplicated from `find_known_mask_in_image`. Safe delete. (`cli.py` lines 324–509)
 - [x] **Replace two inline bbox-superset calculations with `utils.calculate_bbox_superset`**: Inline copies at `cli.py` lines 267–271 and 1347–1351 diverge from the utility function that already handles the empty-list case.
 - [x] **Fix `timing_data["total_time"] = 0` in template-match path**: Hardcoded zero misleads users comparing ORB-match vs. consensus-detection performance. Record actual elapsed time. (`cli.py` line 1041)
-- [ ] **Add `# EMPIRICAL` to `overlap_threshold = 0.1` in `consensus.py`**: Controls whether two detectors "agree"; no documented derivation. (`consensus.py` lines 244, 397)
+- [x] **Switch consensus overlap threshold to IoU**: A 400-image experiment showed `overlap/smaller_area >= 0.1` admitted tiny contained blips as consensus; `IoU >= 0.1` filtered those spurious overlaps while preserving empirically stronger detector agreement.
 - [x] **Fix EAST NMS fallback logic**: Corrected OpenCV `NMSBoxes` input from corner coordinates to `(x, y, w, h)` and replaced the `+0.1` confidence-only fallback with local greedy NMS using the same score/NMS thresholds. No empirical tuning factor remains.
 - [x] **Delete `get_largest_text_region` and `_merge_bboxes` and their unit tests**: Confirmed dead production code; tests written for them have no diagnostic value. (`detector.py` lines 385–477)
 - [ ] **Fix `auto_retry` OOM loop in `inpaint.py`**: Catching all exceptions and calling `initialize_lama_model(force_reinit=True)` on `OutOfMemoryError` tries to reload a model into already-full VRAM, making OOM worse. Catch `torch.cuda.OutOfMemoryError` explicitly and skip the retry. (`inpaint.py` lines 279–292)
@@ -60,9 +60,10 @@ The goal of this tool is fast and accurate watermark removal. We detect text-bas
 - [x] **Remove `nfeatures` parameter from `count_candidate_orb_keypoints`**: Parameter is immediately `del`d; callers who pass it get a 5000-feature ORB regardless. Deceptive API. (`orb_prep.py` lines 159–163)
 - [x] **Remove deprecated `confidence_threshold` from `consensus.initialize_consensus_models`**: Documented as "ignored"; callers believe they are configuring behavior when they are not.
 - [x] **Remove `debug_dir` from `build_final_templates` signature**: Accepted then immediately `del`d; replace with a TODO comment if the feature is planned. (`watermark_consensus.py` lines 1443–1447)
-- [ ] **Add `# EMPIRICAL` to `color_distance_floor=24.0`**: Per project rules. (`watermark_consensus._filter_scoring_alpha` ~line 161)
+- [x] **Switch `_filter_scoring_alpha` color gate to Lab distance <= 8.0**: PB/SG same-logo subset experiments showed Lab<=8 closely matched the previous BGR<=24 behavior while using a perceptually meaningful color space. (`watermark_consensus._filter_scoring_alpha`)
 - [ ] **Add `# EMPIRICAL` and `logger.warning` to `color_radius = 30.0` fallback**: Fallback fires when bbox contains no valid pixels — a suspicious degenerate condition that should surface in logs. (`find_text_colors.py` ~line 671)
 - [ ] **Add runtime `logger.warning` to `compute_median_gradient` for large batches**: Docstring acknowledges O(N×H×W) RAM; a warning when N exceeds a documented threshold (e.g., N > 50 at estimated 4K) prevents silent OOM. (`discovery.py` lines 386–402)
+- [ ] **Make image ingest robust to non-ASCII Windows paths**: Experiment hit `cv2.imread()` failure on a Unicode filename under `G:\...`; production ingest should use a Unicode-safe path reader such as `np.fromfile()` + `cv2.imdecode()` and avoid cp1252 logging crashes.
 
 ### Backlog
 

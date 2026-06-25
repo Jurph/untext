@@ -159,8 +159,14 @@ def _filter_scoring_alpha(
     area_ratio: float = 0.05,
     min_area: int = 24,
     max_components: int = 24,
-    color_distance_floor: float = 24.0,
+    color_distance_floor: float = 8.0,
 ) -> np.ndarray:
+    """Filter scoring alpha components using area and Lab color consistency.
+
+    EMPIRICAL: `color_distance_floor=8.0` was selected from PB/SG same-logo
+    subset experiments. It closely matched the previous BGR<=24 behavior while
+    using Lab distance, where Euclidean distance has perceptual meaning.
+    """
     alpha_u8 = bgra[:, :, 3]
     mask = (alpha_u8 > 0).astype(np.uint8)
     if not np.any(mask):
@@ -190,29 +196,29 @@ def _filter_scoring_alpha(
         candidate_labels = ranked_labels[:1]
 
     seed_labels = candidate_labels[: min(8, len(candidate_labels))]
-    weighted_color_sum = np.zeros(3, dtype=np.float64)
+    weighted_lab_sum = np.zeros(3, dtype=np.float64)
     total_weight = 0.0
-    component_colors: dict[int, np.ndarray] = {}
+    component_labs: dict[int, np.ndarray] = {}
 
     for label in candidate_labels:
         ys, xs = np.where(labels == label)
         if ys.size == 0:
             continue
-        color = bgra[ys, xs, :3].astype(np.float32).mean(axis=0)
-        component_colors[label] = color
+        color_bgr = bgra[ys, xs, :3].astype(np.float32).mean(axis=0)
+        color_lab = _bgr_color_to_lab(color_bgr)
+        component_labs[label] = color_lab
         if label in seed_labels:
             area = float(stats[label, cv2.CC_STAT_AREA])
-            weighted_color_sum += color.astype(np.float64) * area
+            weighted_lab_sum += color_lab.astype(np.float64) * area
             total_weight += area
 
     if total_weight <= 0.0:
         keep_labels = candidate_labels
     else:
-        reference_color = (weighted_color_sum / total_weight).astype(np.float32)
+        reference_lab = (weighted_lab_sum / total_weight).astype(np.float32)
         keep_labels = []
         for label in candidate_labels:
-            color = component_colors[label]
-            color_distance = float(np.linalg.norm(color - reference_color))
+            color_distance = float(np.linalg.norm(component_labs[label] - reference_lab))
             area = int(stats[label, cv2.CC_STAT_AREA])
             if color_distance <= color_distance_floor or area >= int(round(largest_area * 0.75)):
                 keep_labels.append(label)
@@ -224,6 +230,12 @@ def _filter_scoring_alpha(
     for label in keep_labels:
         filtered[labels == label] = alpha_u8[labels == label]
     return filtered
+
+
+def _bgr_color_to_lab(color_bgr: np.ndarray) -> np.ndarray:
+    """Convert one BGR color to OpenCV Lab float coordinates."""
+    pixel = (color_bgr.reshape(1, 1, 3).astype(np.float32) / 255.0)
+    return cv2.cvtColor(pixel, cv2.COLOR_BGR2LAB).reshape(3)
 
 
 def _merge_bbox_group(boxes: list[tuple[int, int, int, int]]) -> tuple[int, int, int, int]:

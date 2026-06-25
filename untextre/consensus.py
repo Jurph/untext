@@ -181,6 +181,18 @@ def calculate_bbox_overlap(bbox1: Tuple[int, int, int, int], bbox2: Tuple[int, i
     return (right - left) * (bottom - top)
 
 
+def calculate_bbox_iou(bbox1: Tuple[int, int, int, int], bbox2: Tuple[int, int, int, int]) -> float:
+    """Calculate intersection over union for two bounding boxes."""
+    overlap_area = calculate_bbox_overlap(bbox1, bbox2)
+    if overlap_area <= 0:
+        return 0.0
+
+    bbox1_area = bbox1[2] * bbox1[3]
+    bbox2_area = bbox2[2] * bbox2[3]
+    union_area = bbox1_area + bbox2_area - overlap_area
+    return overlap_area / union_area if union_area > 0 else 0.0
+
+
 def calculate_bbox_union(bbox1: Tuple[int, int, int, int], bbox2: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
     """Calculate the bounding box that encompasses both input boxes.
     
@@ -225,13 +237,13 @@ def calculate_hybrid_confidence(confidences: List[float]) -> float:
     return 1.0 - unconfidence_product
 
 
-def find_consensus_boxes(detections: Dict[str, List[Tuple[int, int, int, int, float]]], 
+def find_consensus_boxes(detections: Dict[str, List[Tuple[int, int, int, int, float]]],
                         overlap_threshold: float = 0.1) -> List[Dict]:
     """Find consensus boxes where multiple detectors agree.
     
     Args:
         detections: Dictionary mapping detector name to list of (x, y, w, h, conf) tuples
-        overlap_threshold: Minimum overlap ratio for consensus (default: 0.1)
+        overlap_threshold: Minimum bbox IoU for consensus (default: 0.1)
         
     Returns:
         List of consensus box dictionaries with keys:
@@ -269,15 +281,11 @@ def find_consensus_boxes(detections: Dict[str, List[Tuple[int, int, int, int, fl
             if det2['used'] or det2['detector'] in {d['detector'] for d in overlapping_group}:
                 continue
                 
-            # Calculate overlap
-            overlap_area = calculate_bbox_overlap(det1['bbox'], det2['bbox'])
-            bbox1_area = det1['bbox'][2] * det1['bbox'][3]
-            bbox2_area = det2['bbox'][2] * det2['bbox'][3]
-            
-            # Check if overlap is significant relative to smaller box
-            min_area = min(bbox1_area, bbox2_area)
-            overlap_ratio = overlap_area / min_area if min_area > 0 else 0
-            
+            # A quick sample of ~400 relevant images showed strong support for
+            # IoU > 0.1 for filtering out spurious detections that happen to
+            # overlap with different modes.
+            overlap_ratio = calculate_bbox_iou(det1['bbox'], det2['bbox'])
+
             if overlap_ratio >= overlap_threshold:
                 overlapping_group.append(det2)
                 det2['used'] = True
@@ -290,11 +298,7 @@ def find_consensus_boxes(detections: Dict[str, List[Tuple[int, int, int, int, fl
                     
                     # Check overlap with any member of current group
                     for group_det in overlapping_group:
-                        overlap_area = calculate_bbox_overlap(group_det['bbox'], det3['bbox'])
-                        det3_area = det3['bbox'][2] * det3['bbox'][3]
-                        group_det_area = group_det['bbox'][2] * group_det['bbox'][3]
-                        min_area = min(det3_area, group_det_area)
-                        overlap_ratio = overlap_area / min_area if min_area > 0 else 0
+                        overlap_ratio = calculate_bbox_iou(group_det['bbox'], det3['bbox'])
                         
                         if overlap_ratio >= overlap_threshold:
                             overlapping_group.append(det3)

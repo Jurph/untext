@@ -13,6 +13,7 @@ from untextre.watermark_consensus import (
     ConsensusTemplate,
     PairwiseScore,
     ScaleProposal,
+    _filter_scoring_alpha,
     alpha_to_soft_mask,
     build_candidate_graph,
     build_candidate_record,
@@ -136,6 +137,18 @@ def make_multi_component_bgra(
     return bgra
 
 
+def make_two_component_color_bgra(
+    small_color: tuple[int, int, int],
+    large_color: tuple[int, int, int] = (180, 180, 180),
+) -> np.ndarray:
+    bgra = np.zeros((40, 80, 4), dtype=np.uint8)
+    bgra[5:15, 5:15, :3] = large_color
+    bgra[5:15, 5:15, 3] = 255
+    bgra[22:27, 50:56, :3] = small_color
+    bgra[22:27, 50:56, 3] = 255
+    return bgra
+
+
 def _offset_blob(blob: tuple[int, int, int, int], dx: int, dy: int) -> tuple[int, int, int, int]:
     by, bx, bh, bw = blob
     return by + dy, bx + dx, bh, bw
@@ -198,6 +211,22 @@ def test_consensus_module_logger_is_configured_for_info_output():
 
     assert consensus_mod.logger.handlers
     assert consensus_mod.logger.level == logging.INFO
+
+
+def test_filter_scoring_alpha_keeps_lab_close_small_component():
+    bgra = make_two_component_color_bgra(small_color=(190, 180, 180))
+
+    filtered = _filter_scoring_alpha(bgra)
+
+    assert np.all(filtered[22:27, 50:56] == 255)
+
+
+def test_filter_scoring_alpha_drops_bgr_close_but_lab_far_small_component():
+    bgra = make_two_component_color_bgra(small_color=(194, 161, 184))
+
+    filtered = _filter_scoring_alpha(bgra)
+
+    assert np.all(filtered[22:27, 50:56] == 0)
 
 
 def test_alpha_to_soft_mask_normalizes_uint8_alpha():

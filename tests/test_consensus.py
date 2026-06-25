@@ -266,34 +266,37 @@ class TestFindConsensusBoxes:
         assert len(consensus) == 0, "Same detector's detections shouldn't create consensus"
     
     def test_overlap_threshold_filtering(self):
-        """Test that overlap threshold correctly filters weak overlaps."""
+        """Test that overlap threshold uses IoU to filter weak overlaps."""
         detections = {
             "doctr": [(100, 100, 100, 100, 0.8)],     # Large box
             "easyocr": [(180, 180, 25, 25, 0.9)],     # Small box, minimal overlap
             "east": []
         }
-        
-        # Overlap calculation uses smaller box area as denominator
-        # 20x20 overlap on 25x25 box = 400/625 = 64% overlap ratio
-        # This is a good test of the actual algorithm behavior
-        
-        # With low threshold (5%), should create consensus (64% >> 5%)
+
+        # IoU is 400 / (10000 + 625 - 400) ~= 3.9%.
         consensus_low = find_consensus_boxes(detections, overlap_threshold=0.05)
-        assert len(consensus_low) == 1, "Significant overlap should create consensus with low threshold"
-        
-        # With very high threshold (70%), should not create consensus (64% < 70%)
-        consensus_high = find_consensus_boxes(detections, overlap_threshold=0.7)
-        assert len(consensus_high) == 0, "64% overlap fails 70% threshold"
-        
-        # With threshold at 60%, should create consensus (64% >= 60%)
-        consensus_mid = find_consensus_boxes(detections, overlap_threshold=0.6)
-        assert len(consensus_mid) == 1, "64% overlap meets 60% threshold"
+        assert len(consensus_low) == 0, "IoU below threshold should not create consensus"
+
+        consensus_lower = find_consensus_boxes(detections, overlap_threshold=0.03)
+        assert len(consensus_lower) == 1, "IoU above threshold should create consensus"
+
+    def test_tiny_contained_box_does_not_create_consensus(self):
+        """Test that a tiny blip inside a broad detection is not agreement."""
+        detections = {
+            "doctr": [(382, 1044, 4, 6, 0.8)],
+            "easyocr": [(336, 1024, 470, 52, 0.9)],
+            "east": []
+        }
+
+        consensus = find_consensus_boxes(detections, overlap_threshold=0.1)
+
+        assert len(consensus) == 0, "Tiny contained boxes should not corroborate broad detections"
     
     def test_consensus_bbox_is_union(self):
         """Test that consensus bbox is the union of overlapping detections."""
         detections = {
             "doctr": [(10, 10, 30, 30, 0.8)],     # x: 10-40, y: 10-40
-            "easyocr": [(30, 30, 30, 30, 0.9)],   # x: 30-60, y: 30-60
+            "easyocr": [(25, 25, 30, 30, 0.9)],   # x: 25-55, y: 25-55
             "east": []
         }
         
@@ -302,8 +305,8 @@ class TestFindConsensusBoxes:
         assert len(consensus) == 1
         bbox = consensus[0]["bbox"]
         
-        # Union should span from (10,10) to (60,60)
-        assert bbox == (10, 10, 50, 50), f"Union bbox should be (10,10,50,50), got {bbox}"
+        # Union should span from (10,10) to (55,55)
+        assert bbox == (10, 10, 45, 45), f"Union bbox should be (10,10,45,45), got {bbox}"
     
     def test_empty_detections(self):
         """Test with no detections (edge case)."""
