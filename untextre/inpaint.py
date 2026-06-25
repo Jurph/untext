@@ -382,17 +382,17 @@ def _calculate_inpainting_subregion(
     total_white_pixels = len(xs)
     mask_area = mask_bbox[2] * mask_bbox[3]
     coverage_percent = (total_white_pixels / mask_area) * 100 if mask_area > 0 else 0
-    
-    logger.info("Mask analysis:")
-    logger.info(f"  White pixels found: {total_white_pixels:,}")
-    logger.info(f"  Mask bounding box: ({mask_bbox[0]}, {mask_bbox[1]}) size {mask_bbox[2]}×{mask_bbox[3]}")
-    logger.info(f"  Mask area: {mask_area:,} pixels")
-    logger.info(f"  Coverage density: {coverage_percent:.1f}%")
+
+    logger.debug("Mask analysis:")
+    logger.debug(f"  White pixels found: {total_white_pixels:,}")
+    logger.debug(f"  Mask bounding box: ({mask_bbox[0]}, {mask_bbox[1]}) size {mask_bbox[2]}×{mask_bbox[3]}")
+    logger.debug(f"  Mask area: {mask_area:,} pixels")
+    logger.debug(f"  Coverage density: {coverage_percent:.1f}%")
     
     if image_shape is not None:
         total_image_pixels = image_shape[0] * image_shape[1]
         image_coverage_percent = (total_white_pixels / total_image_pixels) * 100
-        logger.info(f"  Image coverage: {image_coverage_percent:.2f}% of total image")
+        logger.debug(f"  Image coverage: {image_coverage_percent:.2f}% of total image")
     
     # Dilate the mask bbox by 64px for better context
     # TODO: Make dilation amount configurable
@@ -402,21 +402,24 @@ def _calculate_inpainting_subregion(
         mask_bbox = dilate_bbox(mask_bbox, dilation_amount, image_shape)
     
     # Log dilation results
-    logger.info(f"After {dilation_amount}px dilation:")
-    logger.info(f"  Original bbox: ({original_bbox[0]}, {original_bbox[1]}) size {original_bbox[2]}×{original_bbox[3]}")
-    logger.info(f"  Dilated bbox: ({mask_bbox[0]}, {mask_bbox[1]}) size {mask_bbox[2]}×{mask_bbox[3]}")
+    logger.debug(f"After {dilation_amount}px dilation:")
+    logger.debug(f"  Original bbox: ({original_bbox[0]}, {original_bbox[1]}) size {original_bbox[2]}×{original_bbox[3]}")
+    logger.debug(f"  Dilated bbox: ({mask_bbox[0]}, {mask_bbox[1]}) size {mask_bbox[2]}×{mask_bbox[3]}")
     
     # Ensure dimensions are compatible with neural networks (LaMa requires mod-4, but may internally pad to mod-8 or mod-16)
     # Use mod-8 padding to be safe for most neural network architectures
     if image_shape is not None:
         # Apply mod-8 padding for better neural network compatibility
         mod8_bbox = pad_bbox_to_multiple(mask_bbox, multiple=8, image_shape=image_shape)
-        logger.info(f"  Mod-8 padded bbox: ({mod8_bbox[0]}, {mod8_bbox[1]}) size {mod8_bbox[2]}×{mod8_bbox[3]}")
+        logger.debug(f"  Mod-8 padded bbox: ({mod8_bbox[0]}, {mod8_bbox[1]}) size {mod8_bbox[2]}×{mod8_bbox[3]}")
         mask_bbox = mod8_bbox
     
     # Convert to subregion format (x1, y1, x2, y2)
     x, y, w, h = mask_bbox
     subregion = (x, y, x + w, y + h)
     
-    logger.info(f"Final inpainting subregion: {subregion}")
+    logger.info(
+        f"Inpainting subregion: {subregion} "
+        f"(mask pixels={total_white_pixels:,}, density={coverage_percent:.1f}%)"
+    )
     return subregion

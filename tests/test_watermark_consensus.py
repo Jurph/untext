@@ -209,8 +209,9 @@ def test_candidate_record_separates_pixels_from_metadata():
 def test_consensus_module_logger_is_configured_for_info_output():
     import untextre.watermark_consensus as consensus_mod
 
-    assert consensus_mod.logger.handlers
-    assert consensus_mod.logger.level == logging.INFO
+    assert consensus_mod.logger.handlers == []
+    assert consensus_mod.logger.propagate is True
+    assert consensus_mod.logger.level == logging.NOTSET
 
 
 def test_filter_scoring_alpha_keeps_lab_close_small_component():

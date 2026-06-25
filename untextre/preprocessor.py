@@ -63,6 +63,6 @@ def preprocess_image(image: ImageArray) -> Optional[ImageArray]:
         preprocessed = cv2.cvtColor(filtered, cv2.COLOR_GRAY2RGB)
         return preprocessed
         
-    except Exception as e:
-        logger.error(f"Failed to preprocess image array: {e}")
+    except Exception:
+        logger.exception("Failed to preprocess image array")
         return None 

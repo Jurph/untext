@@ -48,29 +48,65 @@ MODEL_CONFIDENCE_FLOOR: float = 0.1
 CLI_DEFAULT_CONFIDENCE: float = 0.3
 WEB_DEFAULT_CONFIDENCE: float = 0.025
 
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+LOG_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
+
+
 def setup_logger(name: str, level: int = logging.INFO) -> logging.Logger:
-    """Set up a logger with consistent formatting.
+    """Return a package logger configured to propagate to root.
+
+    Root logging is configured once by configure_logging(). Individual modules
+    must not attach their own handlers, or CLI/file output will duplicate lines.
     
     Args:
         name: Logger name
-        level: Logging level
+        level: Deprecated; retained for compatibility.
         
     Returns:
-        Configured logger instance
+        Logger instance
     """
+    del level
     logger = logging.getLogger(name)
-    
-    if not logger.handlers:  # Avoid duplicate handlers
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-        
-    logger.setLevel(level)
+    logger.handlers.clear()
+    logger.propagate = True
+    logger.setLevel(logging.NOTSET)
     return logger
+
+
+def configure_logging(verbose: bool = False, logfile: Optional[ImagePath] = None) -> None:
+    """Configure root-owned logging for CLI runs."""
+    level = logging.DEBUG if verbose else logging.INFO
+    root = logging.getLogger()
+
+    for handler in list(root.handlers):
+        if getattr(handler, "_untextre_handler", False):
+            root.removeHandler(handler)
+            handler.close()
+
+    formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(level)
+    console_handler._untextre_handler = True  # type: ignore[attr-defined]
+    root.addHandler(console_handler)
+
+    if logfile is not None:
+        log_path = Path(logfile)
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = logging.FileHandler(log_path, mode='w')
+        file_handler.setFormatter(formatter)
+        file_handler.setLevel(level)
+        file_handler._untextre_handler = True  # type: ignore[attr-defined]
+        root.addHandler(file_handler)
+
+    root.setLevel(level)
+
+    for name, logger_obj in logging.Logger.manager.loggerDict.items():
+        if name == "untextre" or name.startswith("untextre."):
+            if isinstance(logger_obj, logging.Logger):
+                logger_obj.handlers.clear()
+                logger_obj.propagate = True
+                logger_obj.setLevel(logging.NOTSET)
 
 def load_image(image_path: ImagePath) -> ImageArray:
     """Load an image from file path.

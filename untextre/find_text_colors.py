@@ -120,7 +120,7 @@ def grabcut_refine(
     # GrabCut needs at least a 3×3 region to be meaningful
     if h < 3 or w < 3:
         if debug:
-            logger.info("GrabCut: region too small, returning FOM mask unchanged")
+            logger.debug("GrabCut: region too small, returning FOM mask unchanged")
         return fom_mask
 
     # Build the 4-value initialization mask that GrabCut expects:
@@ -149,7 +149,7 @@ def grabcut_refine(
             "GC_PR_BGD": int(np.sum(gc_mask == cv2.GC_PR_BGD)),
             "GC_PR_FGD": int(np.sum(gc_mask == cv2.GC_PR_FGD)),
         }
-        logger.info(f"GrabCut init mask: {counts}")
+        logger.debug(f"GrabCut init mask: {counts}")
 
     # GrabCut requires the image to be uint8 BGR (already is) and
     # allocates two 13-component GMM arrays internally.
@@ -179,7 +179,7 @@ def grabcut_refine(
     if debug:
         fom_px = int(np.sum(fom_mask == 255))
         gc_px = int(np.sum(refined == 255))
-        logger.info(f"GrabCut refinement: {fom_px} → {gc_px} foreground pixels "
+        logger.debug(f"GrabCut refinement: {fom_px} → {gc_px} foreground pixels "
                     f"({gc_px - fom_px:+d})")
 
     # Dilate the tight glyph mask so the inpainter gets generous
@@ -191,7 +191,7 @@ def grabcut_refine(
         refined = cv2.dilate(refined, dilate_kern)
         if debug:
             dilated_px = int(np.sum(refined == 255))
-            logger.info(f"GrabCut post-dilation ({dilation_px}px): "
+            logger.debug(f"GrabCut post-dilation ({dilation_px}px): "
                         f"{gc_px} → {dilated_px} foreground pixels")
 
     return refined
@@ -281,14 +281,14 @@ def color_guided_expand(
 
     if debug:
         n_fgd = int(np.sum(fgd_mask == 255))
-        logger.info(
+        logger.debug(
             f"Color expand: ROI={roi_w}×{roi_h}, color_radius={color_radius:.1f}, "
             f"{n_fgd} FGD pixels after closing+CC filter"
         )
 
     if int(np.sum(fgd_mask == 255)) == 0:
         if debug:
-            logger.info("Color expand: no FGD pixels survived, returning confirmed_mask")
+            logger.debug("Color expand: no FGD pixels survived, returning confirmed_mask")
         return confirmed_mask
 
     # --- Build GrabCut init mask ---
@@ -303,7 +303,7 @@ def color_guided_expand(
     if debug:
         n_fgd_gc = int(np.sum(gc_init == cv2.GC_FGD))
         n_bgd_gc = int(np.sum(gc_init == cv2.GC_BGD))
-        logger.info(f"Color expand: GC_FGD={n_fgd_gc}, GC_BGD={n_bgd_gc}")
+        logger.debug(f"Color expand: GC_FGD={n_fgd_gc}, GC_BGD={n_bgd_gc}")
 
     bgd_model = np.zeros((1, 65), np.float64)
     fgd_model = np.zeros((1, 65), np.float64)
@@ -323,7 +323,7 @@ def color_guided_expand(
     if debug:
         orig_px = int(np.sum(confirmed_mask[y1:y2, x1:x2] == 255))
         new_px = int(np.sum(gc_result == 255)) - orig_px
-        logger.info(f"Color expand: confirmed={orig_px} → +{max(new_px, 0)} new pixels")
+        logger.debug(f"Color expand: confirmed={orig_px} → +{max(new_px, 0)} new pixels")
 
     # OR with confirmed_mask: refining, not replacing
     result = confirmed_mask.copy()
@@ -414,7 +414,7 @@ def find_mask_by_spatial_tf_idf(
     actual_new_h = min(new_h, image_h - new_y)
     
     if debug:
-        logger.info(f"Spatial TF-IDF: bbox=({x}, {y}, {w}, {h}), expanded=({new_x}, {new_y}, {actual_new_w}, {actual_new_h})")
+        logger.debug(f"Spatial TF-IDF: bbox=({x}, {y}, {w}, {h}), expanded=({new_x}, {new_y}, {actual_new_w}, {actual_new_h})")
     
     # Extract regions
     bbox_region = image[y:y+h, x:x+w]  # The "document"
@@ -480,9 +480,9 @@ def find_mask_by_spatial_tf_idf(
     tf_idf_scores = tf_scores * idf_scores
     
     if debug:
-        logger.info(f"TF-IDF scores range: {np.min(tf_idf_scores):.4f} to {np.max(tf_idf_scores):.4f}")
+        logger.debug(f"TF-IDF scores range: {np.min(tf_idf_scores):.4f} to {np.max(tf_idf_scores):.4f}")
         positive_scores = np.sum(tf_idf_scores > 0)
-        logger.info(f"Clusters with positive TF-IDF: {positive_scores}/{num_clusters}")
+        logger.debug(f"Clusters with positive TF-IDF: {positive_scores}/{num_clusters}")
     
     # Normalize TF-IDF scores to 0-255 range
     min_score = np.min(tf_idf_scores)
@@ -495,7 +495,7 @@ def find_mask_by_spatial_tf_idf(
         normalized_scores = np.full(num_clusters, 128, dtype=np.uint8)
     
     if debug:
-        logger.info(f"Normalized scores range: {np.min(normalized_scores)} to {np.max(normalized_scores)}")
+        logger.debug(f"Normalized scores range: {np.min(normalized_scores)} to {np.max(normalized_scores)}")
     
     # Use actual bbox_region dimensions, not original h,w (in case of boundary clipping)
     actual_h, actual_w = bbox_region.shape[:2]
@@ -536,7 +536,7 @@ def find_mask_by_spatial_tf_idf(
             excluded.append("left")
         if touches_right:
             excluded.append("right")
-        logger.info(f"Border mask excludes image edges: {', '.join(excluded)}")
+        logger.debug(f"Border mask excludes image edges: {', '.join(excluded)}")
     
     # Compute per-cluster metrics and Figure of Merit
     cluster_foms = np.zeros(num_clusters)
@@ -578,7 +578,7 @@ def find_mask_by_spatial_tf_idf(
         cluster_accepted[cluster_id] = is_text_like and is_not_solid_blob
         
         if debug:
-            logger.info(f"Cluster {cluster_id}: TF-IDF={normalized_scores[cluster_id]}, "
+            logger.debug(f"Cluster {cluster_id}: TF-IDF={normalized_scores[cluster_id]}, "
                        f"border_ratio={border_ratio:.3f}, largest_cc={largest_cc_fraction:.3f}, "
                        f"FOM={fom:.3f}, accepted={cluster_accepted[cluster_id]}")
     
@@ -591,12 +591,12 @@ def find_mask_by_spatial_tf_idf(
     
     if debug:
         accepted_count = np.sum(cluster_accepted)
-        logger.info(f"Accepted {accepted_count}/{num_clusters} clusters (FOM>={fom_threshold}, CC<={cc_guard})")
+        logger.debug(f"Accepted {accepted_count}/{num_clusters} clusters (FOM>={fom_threshold}, CC<={cc_guard})")
     
     # Target color override: if target_color is specified, force inclusion of the color cluster containing it
     if target_color is not None:
         if debug:
-            logger.info(f"Target color override: forcing inclusion of color cluster containing {target_color}")
+            logger.debug(f"Target color override: forcing inclusion of color cluster containing {target_color}")
         
         # Find which cluster the target color belongs to
         target_color_rgb = np.array([target_color[2], target_color[1], target_color[0]])  # Convert BGR to RGB for comparison with centers
@@ -608,8 +608,8 @@ def find_mask_by_spatial_tf_idf(
         if debug:
             closest_center = centers[target_cluster_id]
             distance = distances[target_cluster_id]
-            logger.info(f"Target color {target_color} (RGB: {target_color_rgb}) closest to cluster {target_cluster_id}")
-            logger.info(f"Cluster center: {closest_center}, distance: {distance:.2f}")
+            logger.debug(f"Target color {target_color} (RGB: {target_color_rgb}) closest to cluster {target_cluster_id}")
+            logger.debug(f"Cluster center: {closest_center}, distance: {distance:.2f}")
         
         # Create mask for all pixels in the target cluster
         target_cluster_mask = (bbox_labels_2d == target_cluster_id)
@@ -617,9 +617,9 @@ def find_mask_by_spatial_tf_idf(
         
         if target_pixel_count > 0:
             if debug:
-                logger.info(f"Forcing inclusion of {target_pixel_count} pixels in target color cluster {target_cluster_id}")
+                logger.debug(f"Forcing inclusion of {target_pixel_count} pixels in target color cluster {target_cluster_id}")
                 original_tf_idf = tf_idf_scores[target_cluster_id]
-                logger.info(f"Original TF-IDF score for target cluster: {original_tf_idf:.4f}")
+                logger.debug(f"Original TF-IDF score for target cluster: {original_tf_idf:.4f}")
             
             # Add target cluster pixels to the existing TF-IDF mask (combine both)
             target_mask = target_cluster_mask.astype(np.uint8) * 255
@@ -627,19 +627,19 @@ def find_mask_by_spatial_tf_idf(
             
             if debug:
                 combined_pixels = np.sum(binary_mask == 255)
-                logger.info(f"Combined mask (TF-IDF + target color): {combined_pixels} pixels")
+                logger.debug(f"Combined mask (TF-IDF + target color): {combined_pixels} pixels")
         else:
             if debug:
-                logger.info("No pixels found in target color cluster, using TF-IDF only")
+                logger.debug("No pixels found in target color cluster, using TF-IDF only")
     
     if debug:
         if target_color is not None:
-            logger.info(f"Using FOM>={fom_threshold}, CC<={cc_guard} + target color override")
+            logger.debug(f"Using FOM>={fom_threshold}, CC<={cc_guard} + target color override")
         else:
-            logger.info(f"Using FOM>={fom_threshold}, CC<={cc_guard}")
+            logger.debug(f"Using FOM>={fom_threshold}, CC<={cc_guard}")
         mask_pixels_before_morph = np.sum(binary_mask == 255)
         total_pixels = binary_mask.size
-        logger.info(f"Mask coverage before morphology: {mask_pixels_before_morph}/{total_pixels} pixels ({100*mask_pixels_before_morph/total_pixels:.1f}%)")
+        logger.debug(f"Mask coverage before morphology: {mask_pixels_before_morph}/{total_pixels} pixels ({100*mask_pixels_before_morph/total_pixels:.1f}%)")
 
     # Optional GrabCut refinement: use FOM mask to seed GrabCut for
     # spatially coherent edges before morphological cleanup.
@@ -651,9 +651,9 @@ def find_mask_by_spatial_tf_idf(
 
     if debug:
         mask_pixels_after_morph = np.sum(cleaned_mask == 255)
-        logger.info(f"Mask coverage after morphology: {mask_pixels_after_morph}/{total_pixels} pixels ({100*mask_pixels_after_morph/total_pixels:.1f}%)")
+        logger.debug(f"Mask coverage after morphology: {mask_pixels_after_morph}/{total_pixels} pixels ({100*mask_pixels_after_morph/total_pixels:.1f}%)")
         pixel_change = mask_pixels_after_morph - mask_pixels_before_morph
-        logger.info(f"Morphological operations changed mask by {pixel_change:+d} pixels ({100*pixel_change/total_pixels:+.1f}%)")
+        logger.debug(f"Morphological operations changed mask by {pixel_change:+d} pixels ({100*pixel_change/total_pixels:+.1f}%)")
 
     if return_cluster_data:
         accepted_ids = [cid for cid in range(num_clusters) if cluster_accepted[cid]]
@@ -669,11 +669,21 @@ def find_mask_by_spatial_tf_idf(
             d = np.linalg.norm(top_bbox_pixels - centers[top_id], axis=1)
             color_radius = float(np.mean(d) + np.std(d))
         else:
+            logger.warning(
+                "No bbox pixels found for selected foreground color cluster "
+                f"(top_id={top_id}, bbox={bbox}); using empirical fallback color_radius=30.0"
+            )
+            # EMPIRICAL: degenerate fallback retained for defensive behavior.
             color_radius = 30.0
         if len(bot_bbox_pixels) > 0:
             d = np.linalg.norm(bot_bbox_pixels - centers[bot_id], axis=1)
             bg_radius = float(np.mean(d) + np.std(d))
         else:
+            logger.warning(
+                "No bbox pixels found for selected background color cluster "
+                f"(bot_id={bot_id}, bbox={bbox}); using empirical fallback bg_radius=30.0"
+            )
+            # EMPIRICAL: degenerate fallback retained for defensive behavior.
             bg_radius = 30.0
 
         return cleaned_mask, {

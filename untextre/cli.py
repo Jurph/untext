@@ -4,7 +4,6 @@ This module provides the main CLI entry point that orchestrates the complete
 text watermark removal pipeline using consensus detection from multiple detectors.
 """
 
-import logging
 import argparse
 import cv2
 import time
@@ -21,7 +20,7 @@ from typing import Optional, List, Tuple
 # watermark-only runs don't pay the TF/PyTorch startup cost.
 from .utils import (
     get_image_files, load_image, save_image, setup_logger, pad_bbox_to_multiple,
-    CLI_DEFAULT_CONFIDENCE, calculate_bbox_superset,
+    CLI_DEFAULT_CONFIDENCE, calculate_bbox_superset, configure_logging,
 )
 from .orb_prep import (
     CandidateOrbVariant,
@@ -668,6 +667,11 @@ def initialize_consensus_models(device: str = "cuda") -> None:
 def main() -> None:
     """Main entry point for the consensus-based text watermark removal tool."""
     args = create_parser().parse_args()
+    configure_logging(verbose=args.verbose, logfile=args.logfile)
+    if args.verbose:
+        logger.debug("Debug logging enabled")
+    if args.logfile:
+        logger.info(f"Logging to file: {args.logfile}")
     
     # Parse forced bounding box if provided
     forced_bbox = None
@@ -687,22 +691,6 @@ def main() -> None:
             print("Use x,y,width,height where x,y is the top-left corner.")
             print("Example: --force-bbox 593,1013,105,39")
             sys.exit(1)
-    
-    # Setup logging
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
-        logger.debug("Debug logging enabled")
-    
-    # Setup file logging if requested
-    if args.logfile:
-        log_path = Path(args.logfile)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(log_path, mode='w')
-        file_handler.setFormatter(logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-        ))
-        logging.getLogger().addHandler(file_handler)
-        logger.info(f"Logging to file: {log_path}")
     
     # Start timing
     start_time = time.time()

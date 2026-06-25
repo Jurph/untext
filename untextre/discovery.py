@@ -389,6 +389,7 @@ def compute_median_gradient(paths: List[Path]) -> Optional[np.ndarray]:
         could be loaded.
     """
     frames = []
+    warned_large_batch = False
     for p in paths:
         try:
             img = load_image(p)
@@ -396,6 +397,17 @@ def compute_median_gradient(paths: List[Path]) -> Optional[np.ndarray]:
         except Exception as e:
             logger.warning(f"compute_median_gradient: could not load {p.name}: {e}")
             continue
+
+        estimated_bytes = len(paths) * gray.size * np.dtype(np.float32).itemsize
+        if not warned_large_batch and len(paths) > 50 and estimated_bytes >= 1024 ** 3:
+            logger.warning(
+                "compute_median_gradient will hold about %.1f GiB for %d image(s) at %dx%d",
+                estimated_bytes / (1024 ** 3),
+                len(paths),
+                gray.shape[1],
+                gray.shape[0],
+            )
+            warned_large_batch = True
 
         gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
         gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
