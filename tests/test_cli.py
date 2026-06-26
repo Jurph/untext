@@ -22,6 +22,7 @@ import pytest
 import untextre
 import untextre.cli as cli_mod
 import untextre.consensus as consensus_mod
+import untextre.known_mask as known_mask_mod
 import untextre.metrics as metrics_mod
 import untextre.orb_matcher as orb_matcher_mod
 import untextre.preprocessor as preprocessor_mod
@@ -532,14 +533,14 @@ class TestProcessWithKnownMask:
         output_dir.mkdir()
         known_mask = np.zeros((10, 10, 4), dtype=np.uint8)
 
-        monkeypatch.setattr(cli_mod, "load_image", lambda _p: image.copy())
-        monkeypatch.setattr(cli_mod, "find_known_mask_in_image", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(known_mask_mod, "load_image", lambda _p: image.copy())
+        monkeypatch.setattr(known_mask_mod, "find_known_mask_in_image", lambda *_args, **_kwargs: None)
         saved = {}
 
         def fake_save(arr, path, **kwargs):
             saved[str(path)] = (arr.copy(), kwargs.get("source_path"))
 
-        monkeypatch.setattr(cli_mod, "save_image", fake_save)
+        monkeypatch.setattr(known_mask_mod, "save_image", fake_save)
 
         timings = process_with_known_mask(
             image_path=image_path,
@@ -569,9 +570,9 @@ class TestProcessWithKnownMask:
         output_dir = tmp_path / "out"
         output_dir.mkdir()
 
-        monkeypatch.setattr(cli_mod, "load_image", lambda _p: image.copy())
+        monkeypatch.setattr(known_mask_mod, "load_image", lambda _p: image.copy())
         monkeypatch.setattr(
-            cli_mod,
+            known_mask_mod,
             "find_known_mask_in_image",
             lambda *_args, **_kwargs: (mask, bbox, 10),
         )
@@ -593,7 +594,7 @@ class TestProcessWithKnownMask:
         def fake_save(_arr, p, **kwargs):
             saved_paths.append((p.name, kwargs.get("source_path")))
 
-        monkeypatch.setattr(cli_mod, "save_image", fake_save)
+        monkeypatch.setattr(known_mask_mod, "save_image", fake_save)
 
         timings = process_with_known_mask(
             image_path=image_path,
