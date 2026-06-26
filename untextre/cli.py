@@ -195,6 +195,7 @@ def _generate_masks_and_inpaint(
     target_color: Optional[tuple] = None,
     use_grabcut: bool = False,
     use_grabcut_expand: bool = False,
+    coverage_limit: float = 0.06,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Run spatial TF-IDF masking and inpainting for each consensus region.
 
@@ -212,9 +213,15 @@ def _generate_masks_and_inpaint(
         use_grabcut_expand: If True, extend each region mask using global color
                             matching and GrabCut seeded by the highest- and
                             lowest-FOM clusters found in the bbox analysis.
+        coverage_limit: Fraction of total image pixels (0-1) above which inpainting
+                        is skipped as implausible. A has-text-2 batch run found the
+                        largest true positive at 5.76%, so 0.06 rejects larger
+                        false positives while keeping observed true positives.
 
     Returns:
         ``(combined_mask, inpainted_image)`` — both same shape as *image*.
+        If the coverage guardrail fires, ``inpainted_image`` is the original
+        image unchanged and the mask is still returned for inspection.
     """
     from .find_text_colors import find_mask_by_spatial_tf_idf, color_guided_expand
     from .inpaint import inpaint_image
@@ -270,6 +277,16 @@ def _generate_masks_and_inpaint(
     logger.info(f"Processed {regions_processed}/{len(consensus_boxes)} regions with g={g_value}")
 
     inpaint_region = calculate_bbox_superset(consensus_boxes, image.shape[:2])
+
+    total_image_pixels = h * w
+    mask_pixel_count = int(np.sum(combined_mask > 0))
+    image_coverage_fraction = mask_pixel_count / total_image_pixels if total_image_pixels > 0 else 0.0
+    if coverage_limit > 0 and image_coverage_fraction > coverage_limit:
+        logger.warning(
+            f"Coverage guardrail: mask covers {image_coverage_fraction * 100:.1f}% of image "
+            f"(limit {coverage_limit * 100:.0f}%). Skipping inpaint - mask saved for inspection."
+        )
+        return combined_mask, image.copy()
 
     inpainted = inpaint_image(image, combined_mask, bbox=inpaint_region, method=method)
     return combined_mask, inpainted
@@ -420,6 +437,9 @@ def find_known_mask_in_image(
         # EMPIRICAL: pristine branding turns "knock-off" well before 6:5 stretch.
         # 1.20 keeps margin while rejecting transforms that no longer match the watermark.
         max_stretch = 1.20
+        # EMPIRICAL: visual review of the has-text-2 template matches found the last
+        # true positive at 0.4 degrees; larger rotations were false positives.
+        max_rotation_degrees = 0.4
         if scale_major < min_scale or scale_minor < min_scale:
             logger.warning(f"Scale too small ({scale_major:.3f}, {scale_minor:.3f})")
             continue
@@ -428,6 +448,11 @@ def find_known_mask_in_image(
             continue
         if det < 0:
             logger.warning(f"Reflection detected (det={det:.3f})")
+            continue
+        if abs(angle) > max_rotation_degrees:
+            logger.warning(
+                f"Rotation too large ({angle:.1f} degrees) - likely spurious template match"
+            )
             continue
         if scale_major / scale_minor > max_stretch:
             logger.warning(
@@ -870,6 +895,7 @@ def main() -> None:
                     auto_retry=not args.no_retry,
                     use_grabcut=args.grabcut,
                     use_grabcut_expand=args.grabcut_expand,
+                    coverage_limit=args.coverage_limit,
                 )
             
             # ── Handle skipped images ──────────────────────────────────
@@ -942,6 +968,7 @@ def process_single_image(
     auto_retry: bool = True,
     use_grabcut: bool = False,
     use_grabcut_expand: bool = False,
+    coverage_limit: float = 0.06,
 ) -> Optional[dict]:
     """Process a single image through the consensus-based spatial TF-IDF pipeline.
 
@@ -970,6 +997,8 @@ def process_single_image(
         use_grabcut_expand: Whether to extend masks using global color matching
                            and GrabCut seeded by the highest- and lowest-FOM
                            clusters from the bbox analysis (default: False).
+        coverage_limit: Passed through to _generate_masks_and_inpaint. Skips
+                       inpainting when mask exceeds this fraction of image area.
 
     Returns:
         Dictionary with timing details, or None if processing failed
@@ -1156,11 +1185,12 @@ def process_single_image(
             image, consensus_boxes, initial_g, method, target_color,
             use_grabcut=use_grabcut,
             use_grabcut_expand=use_grabcut_expand,
+            coverage_limit=coverage_limit,
         )
-        
+
         timings['color_time'] = time.time() - color_start
         timings['mask_time'] = 0  # Included in color_time for this flow
-        
+
         # Check if retry needed (CLI auto-retry feature)
         # Only retry if: auto_retry enabled AND granularity not user-specified AND not forced_bbox
         should_check_retry = auto_retry and not user_specified_granularity and not forced_bbox
@@ -1175,7 +1205,7 @@ def process_single_image(
                 if region.size > 0 and needs_retry(region):
                     retry_needed = True
                     break
-            
+
             if retry_needed:
                 logger.info("Text remnants detected, retrying with granularity=8...")
                 retry_start = time.time()
@@ -1183,6 +1213,7 @@ def process_single_image(
                     image, consensus_boxes, 8, method, target_color,
                     use_grabcut=use_grabcut,
                     use_grabcut_expand=use_grabcut_expand,
+                    coverage_limit=coverage_limit,
                 )
                 timings['retried_with_g8'] = True
                 timings['color_time'] += time.time() - retry_start
@@ -1356,6 +1387,17 @@ def create_parser() -> argparse.ArgumentParser:
              "as foreground and the lowest-FOM cluster as background. Automatically "
              "disables long-axis bbox expansion (--no-expand) since color_guided_expand "
              "handles the outward search itself. Useful for partially-detected watermarks."
+    )
+
+    parser.add_argument(
+        "--coverage-limit",
+        type=float,
+        default=0.06,
+        metavar="FRACTION",
+        help="Skip inpainting when the mask covers more than this fraction of the total "
+             "image area (default: 0.06 = 6%%). A has-text-2 calibration run found "
+             "the largest true positive at 5.76%%. Use 0 to disable. "
+             "The mask PNG is still written so the result can be inspected."
     )
 
     parser.add_argument(

@@ -26,6 +26,7 @@ import untextre.metrics as metrics_mod
 import untextre.preprocessor as preprocessor_mod
 from untextre.cli import (
     _apply_color_enhancement,
+    _generate_masks_and_inpaint,
     _save_discovered_watermark_candidates,
     _save_clean_timing_report,
     _translate_rotated_bbox_to_original,
@@ -773,6 +774,38 @@ class TestProcessWithKnownMask:
 # find_known_mask_in_image — validation guards
 # =========================================================================
 
+class TestGenerateMasksAndInpaint:
+    def test_coverage_above_default_limit_skips_inpaint(self, monkeypatch):
+        image = np.ones((100, 100, 3), dtype=np.uint8) * 180
+        mask = np.zeros((100, 100), dtype=np.uint8)
+        mask[:7, :] = 255
+
+        import untextre.find_text_colors as colors_mod
+        import untextre.inpaint as inpaint_mod
+
+        monkeypatch.setattr(
+            colors_mod,
+            "find_mask_by_spatial_tf_idf",
+            lambda *_args, **_kwargs: mask,
+        )
+
+        def fail_if_called(*_args, **_kwargs):
+            raise AssertionError("Coverage guard should skip inpainting")
+
+        monkeypatch.setattr(inpaint_mod, "inpaint_image", fail_if_called)
+
+        combined_mask, result = _generate_masks_and_inpaint(
+            image,
+            [(0, 0, 100, 100)],
+            g_value=4,
+            method="telea",
+            target_color=None,
+        )
+
+        np.testing.assert_array_equal(combined_mask, mask)
+        np.testing.assert_array_equal(result, image)
+
+
 class TestFindKnownMaskValidation:
     """Test guard clauses in find_known_mask_in_image() (lines 266-370)."""
 
@@ -915,6 +948,29 @@ class TestFindKnownMaskValidation:
             lambda *args, **kwargs: (stretch, inlier_mask),
         )
         rng = np.random.RandomState(14)
+        target = rng.randint(0, 256, (200, 200, 3), dtype=np.uint8)
+        known = target[:100, :100].copy()
+        known_rgba = np.zeros((100, 100, 4), dtype=np.uint8)
+        known_rgba[:, :, :3] = known
+        known_rgba[:, :, 3] = 255
+
+        result = find_known_mask_in_image(target, known_rgba, min_matches=3)
+
+        assert result is None
+
+    def test_rotation_above_0_4_degrees_rejected(self, monkeypatch):
+        """A 0.5 degree template rotation should be rejected as spurious."""
+        angle = np.deg2rad(0.5)
+        rotated = np.array([
+            [np.cos(angle), -np.sin(angle), 0.0],
+            [np.sin(angle), np.cos(angle), 0.0],
+        ], dtype=np.float64)
+        inlier_mask = np.ones((50, 1), dtype=np.uint8)
+        monkeypatch.setattr(
+            cv2, "estimateAffine2D",
+            lambda *args, **kwargs: (rotated, inlier_mask),
+        )
+        rng = np.random.RandomState(15)
         target = rng.randint(0, 256, (200, 200, 3), dtype=np.uint8)
         known = target[:100, :100].copy()
         known_rgba = np.zeros((100, 100, 4), dtype=np.uint8)
