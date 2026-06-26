@@ -23,6 +23,7 @@ import untextre
 import untextre.cli as cli_mod
 import untextre.consensus as consensus_mod
 import untextre.metrics as metrics_mod
+import untextre.orb_matcher as orb_matcher_mod
 import untextre.preprocessor as preprocessor_mod
 from untextre.cli import (
     _apply_color_enhancement,
@@ -278,7 +279,7 @@ class TestTryWatermarkCascade:
                 return mask_c, bbox_c, 10 # c: stronger match — should win
 
         monkeypatch.setattr(
-            cli_mod,
+            orb_matcher_mod,
             "find_known_mask_in_image",
             fake_find_known_mask_in_image,
         )
@@ -855,8 +856,8 @@ class TestFindKnownMaskValidation:
                     for i in range(8)
                 ]
 
-        monkeypatch.setattr(cli_mod, "build_candidate_orb_variants", lambda _bgra: [variant], raising=False)
-        monkeypatch.setattr(cli_mod, "create_orb_detector", lambda: FakeORB(), raising=False)
+        monkeypatch.setattr(orb_matcher_mod, "build_candidate_orb_variants", lambda _bgra: [variant], raising=False)
+        monkeypatch.setattr(orb_matcher_mod, "create_orb_detector", lambda: FakeORB(), raising=False)
         monkeypatch.setattr(cv2, "BFMatcher", lambda *args, **kwargs: FakeMatcher())
         monkeypatch.setattr(
             cv2,
@@ -899,7 +900,7 @@ class TestFindKnownMaskValidation:
                 orb_masks.append(None if mask is None else mask.copy())
                 return [], None
 
-        monkeypatch.setattr(cli_mod, "build_candidate_orb_variants", fake_build_candidate_orb_variants)
+        monkeypatch.setattr(orb_matcher_mod, "build_candidate_orb_variants", fake_build_candidate_orb_variants)
         monkeypatch.setattr(cv2, "ORB_create", lambda *args, **kwargs: FakeORB())
 
         result = find_known_mask_in_image(target, known_rgba)
@@ -961,8 +962,8 @@ class TestFindKnownMaskValidation:
             calls.append("built")
             return [weak, strong]
 
-        monkeypatch.setattr(cli_mod, "build_candidate_orb_variants", fake_build_variants, raising=False)
-        monkeypatch.setattr(cli_mod, "create_orb_detector", lambda: FakeORB(), raising=False)
+        monkeypatch.setattr(orb_matcher_mod, "build_candidate_orb_variants", fake_build_variants, raising=False)
+        monkeypatch.setattr(orb_matcher_mod, "create_orb_detector", lambda: FakeORB(), raising=False)
         monkeypatch.setattr(cv2, "BFMatcher", lambda *args, **kwargs: FakeMatcher())
         monkeypatch.setattr(
             cv2,

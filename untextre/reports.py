@@ -1,38 +1,17 @@
 """Reporting helpers for CLI and watermark discovery outputs."""
 
 import statistics
-from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
 import cv2
 import numpy as np
 
-from .orb_prep import (
-    CandidateOrbVariant,
-    build_candidate_orb_variants,
-    prepare_candidate_bgra_for_orb,
-)
+from .orb_matcher import WatermarkTemplate, _make_watermark_template
+from .orb_prep import prepare_candidate_bgra_for_orb
 from .utils import setup_logger
 
 logger = setup_logger(__name__)
-
-@dataclass(frozen=True)
-class WatermarkTemplate:
-    name: str
-    rgba: np.ndarray
-    orb_variants: tuple[CandidateOrbVariant, ...]
-
-    def __iter__(self):
-        yield self.name
-        yield self.rgba
-
-    def __getitem__(self, index: int):
-        return (self.name, self.rgba)[index]
-
-
-def _make_watermark_template(name: str, rgba: np.ndarray) -> WatermarkTemplate:
-    return WatermarkTemplate(name, rgba, tuple(build_candidate_orb_variants(rgba)))
 
 
 def _save_discovered_watermark_candidates(
