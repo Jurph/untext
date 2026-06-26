@@ -164,7 +164,12 @@ def load_image(image_path: ImagePath) -> ImageArray:
     Raises:
         ValueError: If image cannot be loaded
     """
-    image = cv2.imread(str(image_path))
+    try:
+        data = np.fromfile(image_path, dtype=np.uint8)
+        image = cv2.imdecode(data, cv2.IMREAD_COLOR) if data.size else None
+    except (OSError, ValueError, cv2.error):
+        image = None
+
     if image is None:
         raise ValueError(f"Could not load image: {image_path}")
     return image

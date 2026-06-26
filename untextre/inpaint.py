@@ -9,6 +9,7 @@ with the existing codebase.
 import cv2
 import gc
 import numpy as np
+import torch
 from typing import Optional, Tuple, Literal
 
 from .utils import ImageArray, MaskArray, BBox, setup_logger, dilate_bbox, pad_bbox_to_multiple
@@ -273,6 +274,10 @@ def _inpaint_with_lama(
         logger.info("LaMa inpainting completed successfully")
         return result
         
+    except torch.cuda.OutOfMemoryError as e:
+        logger.error(f"LaMa inpainting failed due to CUDA out of memory: {e}")
+        raise RuntimeError(f"CUDA out of memory during LaMa inpainting: {e}") from e
+
     except Exception as e:
         logger.error(f"LaMa inpainting failed: {e}")
         
@@ -385,7 +390,7 @@ def _calculate_inpainting_subregion(
 
     logger.debug("Mask analysis:")
     logger.debug(f"  White pixels found: {total_white_pixels:,}")
-    logger.debug(f"  Mask bounding box: ({mask_bbox[0]}, {mask_bbox[1]}) size {mask_bbox[2]}×{mask_bbox[3]}")
+    logger.debug(f"  Mask bounding box: ({mask_bbox[0]}, {mask_bbox[1]}) size {mask_bbox[2]}x{mask_bbox[3]}")
     logger.debug(f"  Mask area: {mask_area:,} pixels")
     logger.debug(f"  Coverage density: {coverage_percent:.1f}%")
     
@@ -403,15 +408,15 @@ def _calculate_inpainting_subregion(
     
     # Log dilation results
     logger.debug(f"After {dilation_amount}px dilation:")
-    logger.debug(f"  Original bbox: ({original_bbox[0]}, {original_bbox[1]}) size {original_bbox[2]}×{original_bbox[3]}")
-    logger.debug(f"  Dilated bbox: ({mask_bbox[0]}, {mask_bbox[1]}) size {mask_bbox[2]}×{mask_bbox[3]}")
+    logger.debug(f"  Original bbox: ({original_bbox[0]}, {original_bbox[1]}) size {original_bbox[2]}x{original_bbox[3]}")
+    logger.debug(f"  Dilated bbox: ({mask_bbox[0]}, {mask_bbox[1]}) size {mask_bbox[2]}x{mask_bbox[3]}")
     
     # Ensure dimensions are compatible with neural networks (LaMa requires mod-4, but may internally pad to mod-8 or mod-16)
     # Use mod-8 padding to be safe for most neural network architectures
     if image_shape is not None:
         # Apply mod-8 padding for better neural network compatibility
         mod8_bbox = pad_bbox_to_multiple(mask_bbox, multiple=8, image_shape=image_shape)
-        logger.debug(f"  Mod-8 padded bbox: ({mod8_bbox[0]}, {mod8_bbox[1]}) size {mod8_bbox[2]}×{mod8_bbox[3]}")
+        logger.debug(f"  Mod-8 padded bbox: ({mod8_bbox[0]}, {mod8_bbox[1]}) size {mod8_bbox[2]}x{mod8_bbox[3]}")
         mask_bbox = mod8_bbox
     
     # Convert to subregion format (x1, y1, x2, y2)

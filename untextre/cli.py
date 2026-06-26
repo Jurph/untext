@@ -133,7 +133,7 @@ def _apply_color_enhancement(image: np.ndarray, target_hex: str, sensitivity: in
     lower_hex = f"#{lower_bound[2]:02X}{lower_bound[1]:02X}{lower_bound[0]:02X}"
     upper_hex = f"#{upper_bound[2]:02X}{upper_bound[1]:02X}{upper_bound[0]:02X}"
     
-    logger.info(f"Applying color enhancement: converting {lower_hex}-{upper_hex} to black (target: {target_hex}, sensitivity: ±{sensitivity})")
+    logger.info(f"Applying color enhancement: converting {lower_hex}-{upper_hex} to black (target: {target_hex}, sensitivity: +/-{sensitivity})")
     
     # Create mask for pixels in the target color range
     mask = cv2.inRange(enhanced, lower_bound, upper_bound)
@@ -165,7 +165,7 @@ def _try_color_enhanced_detection(original_image: np.ndarray, confidence_thresho
     from .preprocessor import preprocess_image
     from .consensus import run_consensus_detection
 
-    logger.info(f"Trying color enhancement for {target_hex} (±{sensitivity})...")
+    logger.info(f"Trying color enhancement for {target_hex} (+/-{sensitivity})...")
     
     # Apply color enhancement to original image
     enhanced_image = _apply_color_enhancement(original_image, target_hex, sensitivity)
@@ -314,7 +314,7 @@ def load_watermark_templates(
             logger.warning(f"{candidate.name} is not RGBA ({rgba.ndim}D, {rgba.shape[-1] if rgba.ndim == 3 else '?'}ch), skipping")
             continue
         templates.append(_make_watermark_template(candidate.name, rgba))
-        logger.debug(f"Loaded template: {candidate.name} ({rgba.shape[1]}×{rgba.shape[0]})")
+        logger.debug(f"Loaded template: {candidate.name} ({rgba.shape[1]}x{rgba.shape[0]})")
 
     if templates:
         logger.info(f"Loaded {len(templates)} watermark template(s) from {path}")
@@ -409,7 +409,7 @@ def find_known_mask_in_image(
         logger.info(
             f"Affine transform ({variant.name}): {inliers} inliers, "
             f"scale=({scale_major:.3f}, {scale_minor:.3f}), "
-            f"det={det:.3f}, rotation={angle:.1f}\u00b0"
+            f"det={det:.3f}, rotation={angle:.1f} degrees"
         )
 
         if inliers < min_matches:
@@ -417,9 +417,9 @@ def find_known_mask_in_image(
             continue
 
         min_scale, max_scale = 0.05, 20.0
-        # EMPIRICAL: pristine branding turns "knock-off" well before 5:4 stretch.
-        # 1.25 keeps margin while rejecting transforms that no longer match the watermark.
-        max_stretch = 1.25
+        # EMPIRICAL: pristine branding turns "knock-off" well before 6:5 stretch.
+        # 1.20 keeps margin while rejecting transforms that no longer match the watermark.
+        max_stretch = 1.20
         if scale_major < min_scale or scale_minor < min_scale:
             logger.warning(f"Scale too small ({scale_major:.3f}, {scale_minor:.3f})")
             continue
@@ -483,6 +483,14 @@ def find_known_mask_in_image(
             logger.info(f"Mask touches image edge ({', '.join(at_edge)}) - spillover clipped")
 
         mask_pixels = np.sum(binary_mask > 0)
+        image_pixels = h_target * w_target
+        if mask_pixels >= image_pixels * 0.5:
+            logger.warning(
+                f"Mask covers {100 * mask_pixels / image_pixels:.1f}% of image "
+                "- likely spurious template match"
+            )
+            continue
+
         logger.info(f"Mask covers {mask_pixels:,} pixels")
         return binary_mask, bbox, int(inliers)
 
@@ -597,7 +605,7 @@ def process_with_known_mask(
         logger.error(f"Failed to load image: {image_path}")
         return None
     timings['load_time'] = time.time() - load_start
-    logger.info(f"Loaded image: {image_path.name} ({image.shape[1]}×{image.shape[0]})")
+    logger.info(f"Loaded image: {image_path.name} ({image.shape[1]}x{image.shape[0]})")
     
     # Find known mask using ORB
     orb_start = time.time()
@@ -658,7 +666,7 @@ def initialize_consensus_models(device: str = "cuda") -> None:
         if initialize_lama_model(device=device):
             logger.info("[OK] LaMa model loaded")
         else:
-            logger.warning("✗ LaMa model failed to initialize (auto-retry will be used if needed)")
+            logger.warning("[FAIL] LaMa model failed to initialize (auto-retry will be used if needed)")
     except Exception as e:
         logger.error(f"Failed to load LaMa: {e}")
     
@@ -870,7 +878,7 @@ def main() -> None:
                     # Copy the original unchanged so every input has output
                     output_file = output_path / f"{image_path.stem}_clean{image_path.suffix}"
                     save_image(load_image(image_path), output_file, source_path=image_path)
-                    logger.info(f"No text detected — copied original to {output_file}")
+                    logger.info(f"No text detected - copied original to {output_file}")
                 else:
                     logger.info(f"Skipped {image_path.name} (no text detected)")
 
@@ -1009,7 +1017,7 @@ def process_single_image(
         
         # Validate bbox is within image bounds
         if forced_bbox[0] + forced_bbox[2] > w or forced_bbox[1] + forced_bbox[3] > h:
-            logger.warning(f"Forced bbox extends beyond image bounds ({w}×{h}), clipping...")
+            logger.warning(f"Forced bbox extends beyond image bounds ({w}x{h}), clipping...")
             clipped_bbox = (
                 min(forced_bbox[0], w-1),
                 min(forced_bbox[1], h-1), 
@@ -1056,7 +1064,7 @@ def process_single_image(
             # Rotate image 90 degrees clockwise and try detection again
             h, w = preprocessed.shape[:2]
             rotated_image = cv2.rotate(preprocessed, cv2.ROTATE_90_CLOCKWISE)
-            logger.info("Rotated image 90° clockwise, running consensus detection again...")
+            logger.info("Rotated image 90 degrees clockwise, running consensus detection again...")
             
             rotated_consensus_boxes = run_consensus_detection(rotated_image, confidence_threshold)
             
@@ -1089,7 +1097,7 @@ def process_single_image(
                         timings['failover_type'] = 'white_enhancement'
                     else:
                         logger.warning(
-                            f"No text detected in {image_path.name} after all failovers — skipping"
+                            f"No text detected in {image_path.name} after all failovers - skipping"
                         )
                         timings['mask_found'] = False
                         timings['detection_time'] = time.time() - detection_start
@@ -1297,7 +1305,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-f", "--force-bbox",
         help="Force specific bounding box as x,y,width,height where x,y is the TOP-LEFT corner "
-             "(e.g., 593,1013,105,39 selects a 105×39 region starting at top-left (593,1013))"
+             "(e.g., 593,1013,105,39 selects a 105x39 region starting at top-left (593,1013))"
     )
     
     mask_group = parser.add_mutually_exclusive_group()

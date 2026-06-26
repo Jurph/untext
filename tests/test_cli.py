@@ -905,6 +905,76 @@ class TestFindKnownMaskValidation:
         result = find_known_mask_in_image(target, known_rgba, min_matches=3)
         assert result is None
 
+    def test_stretch_above_1_20_rejected(self, monkeypatch):
+        """A 1.21x axis stretch should be rejected as a spurious template match."""
+        stretch = np.array([[1.21, 0.0, 0.0],
+                            [0.0, 1.0, 0.0]], dtype=np.float64)
+        inlier_mask = np.ones((50, 1), dtype=np.uint8)
+        monkeypatch.setattr(
+            cv2, "estimateAffine2D",
+            lambda *args, **kwargs: (stretch, inlier_mask),
+        )
+        rng = np.random.RandomState(14)
+        target = rng.randint(0, 256, (200, 200, 3), dtype=np.uint8)
+        known = target[:100, :100].copy()
+        known_rgba = np.zeros((100, 100, 4), dtype=np.uint8)
+        known_rgba[:, :, :3] = known
+        known_rgba[:, :, 3] = 255
+
+        result = find_known_mask_in_image(target, known_rgba, min_matches=3)
+
+        assert result is None
+
+    def test_majority_image_mask_rejected(self, monkeypatch):
+        """A known-mask match covering most of the image is not a watermark."""
+        target = np.zeros((100, 100, 3), dtype=np.uint8)
+        known_rgba = np.zeros((100, 100, 4), dtype=np.uint8)
+        known_rgba[:, :, :3] = 200
+        known_rgba[:80, :80, 3] = 255
+
+        alpha = known_rgba[:, :, 3].copy()
+        variant = type("Variant", (), {})()
+        variant.name = "outside_0"
+        variant.outside_value = 0
+        variant.alpha = alpha
+        variant.gray = np.zeros((100, 100), dtype=np.uint8)
+        variant.keypoints = tuple(cv2.KeyPoint(float(i), float(i), 1) for i in range(8))
+        variant.descriptors = np.ones((8, 32), dtype=np.uint8)
+        variant.keypoint_count = 8
+        target_keypoints = tuple(cv2.KeyPoint(float(i), float(i), 1) for i in range(8))
+        target_descriptors = np.ones((8, 32), dtype=np.uint8)
+
+        class FakeORB:
+            def detectAndCompute(self, _image, _mask):
+                return list(target_keypoints), target_descriptors
+
+        class FakeMatcher:
+            def knnMatch(self, _descriptors, _target_descriptors, k=2):
+                assert k == 2
+                return [
+                    [
+                        cv2.DMatch(_queryIdx=i, _trainIdx=i, _distance=1),
+                        cv2.DMatch(_queryIdx=i, _trainIdx=(i + 1) % 8, _distance=100),
+                    ]
+                    for i in range(8)
+                ]
+
+        monkeypatch.setattr(cli_mod, "build_candidate_orb_variants", lambda _bgra: [variant], raising=False)
+        monkeypatch.setattr(cli_mod, "create_orb_detector", lambda: FakeORB(), raising=False)
+        monkeypatch.setattr(cv2, "BFMatcher", lambda *args, **kwargs: FakeMatcher())
+        monkeypatch.setattr(
+            cv2,
+            "estimateAffine2D",
+            lambda *args, **kwargs: (
+                np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]),
+                np.ones((8, 1), dtype=np.uint8),
+            ),
+        )
+
+        result = find_known_mask_in_image(target, known_rgba, min_matches=6, dilation_pixels=0)
+
+        assert result is None
+
     def test_known_mask_builds_orb_variants_before_matching(self, monkeypatch):
         target = np.zeros((80, 100, 3), dtype=np.uint8)
         known_rgba = np.zeros((20, 20, 4), dtype=np.uint8)

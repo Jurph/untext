@@ -164,7 +164,7 @@ def detect_text_regions(image: ImageArray, method: str = "doctr", confidence_thr
         logger.info(f"Detected {len(bboxes)} text regions")
         logger.info(f"Found bounding boxes at: {', '.join(bbox_coords)}")
         # Also log dimensions for context
-        bbox_dims = [f"{bbox[2]}×{bbox[3]}" for bbox in bboxes]
+        bbox_dims = [f"{bbox[2]}x{bbox[3]}" for bbox in bboxes]
         logger.info(f"Bounding box dimensions: {', '.join(bbox_dims)}")
     else:
         logger.info("No text regions detected")
@@ -551,7 +551,7 @@ class TextDetector:
             raise ValueError("Image must be a numpy array")
         
         if image.ndim != 3 or image.shape[2] != 3:
-            raise ValueError("Image must be H×W×3 BGR")
+            raise ValueError("Image must be HxWx3 BGR")
         
         try:
             # Use the image as provided (preprocessing now handled uniformly by caller)
@@ -569,7 +569,7 @@ class TextDetector:
             # Filter detections
             detections = self._filter_detections(detections, image.shape[:2])
             
-            logger.debug(f"Detected {len(detections)} text regions")
+            logger.info(f"DocTR detected {len(detections)} text region(s)")
             return detections
             
         except Exception as e:
@@ -591,32 +591,64 @@ class TextDetector:
             return []
             
         detections = []
-        # DocTR returns predictions as numpy arrays with shape (*, 5) or (*, 6)
-        # where each row is [x1, y1, x2, y2, confidence, ...]
-        if 'words' in page and isinstance(page['words'], np.ndarray):
-            for pred in page['words']:
+        # DocTR has returned both ndarray rows and dict-of-word records across
+        # versions. Parse both so format drift cannot silently become 0 detections.
+        words = page.get('words')
+        if isinstance(words, np.ndarray):
+            for pred in words:
                 if len(pred) >= 5:  # Ensure we have at least x1,y1,x2,y2,conf
                     x1, y1, x2, y2, conf = pred[:5]
-                    
-                    # Skip low confidence detections
-                    if conf < self.confidence_threshold:
-                        continue
-                    
-                    # Convert normalized coordinates to pixel coordinates
-                    h, w = image_shape
-                    points = np.array([
-                        [x1 * w, y1 * h],
-                        [x2 * w, y1 * h],
-                        [x2 * w, y2 * h],
-                        [x1 * w, y2 * h]
-                    ], dtype=np.float32)
-                    
-                    detections.append({
-                        'geometry': points,
-                        'confidence': float(conf)
-                    })
+                    detection = self._detection_from_normalized_box(x1, y1, x2, y2, conf, image_shape)
+                    if detection is not None:
+                        detections.append(detection)
+        elif isinstance(words, dict):
+            for word in words.values():
+                if not isinstance(word, dict):
+                    continue
+                geometry = word.get("geometry")
+                conf = word.get("confidence", word.get("objectness_score"))
+                if geometry is None or conf is None:
+                    continue
+                try:
+                    (x1, y1), (x2, y2) = geometry
+                except (TypeError, ValueError):
+                    continue
+                detection = self._detection_from_normalized_box(x1, y1, x2, y2, conf, image_shape)
+                if detection is not None:
+                    detections.append(detection)
+        elif words is None:
+            logger.warning("DocTR page did not include words")
+        else:
+            logger.warning(f"Unsupported DocTR words format: {type(words).__name__}")
                 
         return detections
+
+    def _detection_from_normalized_box(
+        self,
+        x1: float,
+        y1: float,
+        x2: float,
+        y2: float,
+        confidence: float,
+        image_shape: Tuple[int, int],
+    ) -> Optional[Detection]:
+        """Convert one normalized DocTR box to a detection record."""
+        conf = float(confidence)
+        if conf < self.confidence_threshold:
+            return None
+
+        h, w = image_shape
+        points = np.array([
+            [float(x1) * w, float(y1) * h],
+            [float(x2) * w, float(y1) * h],
+            [float(x2) * w, float(y2) * h],
+            [float(x1) * w, float(y2) * h],
+        ], dtype=np.float32)
+
+        return {
+            'geometry': points,
+            'confidence': conf,
+        }
 
     def _filter_detections(self, detections: List[Dict], image_shape: Tuple[int, int]) -> List[Dict]:
         """Filter detections based on size and position.

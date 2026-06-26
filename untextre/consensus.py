@@ -267,6 +267,10 @@ def find_consensus_boxes(detections: Dict[str, List[Tuple[int, int, int, int, fl
                 'used': False
             })
     
+    # O(N^3) in the number of detections, which is acceptable here because
+    # detector outputs are small and bounded in normal watermark workflows.
+    # If this function ever sees hundreds of boxes per image, replace this
+    # grouping pass with a spatial index or graph connected-components pass.
     # Find overlapping groups
     for i, det1 in enumerate(all_detections):
         if det1['used']:

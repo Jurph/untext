@@ -46,14 +46,14 @@ The goal of this tool is fast and accurate watermark removal. We detect text-bas
 ### Should Fix
 
 - [x] **Streamline fixture tests and local developer tooling**: Mark long-running real-image fixture tests as `@pytest.mark.slow` or split them out of the default fast suite; add Ruff configuration and checks; migrate project metadata/dependency management from `setup.py` + `requirements*.txt` to `pyproject.toml` + `uv.lock`. Keep this as local quality-of-life and existing-CircleCI maintenance only: no PyPI publishing, GitHub Actions migration, CD pipeline, branch protections, or remote CUDA testing.
-- [ ] **Investigate `_parse_doctr_output` for silent zero-detection**: The `isinstance(page['words'], np.ndarray)` guard at `detector.py` line 598 returns `[]` with no log if DocTR returns a dict-of-dicts (v0.6+ format). Confirm whether DocTR detection is currently live; add a per-image detection-count log to make silent failures visible.
+- [x] **Investigate `_parse_doctr_output` for silent zero-detection**: The `isinstance(page['words'], np.ndarray)` guard at `detector.py` line 598 returns `[]` with no log if DocTR returns a dict-of-dicts (v0.6+ format). Confirm whether DocTR detection is currently live; add a per-image detection-count log to make silent failures visible.
 - [x] **Delete dead `_find_known_mask_in_image_single_variant`**: Zero callers outside the definition file; 185 lines of logic ~85% duplicated from `find_known_mask_in_image`. Safe delete. (`cli.py` lines 324–509)
 - [x] **Replace two inline bbox-superset calculations with `utils.calculate_bbox_superset`**: Inline copies at `cli.py` lines 267–271 and 1347–1351 diverge from the utility function that already handles the empty-list case.
 - [x] **Fix `timing_data["total_time"] = 0` in template-match path**: Hardcoded zero misleads users comparing ORB-match vs. consensus-detection performance. Record actual elapsed time. (`cli.py` line 1041)
 - [x] **Switch consensus overlap threshold to IoU**: A 400-image experiment showed `overlap/smaller_area >= 0.1` admitted tiny contained blips as consensus; `IoU >= 0.1` filtered those spurious overlaps while preserving empirically stronger detector agreement.
 - [x] **Fix EAST NMS fallback logic**: Corrected OpenCV `NMSBoxes` input from corner coordinates to `(x, y, w, h)` and replaced the `+0.1` confidence-only fallback with local greedy NMS using the same score/NMS thresholds. No empirical tuning factor remains.
 - [x] **Delete `get_largest_text_region` and `_merge_bboxes` and their unit tests**: Confirmed dead production code; tests written for them have no diagnostic value. (`detector.py` lines 385–477)
-- [ ] **Fix `auto_retry` OOM loop in `inpaint.py`**: Catching all exceptions and calling `initialize_lama_model(force_reinit=True)` on `OutOfMemoryError` tries to reload a model into already-full VRAM, making OOM worse. Catch `torch.cuda.OutOfMemoryError` explicitly and skip the retry. (`inpaint.py` lines 279–292)
+- [x] **Fix `auto_retry` OOM loop in `inpaint.py`**: Catching all exceptions and calling `initialize_lama_model(force_reinit=True)` on `OutOfMemoryError` tries to reload a model into already-full VRAM, making OOM worse. Catch `torch.cuda.OutOfMemoryError` explicitly and skip the retry. (`inpaint.py` lines 279–292)
 - [x] **Downgrade `_calculate_inpainting_subregion` logs from INFO to DEBUG**: Eight `logger.info` calls per subregion = 8,000 log lines per 1,000-image batch. Keep one INFO summary per region. (`inpaint.py`)
 - [x] **Centralize logging configuration in one root-owned path**: Package loggers are handlerless, propagate to root, and CLI startup configures console/file handlers once via `configure_logging()`. This prevents duplicate logs in CLI/Streamlit contexts while preserving one source of logging truth. (`utils.py`, `cli.py`)
 - [x] **Change `logger.error()` to `logger.exception()` in `preprocessor.py` bare except**: Preserves stack trace when preprocessing fails. One-character-ish change, zero risk. (`preprocessor.py` line 66)
@@ -63,16 +63,16 @@ The goal of this tool is fast and accurate watermark removal. We detect text-bas
 - [x] **Switch `_filter_scoring_alpha` color gate to Lab distance <= 8.0**: PB/SG same-logo subset experiments showed Lab<=8 closely matched the previous BGR<=24 behavior while using a perceptually meaningful color space. (`watermark_consensus._filter_scoring_alpha`)
 - [x] **Add `# EMPIRICAL` and `logger.warning` to `color_radius = 30.0` fallback**: Fallback fires when bbox contains no valid pixels — a suspicious degenerate condition that should surface in logs. (`find_text_colors.py` ~line 671)
 - [x] **Add runtime `logger.warning` to `compute_median_gradient` for large batches**: Docstring acknowledges O(N×H×W) RAM; a warning when N exceeds a documented threshold (e.g., N > 50 at estimated 4K) prevents silent OOM. (`discovery.py` lines 386–402)
-- [ ] **Make image ingest robust to non-ASCII Windows paths**: Experiment hit `cv2.imread()` failure on a Unicode filename under `G:\...`; production ingest should use a Unicode-safe path reader such as `np.fromfile()` + `cv2.imdecode()` and avoid cp1252 logging crashes.
+- [x] **Make image ingest robust to non-ASCII Windows paths**: Experiment hit `cv2.imread()` failure on a Unicode filename under `G:\...`; production ingest should use a Unicode-safe path reader such as `np.fromfile()` + `cv2.imdecode()` and avoid cp1252 logging crashes.
 
 ### Backlog
 
 - [ ] **Consolidate `cli.py` into smaller modules** (`orb_matcher.py`, `pipeline.py`): Right long-term direction; defer until test coverage is comprehensive enough to support a safe refactor of the lazy-loading import graph.
-- [ ] **Switch to `cv2.KMEANS_PP_CENTERS`**: Better initialization stability improves run-to-run reproducibility. (`find_text_colors.py`)
+- [x] **Switch to `cv2.KMEANS_PP_CENTERS`**: Better initialization stability improves run-to-run reproducibility. (`find_text_colors.py`)
 - [x] **Delete other confirmed dead code**: `dilate_by_percent` in `utils.py`; inline Tukey fence in `discover_watermark_candidates` duplicates `_precision_outlier_threshold` in `discovery.py`.
-- [ ] **Switch `np.random.RandomState` to `np.random.default_rng`**: Avoids XOR seed collisions for same-aspect-ratio images. (`discovery.py` line 1023)
-- [ ] **Add `O(N³)` complexity comment to `find_consensus_boxes`**: Not a real bottleneck at current N, but worth documenting. (`consensus.py` lines 275–318)
-- [ ] **Fix `__init__.py` `locals()[name]` pattern**: Replace with `getattr(module, name)` to give `AttributeError` instead of `KeyError` on maintenance mistakes. (`__init__.py` lines 44–49)
+- [x] **Switch `np.random.RandomState` to `np.random.default_rng`**: Avoids XOR seed collisions for same-aspect-ratio images. (`discovery.py` line 1023)
+- [x] **Add `O(N³)` complexity comment to `find_consensus_boxes`**: Not a real bottleneck at current N, but worth documenting. (`consensus.py` lines 275–318)
+- [x] **Fix `__init__.py` `locals()[name]` pattern**: Replace with `getattr(module, name)` to give `AttributeError` instead of `KeyError` on maintenance mistakes. (`__init__.py` lines 44–49)
 
 
 # Architecture

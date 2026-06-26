@@ -179,7 +179,7 @@ def grabcut_refine(
     if debug:
         fom_px = int(np.sum(fom_mask == 255))
         gc_px = int(np.sum(refined == 255))
-        logger.debug(f"GrabCut refinement: {fom_px} → {gc_px} foreground pixels "
+        logger.debug(f"GrabCut refinement: {fom_px} -> {gc_px} foreground pixels "
                     f"({gc_px - fom_px:+d})")
 
     # Dilate the tight glyph mask so the inpainter gets generous
@@ -192,7 +192,7 @@ def grabcut_refine(
         if debug:
             dilated_px = int(np.sum(refined == 255))
             logger.debug(f"GrabCut post-dilation ({dilation_px}px): "
-                        f"{gc_px} → {dilated_px} foreground pixels")
+                        f"{gc_px} -> {dilated_px} foreground pixels")
 
     return refined
 
@@ -282,7 +282,7 @@ def color_guided_expand(
     if debug:
         n_fgd = int(np.sum(fgd_mask == 255))
         logger.debug(
-            f"Color expand: ROI={roi_w}×{roi_h}, color_radius={color_radius:.1f}, "
+            f"Color expand: ROI={roi_w}x{roi_h}, color_radius={color_radius:.1f}, "
             f"{n_fgd} FGD pixels after closing+CC filter"
         )
 
@@ -323,7 +323,7 @@ def color_guided_expand(
     if debug:
         orig_px = int(np.sum(confirmed_mask[y1:y2, x1:x2] == 255))
         new_px = int(np.sum(gc_result == 255)) - orig_px
-        logger.debug(f"Color expand: confirmed={orig_px} → +{max(new_px, 0)} new pixels")
+        logger.debug(f"Color expand: confirmed={orig_px} -> +{max(new_px, 0)} new pixels")
 
     # OR with confirmed_mask: refining, not replacing
     result = confirmed_mask.copy()
@@ -456,7 +456,7 @@ def find_mask_by_spatial_tf_idf(
         None, 
         criteria, 
         10, 
-        cv2.KMEANS_RANDOM_CENTERS
+        cv2.KMEANS_PP_CENTERS
     )
     
     # Split labels back into bbox and surrounding regions

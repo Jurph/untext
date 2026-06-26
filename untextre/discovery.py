@@ -739,7 +739,7 @@ def select_candidate_components(
 
     if grad_norm is not None:
         zone_strs = ", ".join(
-            f"z{z}:{zone_area[z]}px×{zone_grad_sum.get(z,0)/zone_area[z]:.2f}g"
+            f"z{z}:{zone_area[z]}px*{zone_grad_sum.get(z,0)/zone_area[z]:.2f}g"
             for z in ranked_zones[:6]
         )
         logger.debug(f"Zone gradient-weighted scores: [{zone_strs}]")
@@ -963,15 +963,15 @@ def discover_watermark_candidates(
     for (img_w, img_h), paths in buckets.items():
         if len(paths) < 3:
             logger.info(
-                f"Bucket {img_w}×{img_h}: only {len(paths)} image(s) — "
+                f"Bucket {img_w}x{img_h}: only {len(paths)} image(s) - "
                 f"skipping self-discovery, will use cross-bucket template if available"
             )
             continue
 
-        logger.info(f"Computing statistics for bucket {img_w}×{img_h} ({len(paths)} images)")
+        logger.info(f"Computing statistics for bucket {img_w}x{img_h} ({len(paths)} images)")
         stats = compute_stack_statistics(paths)
         if stats is None:
-            logger.warning(f"Bucket {img_w}×{img_h}: fewer than 3 loadable images, skipping")
+            logger.warning(f"Bucket {img_w}x{img_h}: fewer than 3 loadable images, skipping")
             continue
 
         var_gray = stats["var_gray"]
@@ -999,14 +999,14 @@ def discover_watermark_candidates(
             f"(from {pooled.size:,} pixels)"
         )
     else:
-        logger.info("Single qualifying bucket — pooled threshold equals per-bucket threshold")
+        logger.info("Single qualifying bucket - pooled threshold equals per-bucket threshold")
 
     # ── Pass 2: process each bucket using the shared global threshold ─────────
     all_zone_data: List[Tuple[np.ndarray, int, int, Tuple[int, int], np.ndarray, np.ndarray]] = []
     # Each entry: (zone_mask, img_w, img_h, zone, mean_bgr, wm_color)
 
     for (img_w, img_h), (paths, stats, var_norm) in bucket_data.items():
-        logger.info(f"Discovering watermark in bucket {img_w}×{img_h} ({len(paths)} images)")
+        logger.info(f"Discovering watermark in bucket {img_w}x{img_h} ({len(paths)} images)")
 
         mean_img = stats["mean_bgr"]
         var_gray = stats["var_gray"]
@@ -1023,7 +1023,7 @@ def discover_watermark_candidates(
         precision_mask = (var_gray <= global_stable_threshold).astype(np.uint8) * 255
         stable_pct = float(np.mean(precision_mask > 0) * 100)
         logger.debug(
-            f"Bucket {img_w}×{img_h}: precision-outlier stable mask "
+            f"Bucket {img_w}x{img_h}: precision-outlier stable mask "
             f"= {stable_pct:.2f}% of pixels (threshold {global_stable_threshold:.2e})"
         )
 
@@ -1033,7 +1033,7 @@ def discover_watermark_candidates(
         # barely passes the fence in the full population often fails one half.
         # Requires ≥ 6 images per bucket so each half has ≥ 3 images (Welford minimum).
         if len(paths) >= 6:
-            rng = np.random.RandomState(seed=img_w ^ (img_h * 1031))
+            rng = np.random.default_rng(seed=(img_w, img_h))
             shuffled = list(paths)
             rng.shuffle(shuffled)
             half = len(shuffled) // 2
@@ -1045,7 +1045,7 @@ def discover_watermark_candidates(
                 precision_mask = cv2.bitwise_and(precision_mask, cv2.bitwise_and(mask_a, mask_b))
                 xval_pct = float(np.mean(precision_mask > 0) * 100)
                 logger.debug(
-                    f"Bucket {img_w}×{img_h}: after cross-sub-sample validation: "
+                    f"Bucket {img_w}x{img_h}: after cross-sub-sample validation: "
                     f"{xval_pct:.2f}% of pixels stable in both halves"
                 )
 
@@ -1061,7 +1061,7 @@ def discover_watermark_candidates(
         median_grad = compute_median_gradient(paths)
         if median_grad is None:
             logger.warning(
-                f"Bucket {img_w}×{img_h}: median gradient computation failed, "
+                f"Bucket {img_w}x{img_h}: median gradient computation failed, "
                 f"falling back to two-factor score"
             )
 
@@ -1090,11 +1090,11 @@ def discover_watermark_candidates(
         )
 
         if not filtered_candidates:
-            logger.warning(f"Bucket {img_w}×{img_h}: no candidate components found")
+            logger.warning(f"Bucket {img_w}x{img_h}: no candidate components found")
             continue
 
         logger.debug(
-            f"Bucket {img_w}×{img_h}: {len(filtered_candidates)} candidate(s) selected"
+            f"Bucket {img_w}x{img_h}: {len(filtered_candidates)} candidate(s) selected"
         )
 
         # Safety backstop: with the Tukey-fence stable mask the zone union
@@ -1109,8 +1109,8 @@ def discover_watermark_candidates(
             if area > max_wm_area:
                 frac = area / image_area
                 logger.debug(
-                    f"Bucket {img_w}×{img_h}: trimming candidate "
-                    f"({area:,} px, {frac:.1%}) → {max_wm_area:,} px budget"
+                    f"Bucket {img_w}x{img_h}: trimming candidate "
+                    f"({area:,} px, {frac:.1%}) -> {max_wm_area:,} px budget"
                 )
                 mask = _trim_to_budget(mask, score_seed, max_wm_area)
             trimmed_candidates.append(mask)
@@ -1122,7 +1122,7 @@ def discover_watermark_candidates(
         deblotted = [_deblot_mask_by_area(m) for m in filtered_candidates]
         filtered_candidates = [m for m in deblotted if np.any(m)]
         if not filtered_candidates:
-            logger.warning(f"Bucket {img_w}×{img_h}: all candidates empty after deblotching")
+            logger.warning(f"Bucket {img_w}x{img_h}: all candidates empty after deblotching")
             continue
 
         if debug_dir is not None:
@@ -1140,8 +1140,8 @@ def discover_watermark_candidates(
             zone = assign_zone(cx, cy, img_w, img_h)
             all_zone_data.append((zone_mask, img_w, img_h, zone, mean_img, wm_color))
             logger.info(
-                f"Bucket {img_w}×{img_h} zone {zone}: "
-                f"{int(np.sum(zone_mask == 255)):,} stable px → queued for consensus vote"
+                f"Bucket {img_w}x{img_h} zone {zone}: "
+                f"{int(np.sum(zone_mask == 255)):,} stable px -> queued for consensus vote"
             )
 
     if not all_zone_data:
@@ -1149,7 +1149,7 @@ def discover_watermark_candidates(
         return []
 
     if qualifying_count <= 1:
-        logger.info("Only one qualifying bucket — cross-validation unavailable")
+        logger.info("Only one qualifying bucket - cross-validation unavailable")
 
     logger.info(
         f"Consensus vote across {len(all_zone_data)} zone candidate(s) "

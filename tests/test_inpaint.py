@@ -725,6 +725,30 @@ class TestInpaintWithLamaBranches:
         with pytest.raises(RuntimeError, match="LaMa inpainting failed"):
             _inpaint_with_lama(image, mask, auto_retry=True)
 
+    def test_cuda_oom_does_not_reinitialize_model(self, monkeypatch):
+        """CUDA OOM should fail fast instead of reloading into full VRAM."""
+        class OomInpainter:
+            def inpaint(self, *_args, **_kwargs):
+                raise inpaint_mod.torch.cuda.OutOfMemoryError("out of memory")
+
+        init_calls = {"n": 0}
+
+        def fake_initialize(**_kwargs):
+            init_calls["n"] += 1
+            return True
+
+        monkeypatch.setattr(inpaint_mod, "LamaInpainter", object)
+        monkeypatch.setattr(inpaint_mod, "get_lama_inpainter", lambda: OomInpainter())
+        monkeypatch.setattr(inpaint_mod, "initialize_lama_model", fake_initialize)
+
+        image = np.ones((40, 40, 3), dtype=np.uint8) * 128
+        mask = np.zeros((40, 40), dtype=np.uint8)
+        mask[10:20, 10:20] = 255
+
+        with pytest.raises(RuntimeError, match="CUDA out of memory"):
+            _inpaint_with_lama(image, mask, auto_retry=True)
+        assert init_calls["n"] == 0
+
 
 # =========================================================================
 # _inpaint_with_telea — additional branch coverage

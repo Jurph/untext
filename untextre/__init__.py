@@ -41,12 +41,8 @@ def __getattr__(name: str):
         "MODEL_CONFIDENCE_FLOOR", "CLI_DEFAULT_CONFIDENCE",
         "WEB_DEFAULT_CONFIDENCE",
     ):
-        from .utils import (  # noqa: F401
-            load_image, save_image, setup_logger,
-            MODEL_CONFIDENCE_FLOOR, CLI_DEFAULT_CONFIDENCE,
-            WEB_DEFAULT_CONFIDENCE,
-        )
-        return locals()[name]
+        from . import utils
+        return getattr(utils, name)
 
     # Heavy modules — only load when someone asks for them
     if name in ("TextDetector", "initialize_models", "cleanup_vram", "detect_text_regions"):

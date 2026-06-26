@@ -195,6 +195,21 @@ class TestImageLoading:
             assert np.array_equal(reloaded, original), \
                 "Reloaded image should match original for PNG"
 
+    def test_load_image_uses_unicode_safe_file_read(self, monkeypatch, tmp_path):
+        """Image ingest should handle non-ASCII paths even when cv2.imread cannot."""
+        image_path = tmp_path / "snowman_☃.png"
+        expected = np.zeros((6, 5, 3), dtype=np.uint8)
+        expected[:, :] = (10, 20, 30)
+        ok, encoded = cv2.imencode(".png", expected)
+        assert ok
+        encoded.tofile(image_path)
+
+        monkeypatch.setattr(cv2, "imread", lambda *_args, **_kwargs: None)
+
+        loaded = load_image(image_path)
+
+        np.testing.assert_array_equal(loaded, expected)
+
     def test_save_image_preserves_rendering_metadata_from_source_jpeg(self, tmp_path):
         """Cleaned JPEGs should keep color-management metadata, not full EXIF."""
         icc_profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
