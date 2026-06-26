@@ -675,7 +675,7 @@ def process_with_known_mask(
     return timings
 
 
-def initialize_consensus_models(device: str = "cuda") -> None:
+def initialize_consensus_models(device: str = "cuda", **_deprecated_kwargs) -> None:
     """Initialize all models (detection and inpainting) to avoid per-image startup costs.
     """
     from .consensus import initialize_consensus_models as init_consensus_models_base
