@@ -5,24 +5,22 @@ text watermark removal pipeline using consensus detection from multiple detector
 """
 
 import argparse
-import cv2
 import time
 import sys
-import numpy as np
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import List
 
 # Lightweight imports only — heavy ML modules (.detector, .consensus,
 # .inpaint, .find_text_colors, .preprocessor, .metrics) are imported
 # lazily inside the functions that need them so that `--help` and
 # watermark-only runs don't pay the TF/PyTorch startup cost.
 from .utils import (
-    get_image_files, load_image, save_image, setup_logger, pad_bbox_to_multiple,
-    CLI_DEFAULT_CONFIDENCE, calculate_bbox_superset, configure_logging,
+    get_image_files, load_image, save_image, setup_logger,
+    CLI_DEFAULT_CONFIDENCE, configure_logging,
 )
 logger = setup_logger(__name__)
 
-# Compatibility re-exports; helpers live in focused modules.
+# Compatibility re-exports for callers that imported helpers from untextre.cli.
 from .known_mask import process_with_known_mask
 from .pipeline import (
     _apply_color_enhancement,
@@ -147,7 +145,7 @@ def main() -> None:
     # ── Load watermark templates ─────────────────────────────────────
     # Priority: -U (already loaded above) > -K flag > auto-check watermarks/ dir
     if not args.unknown_watermark:
-        watermark_templates: List[Tuple[str, np.ndarray]] = []
+        watermark_templates: List[WatermarkTemplate] = []
         if args.known_mask:
             known_mask_path = Path(args.known_mask)
             watermark_templates = load_watermark_templates(known_mask_path)
