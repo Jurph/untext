@@ -18,6 +18,42 @@ from streamlit_app import (
 )
 
 
+def test_streamlit_cli_compatibility_imports_are_available():
+    """Streamlit-imported helpers remain available through untextre.cli."""
+    from untextre.cli import (
+        initialize_consensus_models,
+        load_watermark_templates,
+        process_single_image,
+        try_watermark_cascade,
+    )
+
+    assert callable(initialize_consensus_models)
+    assert callable(process_single_image)
+    assert callable(load_watermark_templates)
+    assert callable(try_watermark_cascade)
+
+
+def test_initialize_consensus_models_accepts_streamlit_legacy_kwargs(monkeypatch):
+    """Streamlit passes deprecated initializer kwargs; the facade ignores them."""
+    import untextre.consensus as consensus_mod
+    import untextre.inpaint as inpaint_mod
+
+    calls = []
+
+    def fake_initialize_lama_model(device="cuda"):
+        calls.append(device)
+        return True
+
+    monkeypatch.setattr(consensus_mod, "initialize_consensus_models", lambda: None)
+    monkeypatch.setattr(inpaint_mod, "initialize_lama_model", fake_initialize_lama_model)
+
+    from untextre.cli import initialize_consensus_models
+
+    initialize_consensus_models(confidence_threshold=0.25, device="cpu")
+
+    assert calls == ["cpu"]
+
+
 # =========================================================================
 # bbox_to_fabric_rect
 # =========================================================================

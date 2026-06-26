@@ -31,11 +31,13 @@ from untextre.utils import (
     WEB_DEFAULT_CONFIDENCE,
 )
 from untextre.preprocessor import preprocess_image
-from untextre.cli import (
-    initialize_consensus_models,
-    process_single_image,
+from untextre.orb_matcher import (
     load_watermark_templates,
     try_watermark_cascade,
+)
+from untextre.pipeline import (
+    initialize_consensus_models,
+    process_single_image,
 )
 import numpy as np
 from untextre.consensus import find_consensus_boxes
