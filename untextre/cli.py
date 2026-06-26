@@ -18,21 +18,20 @@ from .utils import (
     get_image_files, load_image, save_image, setup_logger,
     CLI_DEFAULT_CONFIDENCE, configure_logging,
 )
-logger = setup_logger(__name__)
 
 # Compatibility re-exports for callers that imported helpers from untextre.cli.
-from .known_mask import process_with_known_mask
+from .known_mask import process_with_known_mask as process_with_known_mask
 from .pipeline import (
-    _apply_color_enhancement,
-    _generate_masks_and_inpaint,
-    _translate_rotated_bbox_to_original,
-    _try_color_enhanced_detection,
+    _apply_color_enhancement as _apply_color_enhancement,
+    _generate_masks_and_inpaint as _generate_masks_and_inpaint,
+    _translate_rotated_bbox_to_original as _translate_rotated_bbox_to_original,
+    _try_color_enhanced_detection as _try_color_enhanced_detection,
     initialize_consensus_models,
     process_single_image,
 )
 from .orb_matcher import (
     WatermarkTemplate,
-    find_known_mask_in_image,
+    find_known_mask_in_image as find_known_mask_in_image,
     load_watermark_templates,
     try_watermark_cascade,
 )
@@ -41,6 +40,8 @@ from .reports import (
     _save_discovered_watermark_candidates,
 )
 
+
+logger = setup_logger(__name__)
 
 
 

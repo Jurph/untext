@@ -67,7 +67,7 @@ The goal of this tool is fast and accurate watermark removal. We detect text-bas
 
 ### Backlog
 
-- [ ] **Consolidate `cli.py` into smaller modules** (`orb_matcher.py`, `pipeline.py`): Right long-term direction; defer until test coverage is comprehensive enough to support a safe refactor of the lazy-loading import graph.
+- [x] **Consolidate `cli.py` into smaller modules** (`orb_matcher.py`, `pipeline.py`): CLI now delegates reporting, ORB matching, known-mask processing, and consensus pipeline behavior to focused modules while retaining compatibility re-exports.
 - [x] **Switch to `cv2.KMEANS_PP_CENTERS`**: Better initialization stability improves run-to-run reproducibility. (`find_text_colors.py`)
 - [x] **Delete other confirmed dead code**: `dilate_by_percent` in `utils.py`; inline Tukey fence in `discover_watermark_candidates` duplicates `_precision_outlier_threshold` in `discovery.py`.
 - [x] **Switch `np.random.RandomState` to `np.random.default_rng`**: Avoids XOR seed collisions for same-aspect-ratio images. (`discovery.py` line 1023)
