@@ -25,6 +25,7 @@ import untextre.consensus as consensus_mod
 import untextre.known_mask as known_mask_mod
 import untextre.metrics as metrics_mod
 import untextre.orb_matcher as orb_matcher_mod
+import untextre.pipeline as pipeline_mod
 import untextre.preprocessor as preprocessor_mod
 from untextre.cli import (
     _apply_color_enhancement,
@@ -406,7 +407,7 @@ class TestProcessSingleImageFailovers:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
 
-        monkeypatch.setattr(cli_mod, "load_image", lambda _p: image.copy())
+        monkeypatch.setattr(pipeline_mod, "load_image", lambda _p: image.copy())
         monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: image.copy())
 
         def fail_if_called(*_args, **_kwargs):
@@ -414,14 +415,14 @@ class TestProcessSingleImageFailovers:
 
         monkeypatch.setattr(consensus_mod, "run_consensus_detection", fail_if_called)
         monkeypatch.setattr(
-            cli_mod,
+            pipeline_mod,
             "_try_color_enhanced_detection",
             lambda *_args, **_kwargs: [(5, 8, 12, 10)],
         )
         monkeypatch.setattr(metrics_mod, "expand_bbox_along_long_axis", lambda _img, bbox: bbox)
         monkeypatch.setattr(metrics_mod, "needs_retry", lambda _region: False)
         monkeypatch.setattr(
-            cli_mod,
+            pipeline_mod,
             "_generate_masks_and_inpaint",
             lambda img, _boxes, _g, _method, _target, **_kw: (
                 np.zeros(img.shape[:2], dtype=np.uint8),
@@ -450,7 +451,7 @@ class TestProcessSingleImageFailovers:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
 
-        monkeypatch.setattr(cli_mod, "load_image", lambda _p: image.copy())
+        monkeypatch.setattr(pipeline_mod, "load_image", lambda _p: image.copy())
         monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: image.copy())
 
         calls = {"n": 0}
@@ -463,7 +464,7 @@ class TestProcessSingleImageFailovers:
 
         monkeypatch.setattr(consensus_mod, "run_consensus_detection", fake_consensus)
         monkeypatch.setattr(
-            cli_mod,
+            pipeline_mod,
             "_try_color_enhanced_detection",
             lambda *_args, **_kwargs: [],
         )
@@ -474,7 +475,7 @@ class TestProcessSingleImageFailovers:
             captured["boxes"] = boxes
             return np.zeros(img.shape[:2], dtype=np.uint8), img.copy()
 
-        monkeypatch.setattr(cli_mod, "_generate_masks_and_inpaint", fake_generate)
+        monkeypatch.setattr(pipeline_mod, "_generate_masks_and_inpaint", fake_generate)
         monkeypatch.setattr(metrics_mod, "needs_retry", lambda _region: False)
 
         timings = process_single_image(
@@ -498,7 +499,7 @@ class TestProcessSingleImageFailovers:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
 
-        monkeypatch.setattr(cli_mod, "load_image", lambda _p: image.copy())
+        monkeypatch.setattr(pipeline_mod, "load_image", lambda _p: image.copy())
         monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: image.copy())
         monkeypatch.setattr(consensus_mod, "run_consensus_detection", lambda *_args, **_kwargs: [])
 
@@ -508,7 +509,7 @@ class TestProcessSingleImageFailovers:
             color_attempts.append((target_hex, sensitivity))
             return []
 
-        monkeypatch.setattr(cli_mod, "_try_color_enhanced_detection", fake_try_color)
+        monkeypatch.setattr(pipeline_mod, "_try_color_enhanced_detection", fake_try_color)
 
         timings = process_single_image(
             image_path=image_path,
@@ -1271,7 +1272,7 @@ class TestProcessSingleImageEdgeCases:
         img_path = self._make_image(tmp_path)
         out_dir = tmp_path / "out"
         out_dir.mkdir()
-        monkeypatch.setattr(cli_mod, "load_image", lambda _p: np.zeros((50, 50, 3), dtype=np.uint8))
+        monkeypatch.setattr(pipeline_mod, "load_image", lambda _p: np.zeros((50, 50, 3), dtype=np.uint8))
         monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: None)
         with pytest.raises(ValueError, match="preprocessing failed"):
             process_single_image(
@@ -1286,7 +1287,7 @@ class TestProcessSingleImageEdgeCases:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
 
-        monkeypatch.setattr(cli_mod, "load_image", lambda _p: img.copy())
+        monkeypatch.setattr(pipeline_mod, "load_image", lambda _p: img.copy())
         monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: img.copy())
         monkeypatch.setattr(metrics_mod, "needs_retry", lambda _region: False)
 
@@ -1296,7 +1297,7 @@ class TestProcessSingleImageEdgeCases:
             captured["boxes"] = boxes
             return np.zeros(image.shape[:2], dtype=np.uint8), image.copy()
 
-        monkeypatch.setattr(cli_mod, "_generate_masks_and_inpaint", fake_generate)
+        monkeypatch.setattr(pipeline_mod, "_generate_masks_and_inpaint", fake_generate)
 
         # Forced bbox extends beyond 80×50 image
         timings = process_single_image(
@@ -1317,7 +1318,7 @@ class TestProcessSingleImageEdgeCases:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
         img = np.zeros((50, 50, 3), dtype=np.uint8)
-        monkeypatch.setattr(cli_mod, "load_image", lambda _p: img.copy())
+        monkeypatch.setattr(pipeline_mod, "load_image", lambda _p: img.copy())
         monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: img.copy())
         with pytest.raises(ValueError, match="Mask file not found"):
             process_single_image(
@@ -1348,7 +1349,7 @@ class TestProcessSingleImageEdgeCases:
                 return mask_img.copy()
             return img.copy()
 
-        monkeypatch.setattr(cli_mod, "load_image", tracking_load)
+        monkeypatch.setattr(pipeline_mod, "load_image", tracking_load)
         monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: img.copy())
 
         import untextre.inpaint as inpaint_mod
@@ -1380,7 +1381,7 @@ class TestProcessSingleImageEdgeCases:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
 
-        monkeypatch.setattr(cli_mod, "load_image", lambda _p: img.copy())
+        monkeypatch.setattr(pipeline_mod, "load_image", lambda _p: img.copy())
         monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: img.copy())
         monkeypatch.setattr(consensus_mod, "run_consensus_detection", lambda *a, **kw: [(5, 5, 10, 10)])
         monkeypatch.setattr(metrics_mod, "expand_bbox_along_long_axis", lambda _img, bbox: bbox)
@@ -1392,7 +1393,7 @@ class TestProcessSingleImageEdgeCases:
             generate_calls.append(g)
             return np.zeros(image.shape[:2], dtype=np.uint8), image.copy()
 
-        monkeypatch.setattr(cli_mod, "_generate_masks_and_inpaint", fake_generate)
+        monkeypatch.setattr(pipeline_mod, "_generate_masks_and_inpaint", fake_generate)
 
         timings = process_single_image(
             image_path=img_path, output_dir=out_dir, method="telea",
@@ -1409,7 +1410,7 @@ class TestProcessSingleImageEdgeCases:
         out_dir = tmp_path / "out"
         out_dir.mkdir()
 
-        monkeypatch.setattr(cli_mod, "load_image", lambda _p: img.copy())
+        monkeypatch.setattr(pipeline_mod, "load_image", lambda _p: img.copy())
         monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: img.copy())
         monkeypatch.setattr(consensus_mod, "run_consensus_detection", lambda *a, **kw: [(5, 5, 10, 10)])
         monkeypatch.setattr(metrics_mod, "expand_bbox_along_long_axis", lambda _img, bbox: bbox)
@@ -1422,7 +1423,7 @@ class TestProcessSingleImageEdgeCases:
             generate_calls.append(g)
             return np.zeros(image.shape[:2], dtype=np.uint8), image.copy()
 
-        monkeypatch.setattr(cli_mod, "_generate_masks_and_inpaint", fake_generate)
+        monkeypatch.setattr(pipeline_mod, "_generate_masks_and_inpaint", fake_generate)
 
         timings = process_single_image(
             image_path=img_path, output_dir=out_dir, method="telea",
