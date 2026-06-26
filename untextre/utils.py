@@ -51,6 +51,49 @@ WEB_DEFAULT_CONFIDENCE: float = 0.025
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 LOG_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 
+ASCII_REPLACEMENTS = {
+    "\u00d7": "x",
+    "\u2192": "->",
+    "\u2190": "<-",
+    "\u2014": "-",
+    "\u2013": "-",
+    "\u2212": "-",
+    "\u00b1": "+/-",
+    "\u00b0": " degrees",
+    "\u2265": ">=",
+    "\u2264": "<=",
+    "\u2026": "...",
+    "\u2713": "[OK]",
+    "\u2717": "[FAIL]",
+    "\u2705": "[OK]",
+    "\u274c": "[ERROR]",
+    "\u26a0\ufe0f": "[WARN]",
+    "\u26a0": "[WARN]",
+    "\ufe0f": "",
+}
+
+
+def _ascii_safe(text: str) -> str:
+    """Return text that is safe for legacy Windows console encodings."""
+    for source, replacement in ASCII_REPLACEMENTS.items():
+        text = text.replace(source, replacement)
+    return text.encode("ascii", errors="replace").decode("ascii")
+
+
+class AsciiSafeFormatter(logging.Formatter):
+    """Formatter for terminal output that cannot assume UTF-8 support."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        original_msg = record.msg
+        original_args = record.args
+        try:
+            record.msg = _ascii_safe(record.getMessage())
+            record.args = ()
+            return _ascii_safe(super().format(record))
+        finally:
+            record.msg = original_msg
+            record.args = original_args
+
 
 def setup_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     """Return a package logger configured to propagate to root.
@@ -84,8 +127,9 @@ def configure_logging(verbose: bool = False, logfile: Optional[ImagePath] = None
             handler.close()
 
     formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
+    console_formatter = AsciiSafeFormatter(LOG_FORMAT, datefmt=LOG_DATE_FORMAT)
     console_handler = logging.StreamHandler()
-    console_handler.setFormatter(formatter)
+    console_handler.setFormatter(console_formatter)
     console_handler.setLevel(level)
     console_handler._untextre_handler = True  # type: ignore[attr-defined]
     root.addHandler(console_handler)
@@ -93,7 +137,7 @@ def configure_logging(verbose: bool = False, logfile: Optional[ImagePath] = None
     if logfile is not None:
         log_path = Path(logfile)
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(log_path, mode='w')
+        file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8', errors='replace')
         file_handler.setFormatter(formatter)
         file_handler.setLevel(level)
         file_handler._untextre_handler = True  # type: ignore[attr-defined]

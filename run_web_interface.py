@@ -16,7 +16,7 @@ def main():
 
     # Check if streamlit is installed
     if find_spec("streamlit") is None:
-        print("❌ Streamlit not found. Please install the web dependencies:")
+        print("[ERROR] Streamlit not found. Please install the web dependencies:")
         print("   uv sync --extra web")
         sys.exit(1)
 
@@ -24,25 +24,25 @@ def main():
     app_path = Path(__file__).parent / "streamlit_app.py"
 
     if not app_path.exists():
-        print(f"❌ Streamlit app not found at {app_path}")
+        print(f"[ERROR] Streamlit app not found at {app_path}")
         sys.exit(1)
 
     print("=" * 70)
-    print("🚀 Starting UnTextre Web Interface...")
+    print("[START] Starting UnTextre Web Interface...")
     print("=" * 70)
     print()
-    print("📱 The app will open in your browser automatically at:")
+    print("[INFO] The app will open in your browser automatically at:")
     print("   http://localhost:8501")
     print()
-    print("⏱️  First-time startup: ~30-60 seconds (downloading/loading AI models)")
-    print("   • EAST text detection model (~80MB)")
-    print("   • DocTR document OCR model (~100MB)")
-    print("   • EasyOCR recognition model (~120MB)")
-    print("   • LaMa inpainting model (~200MB)")
+    print("[INFO] First-time startup: ~30-60 seconds (downloading/loading AI models)")
+    print("   - EAST text detection model (~80MB)")
+    print("   - DocTR document OCR model (~100MB)")
+    print("   - EasyOCR recognition model (~120MB)")
+    print("   - LaMa inpainting model (~200MB)")
     print()
-    print("⚡ After initial load: Processing is fast (~2-5 seconds per image)")
+    print("[INFO] After initial load: Processing is fast (~2-5 seconds per image)")
     print()
-    print("🛑 To stop the server: Press Ctrl+C in this terminal")
+    print("[STOP] To stop the server: Press Ctrl+C in this terminal")
     print("=" * 70)
     print()
 
@@ -58,9 +58,9 @@ def main():
     try:
         subprocess.run(cmd, check=True)
     except KeyboardInterrupt:
-        print("\n👋 Shutting down UnTextre Web Interface")
+        print("\n[STOP] Shutting down UnTextre Web Interface")
     except subprocess.CalledProcessError as e:
-        print(f"❌ Error starting Streamlit: {e}")
+        print(f"[ERROR] Error starting Streamlit: {e}")
         sys.exit(1)
 
 

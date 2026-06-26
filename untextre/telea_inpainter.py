@@ -52,7 +52,7 @@ class TeleaInpainter:  # pylint: disable=too-few-public-methods
         if image is None or mask is None:
             raise ValueError("image and mask must not be None")
         if image.ndim != 3 or image.shape[2] != 3:
-            raise ValueError("image must be H×W×3 BGR")
+            raise ValueError("image must be HxWx3 BGR")
         if mask.ndim == 3:
             mask = mask[:, :, 0]
         if mask.shape != image.shape[:2]:

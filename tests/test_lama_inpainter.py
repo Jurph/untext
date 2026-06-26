@@ -319,13 +319,13 @@ class TestLamaInpainterValidation:
     def test_wrong_image_shape_raises(self, lama_inpainter):
         image = np.zeros((50, 50), dtype=np.uint8)  # 2D
         mask = np.zeros((50, 50), dtype=np.uint8)
-        with pytest.raises(ValueError, match="H×W×3"):
+        with pytest.raises(ValueError, match="HxWx3"):
             lama_inpainter.inpaint(image, mask)
 
     def test_4channel_image_raises(self, lama_inpainter):
         image = np.zeros((50, 50, 4), dtype=np.uint8)
         mask = np.zeros((50, 50), dtype=np.uint8)
-        with pytest.raises(ValueError, match="H×W×3"):
+        with pytest.raises(ValueError, match="HxWx3"):
             lama_inpainter.inpaint(image, mask)
 
     def test_3d_mask_auto_converts(self, lama_inpainter):

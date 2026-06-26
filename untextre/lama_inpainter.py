@@ -144,7 +144,7 @@ class LamaInpainter:  # pylint: disable=too-few-public-methods
             raise ValueError("mask must be a numpy ndarray")
 
         if image.ndim != 3 or image.shape[2] != 3:
-            raise ValueError("image must be H×W×3 array")
+            raise ValueError("image must be HxWx3 array")
 
         if mask.ndim == 3:
             mask = mask[:, :, 0]
@@ -300,7 +300,7 @@ class LamaInpainter:  # pylint: disable=too-few-public-methods
                 out_h, out_w = out_bgr.shape[:2]
                 if (out_h, out_w) != (target_h, target_w):
                     logger.warning(
-                        "LaMa output size %sx%s does not match subregion %sx%s – resizing",
+                        "LaMa output size %sx%s does not match subregion %sx%s - resizing",
                         out_w, out_h, target_w, target_h,
                     )
                     out_bgr = cv2.resize(out_bgr, (target_w, target_h), interpolation=cv2.INTER_AREA)
