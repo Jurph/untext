@@ -95,20 +95,18 @@ class AsciiSafeFormatter(logging.Formatter):
             record.args = original_args
 
 
-def setup_logger(name: str, level: int = logging.INFO) -> logging.Logger:
+def setup_logger(name: str) -> logging.Logger:
     """Return a package logger configured to propagate to root.
 
     Root logging is configured once by configure_logging(). Individual modules
     must not attach their own handlers, or CLI/file output will duplicate lines.
-    
+
     Args:
         name: Logger name
-        level: Deprecated; retained for compatibility.
-        
+
     Returns:
         Logger instance
     """
-    del level
     logger = logging.getLogger(name)
     logger.handlers.clear()
     logger.propagate = True

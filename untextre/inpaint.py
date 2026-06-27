@@ -2,8 +2,7 @@
 
 This module provides functionality to inpaint masked regions in images using
 either the LaMa (Large Mask Inpainting) algorithm or OpenCV's TELEA method.
-It supports subregion processing for efficiency and maintains compatibility 
-with the existing codebase.
+It supports subregion processing for efficiency.
 """
 
 import cv2
@@ -359,7 +358,7 @@ def _has_pixels_to_inpaint(mask: MaskArray) -> bool:
 def _calculate_inpainting_subregion(
     mask: MaskArray, 
     bbox: Optional[BBox] = None,
-    image_shape: Tuple[int, int] = None
+    image_shape: Optional[Tuple[int, int]] = None
 ) -> Optional[Tuple[int, int, int, int]]:
     """Calculate optimal subregion for inpainting based on mask and bbox.
     

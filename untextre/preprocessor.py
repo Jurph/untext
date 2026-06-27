@@ -10,7 +10,7 @@ The main preprocessing pipeline includes:
 
 These settings were determined through comprehensive grid search testing that
 evaluated hundreds of parameter combinations against ground truth text on
-real test images, achieving a Figure of Merit of -3.1942.
+real test images, achieving a Figure of Merit of -3.1942 (see experiments/grid_search.py for scale, direction, and dataset details).
 """
 
 import cv2

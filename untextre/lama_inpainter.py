@@ -1,8 +1,8 @@
 """Wrapper for SAIC-AI LaMa in-painting model.
 
 Attempts to load a pre-trained LaMa checkpoint ("big-lama") on first use
-and exposes a single `inpaint(image, mask)` method compatible with
-`ImagePatcher`.
+and exposes a single `inpaint(image, mask)` method with the same signature
+as `TeleaInpainter`.
 
 If LaMa or its dependencies are not installed, a RuntimeError is raised
 with installation hints.
@@ -39,8 +39,6 @@ if SimpleLama is None:
         from saicinpainting.training.trainers import load_checkpoint  # type: ignore
     except ImportError:
         load_checkpoint = None  # type: ignore
-    else:
-        load_checkpoint = load_checkpoint  # just to satisfy linters
 else:
     load_checkpoint = None  # type: ignore
 

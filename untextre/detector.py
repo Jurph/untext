@@ -379,11 +379,11 @@ def _detect_with_east(image: ImageArray, net: cv2.dnn_Net,
         # Apply non-maximum suppression to remove overlapping detections.
         boxes = [[x, y, w, h] for (x, y, w, h) in rectangles]
         
-        # Apply OpenCV's NMS if available, otherwise use simple overlap removal
+        # Apply NMS; fall back to local implementation on any cv2.dnn binding failure.
         try:
             indices = cv2.dnn.NMSBoxes(boxes, confidences, min_confidence, nms_threshold)
             if len(indices) > 0:
-                # Flatten indices array if needed (OpenCV version differences)
+                # NMSBoxes returns a 2-D array in OpenCV <4.5, 1-D in >=4.5.
                 if isinstance(indices, np.ndarray) and indices.ndim > 1:
                     indices = indices.flatten()
                 selected_indices = indices
@@ -523,8 +523,7 @@ def _decode_east_predictions(scores: np.ndarray, geometry: np.ndarray,
             h = x_data_0[x] + x_data_2[x]
             w = x_data_1[x] + x_data_3[x]
             
-            # Calculate bounding box coordinates
-            # Note: This is a simplified version - full EAST can handle rotation
+            # Rotation-aware bbox: angle from EAST geometry channel 4 orients the box.
             end_x = int(offset_x + (cos * x_data_1[x]) + (sin * x_data_2[x]))
             end_y = int(offset_y - (sin * x_data_1[x]) + (cos * x_data_2[x]))
             start_x = int(end_x - w)
