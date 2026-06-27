@@ -19,26 +19,8 @@ from .utils import (
     CLI_DEFAULT_CONFIDENCE, configure_logging,
 )
 
-# Compatibility re-exports for callers that imported helpers from untextre.cli.
-from .known_mask import process_with_known_mask as process_with_known_mask
-from .pipeline import (
-    _apply_color_enhancement as _apply_color_enhancement,
-    _generate_masks_and_inpaint as _generate_masks_and_inpaint,
-    _translate_rotated_bbox_to_original as _translate_rotated_bbox_to_original,
-    _try_color_enhanced_detection as _try_color_enhanced_detection,
-    initialize_consensus_models,
-    process_single_image,
-)
-from .orb_matcher import (
-    WatermarkTemplate,
-    find_known_mask_in_image as find_known_mask_in_image,
-    load_watermark_templates,
-    try_watermark_cascade,
-)
-from .reports import (
-    _save_clean_timing_report,
-    _save_discovered_watermark_candidates,
-)
+from . import orb_matcher, pipeline, reports
+from .orb_matcher import WatermarkTemplate
 
 
 logger = setup_logger(__name__)
@@ -141,7 +123,7 @@ def main() -> None:
             sys.exit(1)
 
         # Export candidates in orb-prepped form so on-disk templates match -K inputs.
-        watermark_templates = _save_discovered_watermark_candidates(output_path, candidates)
+        watermark_templates = reports._save_discovered_watermark_candidates(output_path, candidates)
 
     # ── Load watermark templates ─────────────────────────────────────
     # Priority: -U (already loaded above) > -K flag > auto-check watermarks/ dir
@@ -149,17 +131,17 @@ def main() -> None:
         watermark_templates: List[WatermarkTemplate] = []
         if args.known_mask:
             known_mask_path = Path(args.known_mask)
-            watermark_templates = load_watermark_templates(known_mask_path)
+            watermark_templates = orb_matcher.load_watermark_templates(known_mask_path)
             if not watermark_templates:
                 logger.error(f"No valid RGBA templates found at: {args.known_mask}")
                 sys.exit(1)
         else:
             # Auto-check the watermarks/ directory next to the package root
             default_watermarks_dir = Path(__file__).resolve().parent.parent / "watermarks"
-            watermark_templates = load_watermark_templates(default_watermarks_dir)
+            watermark_templates = orb_matcher.load_watermark_templates(default_watermarks_dir)
 
     if watermark_templates:
-        names = ", ".join(name for name, _ in watermark_templates)
+        names = ", ".join(template.name for template in watermark_templates)
         logger.info(f"Watermark templates loaded: {names}")
     else:
         logger.info(f"Using consensus detection with confidence threshold: {args.confidence_threshold}")
@@ -185,7 +167,7 @@ def main() -> None:
     else:
         # Auto-detected templates (or none): load everything so detection
         # fallback works if no template matches
-        initialize_consensus_models(device=args.device)
+        pipeline.initialize_consensus_models(device=args.device)
 
     model_init_time = time.time() - model_init_start
     logger.info(f"Models ready in {model_init_time:.1f} seconds")
@@ -205,7 +187,7 @@ def main() -> None:
             if watermark_templates:
                 image = load_image(image_path)
                 if image is not None:
-                    cascade_result = try_watermark_cascade(
+                    cascade_result = orb_matcher.try_watermark_cascade(
                         image, watermark_templates,
                     )
                     if cascade_result is not None:
@@ -233,7 +215,7 @@ def main() -> None:
 
             # ── Fall back to consensus detection ──────────────────────
             if timing_data is None and not explicit_known_mask:
-                timing_data = process_single_image(
+                timing_data = pipeline.process_single_image(
                     image_path=image_path,
                     output_dir=output_path,
                     target_color=target_color,
@@ -296,13 +278,13 @@ def main() -> None:
     if args.timing and detailed_timings:
         # Always save timing report to a clean file
         timing_file = output_path / "timing_report.txt"
-        _save_clean_timing_report(detailed_timings, total_time, avg_time, timing_file, args.paint, args.confidence_threshold, target_color, forced_bbox)
+        reports._save_clean_timing_report(detailed_timings, total_time, avg_time, timing_file, args.paint, args.confidence_threshold, target_color, forced_bbox)
         logger.info(f"Timing report saved to: {timing_file}")
         
         # Also save to logfile location if specified
         if args.logfile:
             log_timing_file = Path(args.logfile).with_suffix('.timing.txt')
-            _save_clean_timing_report(detailed_timings, total_time, avg_time, log_timing_file, args.paint, args.confidence_threshold, target_color, forced_bbox)
+            reports._save_clean_timing_report(detailed_timings, total_time, avg_time, log_timing_file, args.paint, args.confidence_threshold, target_color, forced_bbox)
             logger.info(f"Timing report also saved to: {log_timing_file}")
 
 

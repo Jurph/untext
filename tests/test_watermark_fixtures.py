@@ -25,7 +25,8 @@ import numpy as np
 import pytest
 from skimage.metrics import structural_similarity as ssim
 
-from untextre.cli import find_known_mask_in_image, process_single_image
+from untextre.orb_matcher import find_known_mask_in_image
+from untextre.pipeline import process_single_image
 from untextre.inpaint import inpaint_image
 from untextre.utils import load_image
 
@@ -239,7 +240,7 @@ class TestConsensusDetectionE2E:
         if not dirty_path.exists() or not clean_path.exists():
             pytest.skip("Requires test3-with-text.png and test3-without-text.png")
 
-        from untextre.cli import initialize_consensus_models
+        from untextre.pipeline import initialize_consensus_models
 
         initialize_consensus_models(device="cuda")
 

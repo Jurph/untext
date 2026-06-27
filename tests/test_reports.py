@@ -20,8 +20,8 @@ class TestSaveDiscoveredWatermarkCandidates:
         templates = _save_discovered_watermark_candidates(tmp_path, [raw])
 
         assert len(templates) == 1
-        name, bgra = templates[0]
-        assert name == "watermark_candidate.png"
+        bgra = templates[0].rgba
+        assert templates[0].name == "watermark_candidate.png"
         assert bgra.shape == (15, 15, 4)
         assert np.all(bgra[:2, :, 3] == 0)
         assert np.all(bgra[:, :2, 3] == 0)

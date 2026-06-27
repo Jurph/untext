@@ -5,10 +5,6 @@ README or preserve old completed review notes.
 
 ## Must Fix Before v1.0
 
-- [ ] **WatermarkTemplate iteration in log**: Change `name for name, _ in watermark_templates`
-  to `t.name for t in watermark_templates` to stop depending on the backward-compat
-  `__iter__` shim. `(cli.py:162)`
-
 - [ ] **EAST download reliability**: Add timeout, file-size check, and a human-readable
   error to the EAST model download; prevent silent HTML-404 corruption of the cached
   `.pb` file. If automatic download fails, print a long-term reliable manual-download
@@ -18,20 +14,11 @@ README or preserve old completed review notes.
 
 ## Should Fix
 
-- [ ] **Remove WatermarkTemplate shim**: Delete `__iter__` / `__getitem__` from
-  `WatermarkTemplate` and the legacy tuple branch from `try_watermark_cascade` after
-  the `cli.py:162` fix lands; the shim has no remaining legitimate use.
-  `(orb_matcher.py:25-31, 291-298)`
-
 - [ ] **Lowe ratio-test citation**: Add a Lowe (2004) citation comment to the `0.75`
   ratio-test constant. `(orb_matcher.py:135)`
 
 - [ ] **50% coverage guard comment**: Add one sentence explaining why a watermark
   covering more than 50% of the image is treated as spurious. `(orb_matcher.py:252-256)`
-
-- [ ] **Private re-exports in cli**: Remove or explicitly promote the `_private`
-  re-exports from `cli.py` lines 25-28; do not let them ship as implicit public API.
-  `(cli.py:22-28)`
 
 - [ ] **LaMa paste-back coordinates**: Replace the redundant `subregion[0] + edge_pad_*`
   recomputation at paste-back with the already-adjusted `x1, y1, x2, y2` local

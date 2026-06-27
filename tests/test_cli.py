@@ -1,19 +1,6 @@
-"""Tests for untextre.cli module.
-
-Covers:
-    - ``parse_args()``  – argument parsing defaults & validation
-    - ``_save_clean_timing_report()``  – timing report formatting (including
-      template-match and mixed-key entries so we don't regress KeyError)
-    - ``_apply_color_enhancement()``  – valid/invalid hex, does/doesn't mutate
-    - ``load_watermark_templates()``  – path filtering, RGBA-only loading
-    - ``try_watermark_cascade()``  – empty/multi-template cascade behaviour
-    - ``process_single_image()``  – smoke test (telea, forced bbox) and
-      failover-chain orchestration (target-color, rotation, exhaustion)
-    - ``process_with_known_mask()``  – match/no-match branching via stubs
-"""
+"""Tests for untextre.cli argument parsing and main() orchestration."""
 
 import sys
-from pathlib import Path
 
 import cv2
 import numpy as np
@@ -21,13 +8,10 @@ import pytest
 
 import untextre
 import untextre.cli as cli_mod
-from untextre.cli import (
-    _save_clean_timing_report,
-    load_watermark_templates,
-    main,
-    parse_args,
-    process_with_known_mask,
-)
+import untextre.orb_matcher as orb_matcher_mod
+import untextre.pipeline as pipeline_mod
+import untextre.reports as reports_mod
+from untextre.cli import main, parse_args
 
 
 
@@ -236,9 +220,9 @@ class TestMainForceBbox:
         """Happy path: '10,20,30,40' parses without error."""
         self._setup_main_mocks(monkeypatch, tmp_path, ["-f", "10,20,30,40"])
         # Mock model init and processing to prevent actual execution
-        monkeypatch.setattr(cli_mod, "initialize_consensus_models", lambda *a, **kw: None)
+        monkeypatch.setattr(pipeline_mod, "initialize_consensus_models", lambda *a, **kw: None)
         monkeypatch.setattr(
-            cli_mod, "process_single_image",
+            pipeline_mod, "process_single_image",
             lambda **kw: {"total_time": 0.1, "skipped": False},
         )
         # Should not raise SystemExit
@@ -285,7 +269,7 @@ class TestMainIntegrationPaths:
         if extra_argv:
             argv.extend(extra_argv)
         monkeypatch.setattr(sys, "argv", argv)
-        monkeypatch.setattr(cli_mod, "initialize_consensus_models", lambda *a, **kw: None)
+        monkeypatch.setattr(pipeline_mod, "initialize_consensus_models", lambda *a, **kw: None)
         return img_path, out_dir
 
     def test_verbose_enables_debug_logging(self, monkeypatch, tmp_path):
@@ -293,7 +277,7 @@ class TestMainIntegrationPaths:
         import logging
         self._run_main(monkeypatch, tmp_path, ["--verbose"])
         monkeypatch.setattr(
-            cli_mod, "process_single_image",
+            pipeline_mod, "process_single_image",
             lambda **kw: {"total_time": 0.1, "skipped": False},
         )
         main()
@@ -304,7 +288,7 @@ class TestMainIntegrationPaths:
         log_path = tmp_path / "logs" / "test.log"
         self._run_main(monkeypatch, tmp_path, ["--logfile", str(log_path)])
         monkeypatch.setattr(
-            cli_mod, "process_single_image",
+            pipeline_mod, "process_single_image",
             lambda **kw: {"total_time": 0.1, "skipped": False},
         )
         main()
@@ -321,7 +305,7 @@ class TestMainIntegrationPaths:
         """--force-output with skipped image copies original to output."""
         self._run_main(monkeypatch, tmp_path, ["--force-output"])
         monkeypatch.setattr(
-            cli_mod, "process_single_image",
+            pipeline_mod, "process_single_image",
             lambda **kw: {"total_time": 0.1, "skipped": True},
         )
         saved = {}
@@ -339,7 +323,7 @@ class TestMainIntegrationPaths:
         """--timing produces timing_report.txt."""
         _, out_dir = self._run_main(monkeypatch, tmp_path, ["-t"])
         monkeypatch.setattr(
-            cli_mod, "process_single_image",
+            pipeline_mod, "process_single_image",
             lambda **kw: _make_timing(name="test_img.png"),
         )
         main()
@@ -350,7 +334,7 @@ class TestMainIntegrationPaths:
         log_path = tmp_path / "run.log"
         _, out_dir = self._run_main(monkeypatch, tmp_path, ["-t", "--logfile", str(log_path)])
         monkeypatch.setattr(
-            cli_mod, "process_single_image",
+            pipeline_mod, "process_single_image",
             lambda **kw: _make_timing(name="test_img.png"),
         )
         main()
@@ -371,7 +355,7 @@ class TestMainIntegrationPaths:
             sys, "argv",
             ["prog", "-i", str(tmp_path), "-o", str(out_dir), "-p", "telea"],
         )
-        monkeypatch.setattr(cli_mod, "initialize_consensus_models", lambda *a, **kw: None)
+        monkeypatch.setattr(pipeline_mod, "initialize_consensus_models", lambda *a, **kw: None)
 
         calls = {"n": 0}
 
@@ -381,7 +365,7 @@ class TestMainIntegrationPaths:
                 raise RuntimeError("Simulated failure on first image")
             return {"total_time": 0.1, "skipped": False}
 
-        monkeypatch.setattr(cli_mod, "process_single_image", process_or_raise)
+        monkeypatch.setattr(pipeline_mod, "process_single_image", process_or_raise)
         # Also mock cleanup_vram (imported lazily in finally block)
         import untextre.detector as detector_mod
         monkeypatch.setattr(detector_mod, "cleanup_vram", lambda: None)
@@ -412,13 +396,13 @@ class TestMainIntegrationPaths:
         monkeypatch.setattr(inpaint_mod, "initialize_lama_model", lambda **kw: True)
 
         # Make cascade return None (no match)
-        monkeypatch.setattr(cli_mod, "try_watermark_cascade", lambda *a, **kw: None)
+        monkeypatch.setattr(orb_matcher_mod, "try_watermark_cascade", lambda *a, **kw: None)
 
         # process_single_image should NOT be called (no fallback)
         def fail_if_called(**kw):
             raise AssertionError("Should not fall back to consensus detection with explicit -K")
 
-        monkeypatch.setattr(cli_mod, "process_single_image", fail_if_called)
+        monkeypatch.setattr(pipeline_mod, "process_single_image", fail_if_called)
 
         import untextre.detector as detector_mod
         monkeypatch.setattr(detector_mod, "cleanup_vram", lambda: None)
@@ -456,7 +440,7 @@ class TestMainIntegrationPaths:
         import untextre.inpaint as inpaint_mod
         monkeypatch.setattr(inpaint_mod, "initialize_lama_model", lambda **kw: True)
         monkeypatch.setattr(
-            cli_mod,
+            orb_matcher_mod,
             "try_watermark_cascade",
             lambda *_a, **_kw: (
                 np.zeros((50, 50), dtype=np.uint8),
@@ -472,7 +456,7 @@ class TestMainIntegrationPaths:
         def fake_save_timing_report(detailed_timings, *_args, **_kwargs):
             captured["timings"] = detailed_timings
 
-        monkeypatch.setattr(cli_mod, "_save_clean_timing_report", fake_save_timing_report)
+        monkeypatch.setattr(reports_mod, "_save_clean_timing_report", fake_save_timing_report)
 
         import untextre.detector as detector_mod
         monkeypatch.setattr(detector_mod, "cleanup_vram", lambda: None)
@@ -517,18 +501,6 @@ def test_unknown_watermark_and_known_mask_are_mutually_exclusive():
 class TestCliErrorPaths:
     """Cover error/guard paths in cli.py — no mocks, pure logic paths."""
 
-    def test_process_with_known_mask_bad_image(self, tmp_path):
-        """Zero-byte image file → process_with_known_mask returns None."""
-        bad_path = tmp_path / "bad.jpg"
-        bad_path.write_bytes(b"")  # zero-byte file
-        template = np.zeros((50, 50, 4), dtype=np.uint8)
-        result = process_with_known_mask(
-            image_path=bad_path,
-            output_dir=tmp_path,
-            known_mask_rgba=template,
-        )
-        assert result is None
-
     def test_main_same_dir_guard(self, tmp_path, monkeypatch):
         """main() with -U and same input/output dir exits with code 1."""
         monkeypatch.setattr(
@@ -543,30 +515,6 @@ class TestCliErrorPaths:
         with pytest.raises(SystemExit) as exc_info:
             main()
         assert exc_info.value.code == 1
-
-    def test_load_watermark_templates_missing_path(self):
-        """Non-existent path → load_watermark_templates returns []."""
-        result = load_watermark_templates(Path("definitely_does_not_exist_xyz"))
-        assert result == []
-
-    def test_save_timing_report(self, tmp_path):
-        """_save_clean_timing_report writes a file containing expected headers."""
-        timing_file = tmp_path / "timing.txt"
-        detailed = [{"file": "a.jpg", "time": 1.2}]
-        _save_clean_timing_report(
-            detailed_timings=detailed,
-            total_time=1.2,
-            avg_time=1.2,
-            timing_file=timing_file,
-            method="known_mask",
-            confidence_threshold=0.5,
-            target_color=None,
-            forced_bbox=None,
-        )
-        assert timing_file.exists(), "Timing report file was not created"
-        content = timing_file.read_text()
-        assert "Inpainting method:" in content
-
 
 def test_package_lazy_imports():
     """__getattr__ lazy-loader in __init__.py is triggered by attribute access."""

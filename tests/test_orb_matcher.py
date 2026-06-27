@@ -6,6 +6,7 @@ import pytest
 
 import untextre.orb_matcher as orb_matcher_mod
 from untextre.orb_matcher import (
+    WatermarkTemplate,
     find_known_mask_in_image,
     load_watermark_templates,
     try_watermark_cascade,
@@ -30,8 +31,8 @@ class TestLoadWatermarkTemplates:
         cv2.imwrite(str(path), rgba)
         templates = load_watermark_templates(path)
         assert len(templates) == 1
-        assert templates[0][0] == "logo.png"
-        assert templates[0][1].shape == (8, 8, 4)
+        assert templates[0].name == "logo.png"
+        assert templates[0].rgba.shape == (8, 8, 4)
         assert len(templates[0].orb_variants) == 3
         assert templates[0].orb_variants[0].keypoint_count >= templates[0].orb_variants[-1].keypoint_count
 
@@ -43,7 +44,7 @@ class TestLoadWatermarkTemplates:
         (tmp_path / "c.txt").write_text("ignore")
         templates = load_watermark_templates(tmp_path)
         assert len(templates) == 1
-        assert templates[0][0] == "b.png"
+        assert templates[0].name == "b.png"
 
     def test_rgb_only_png_skipped(self, tmp_path):
         """PNG with 3 channels (no alpha) is rejected by our RGBA check."""
@@ -71,9 +72,9 @@ class TestTryWatermarkCascade:
         """All templates are evaluated; the one with the most inliers is returned."""
         image = np.zeros((60, 60, 3), dtype=np.uint8)
         templates = [
-            ("a.png", np.zeros((8, 8, 4), dtype=np.uint8)),
-            ("b.png", np.zeros((8, 8, 4), dtype=np.uint8)),
-            ("c.png", np.zeros((8, 8, 4), dtype=np.uint8)),
+            WatermarkTemplate("a.png", np.zeros((8, 8, 4), dtype=np.uint8), ()),
+            WatermarkTemplate("b.png", np.zeros((8, 8, 4), dtype=np.uint8), ()),
+            WatermarkTemplate("c.png", np.zeros((8, 8, 4), dtype=np.uint8), ()),
         ]
         mask_b = np.ones((60, 60), dtype=np.uint8) * 128
         bbox_b = (10, 20, 15, 12)
@@ -81,7 +82,13 @@ class TestTryWatermarkCascade:
         bbox_c = (5, 5, 20, 20)
         calls = []
 
-        def fake_find_known_mask_in_image(_image, _tmpl, min_matches=6, dilation_pixels=7):
+        def fake_find_known_mask_in_image(
+            _image,
+            _tmpl,
+            min_matches=6,
+            dilation_pixels=7,
+            prepared_variants=None,
+        ):
             calls.append((min_matches, dilation_pixels))
             if len(calls) == 1:
                 return None               # a: no match

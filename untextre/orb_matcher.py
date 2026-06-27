@@ -22,13 +22,6 @@ class WatermarkTemplate:
     rgba: np.ndarray
     orb_variants: tuple[CandidateOrbVariant, ...]
 
-    def __iter__(self):
-        yield self.name
-        yield self.rgba
-
-    def __getitem__(self, index: int):
-        return (self.name, self.rgba)[index]
-
 
 def _make_watermark_template(name: str, rgba: np.ndarray) -> WatermarkTemplate:
     return WatermarkTemplate(name, rgba, tuple(build_candidate_orb_variants(rgba)))
@@ -44,7 +37,7 @@ def load_watermark_templates(
         path: Path to a single RGBA PNG or a directory containing them.
 
     Returns:
-        List of (filename, rgba_array) tuples, sorted by filename.
+        Watermark templates sorted by filename.
         Returns an empty list if the path doesn't exist, is empty,
         or contains no valid RGBA PNGs.
     """
@@ -264,7 +257,7 @@ def find_known_mask_in_image(
 
 def try_watermark_cascade(
     image: np.ndarray,
-    templates: List[Tuple[str, np.ndarray]],
+    templates: List[WatermarkTemplate],
     min_matches: int = 6,
     dilation_pixels: int = 15,
 ) -> Optional[Tuple[np.ndarray, Tuple[int, int, int, int], str]]:
@@ -278,7 +271,7 @@ def try_watermark_cascade(
 
     Args:
         image: Target image (H×W×3 BGR), already loaded.
-        templates: List of (filename, rgba_array) from load_watermark_templates().
+        templates: Watermark templates from load_watermark_templates().
         min_matches: Minimum ORB matches for a valid detection.
         dilation_pixels: Pixels to dilate the matched mask.
 
@@ -289,27 +282,14 @@ def try_watermark_cascade(
     best_inliers = -1
 
     for template in templates:
-        if isinstance(template, WatermarkTemplate):
-            tmpl_name = template.name
-            tmpl_rgba = template.rgba
-            prepared_variants = template.orb_variants
-        else:
-            tmpl_name, tmpl_rgba = template
-            prepared_variants = None
+        tmpl_name = template.name
         logger.info(f"Trying template: {tmpl_name}")
-        if prepared_variants is None:
-            result = find_known_mask_in_image(
-                image, tmpl_rgba,
-                min_matches=min_matches,
-                dilation_pixels=dilation_pixels,
-            )
-        else:
-            result = find_known_mask_in_image(
-                image, tmpl_rgba,
-                min_matches=min_matches,
-                dilation_pixels=dilation_pixels,
-                prepared_variants=prepared_variants,
-            )
+        result = find_known_mask_in_image(
+            image, template.rgba,
+            min_matches=min_matches,
+            dilation_pixels=dilation_pixels,
+            prepared_variants=template.orb_variants,
+        )
         if result is not None:
             mask, bbox, inliers = result
             logger.info(f"Template {tmpl_name} matched with {inliers} inliers")

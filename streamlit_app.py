@@ -27,7 +27,6 @@ from streamlit_js_eval import streamlit_js_eval
 from untextre.utils import (
     load_image,
     calculate_bbox_superset,
-    MODEL_CONFIDENCE_FLOOR,
     WEB_DEFAULT_CONFIDENCE,
 )
 from untextre.preprocessor import preprocess_image
@@ -271,9 +270,7 @@ def initialize_models():
         
         # Initialize consensus detection models
         with st.spinner("📥 Loading detection models (EAST, DocTR, EasyOCR)..."):
-            # confidence_threshold is deprecated here (ignored by the initializer);
-            # pass MODEL_CONFIDENCE_FLOOR so the call site matches reality.
-            initialize_consensus_models(confidence_threshold=MODEL_CONFIDENCE_FLOOR, device="cuda")
+            initialize_consensus_models(device="cuda")
         
         progress_placeholder.success("✅ Detection models loaded successfully")
         

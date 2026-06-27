@@ -224,7 +224,7 @@ def _generate_masks_and_inpaint(
     inpainted = inpaint_image(image, combined_mask, bbox=inpaint_region, method=method)
     return combined_mask, inpainted
 
-def initialize_consensus_models(device: str = "cuda", **_deprecated_kwargs) -> None:
+def initialize_consensus_models(device: str = "cuda") -> None:
     """Initialize all models (detection and inpainting) to avoid per-image startup costs.
     """
     from .consensus import initialize_consensus_models as init_consensus_models_base
