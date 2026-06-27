@@ -184,6 +184,11 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+# Codex/agent scratch state
+.codex-tmp/
+.codex-run/
+scratch/
+
 # PyPI configuration file
 .pypirc
 
@@ -202,6 +207,7 @@ images/test3*
 # Debug and coverage output
 debug_output/
 coverage_report/
+cleaned-*/
 
 # Experiment outputs
 experimental_output.csv
