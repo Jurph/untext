@@ -1,10 +1,6 @@
 """Tests for untextre.inpaint orchestration layer.
 
-Replaces the disabled test_inpainting.py (which targeted the removed
-``untext.image_patcher.ImagePatcher`` class) and test_subregion_cropping.py
-(which targeted the removed ``ImagePatcher.calculate_subregion`` method).
-
-These tests exercise the *current* public API:
+These tests exercise the current public API:
     - ``inpaint_image()``   – main entry point (method dispatch, validation)
     - ``_inpaint_with_telea()`` – TELEA path
     - ``_has_pixels_to_inpaint()`` – helper
