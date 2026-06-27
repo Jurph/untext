@@ -83,6 +83,24 @@ WATERMARKS_DIR = Path(__file__).resolve().parent / "watermarks"
 # ---------------------------------------------------------------------------
 
 
+def make_image_state_id(image_name, image_bytes):
+    """Return a stable per-image id for widget/session-state keys."""
+    if image_bytes is None:
+        return None
+    image_name = image_name or "image"
+    digest = hashlib.md5(image_bytes).hexdigest()[:12]
+    return f"{Path(image_name).stem}_{digest}"
+
+
+def resolve_active_image(ingested_bytes, ingested_name, uploaded_file):
+    """Resolve the active image source, with ingested results taking priority."""
+    if ingested_bytes is not None:
+        return ingested_bytes, ingested_name
+    if uploaded_file is not None:
+        return uploaded_file.getvalue(), uploaded_file.name
+    return None, None
+
+
 def bbox_to_fabric_rect(bbox, scale_x, scale_y):
     """Convert an image-coordinate bbox to a Fabric.js ``initial_drawing`` dict.
 
@@ -651,6 +669,19 @@ def main():
     Upload an image with text watermarks and watch them disappear! This tool uses advanced AI models 
     to detect and remove text overlays while preserving the underlying image.
     """)
+
+    # Widget state is available before widgets are declared during a rerun. Resolve
+    # the active image here so sidebar controls never lag one rerun behind uploads.
+    pending_uploaded_file = st.session_state.get("source_image_uploader")
+    current_image_bytes, current_image_name = resolve_active_image(
+        st.session_state.get("ingested_image_bytes"),
+        st.session_state.get("ingested_image_name"),
+        pending_uploaded_file,
+    )
+    current_image_id = make_image_state_id(current_image_name, current_image_bytes)
+    st.session_state.current_image_bytes = current_image_bytes
+    st.session_state.current_image_name = current_image_name
+    st.session_state.current_image_id = current_image_id
     
     # ── Sidebar: processing options ─────────────────────────────────────
     with st.sidebar:
@@ -769,7 +800,7 @@ def main():
         if detection_mode == MODE_DRAW_MANUALLY:
             # Check if image is loaded to show dimensions and enable controls
             current_bytes = st.session_state.get('current_image_bytes')
-            current_name = st.session_state.get('current_image_name')
+            current_id = st.session_state.get('current_image_id')
             image_loaded = current_bytes is not None
             
             if image_loaded:
@@ -779,13 +810,19 @@ def main():
                 st.caption(f"📐 Image is {img_width}w × {img_height}h")
                 
                 # Get current pipeline bbox or use defaults
-                global_bbox_key = f"pipeline_bbox_{current_name}"
+                global_bbox_key = f"pipeline_bbox_{current_id}"
                 current_bbox = st.session_state.get(global_bbox_key)
                 
                 if current_bbox:
                     default_x, default_y, default_w, default_h = current_bbox
+                    default_x = max(0, min(default_x, img_width - 1))
+                    default_y = max(0, min(default_y, img_height - 1))
+                    default_w = max(1, min(default_w, img_width - default_x))
+                    default_h = max(1, min(default_h, img_height - default_y))
                 else:
                     default_x, default_y, default_w, default_h = 0, 0, 100, 100
+                    default_w = min(default_w, img_width)
+                    default_h = min(default_h, img_height)
                 
                 # Manual coordinate inputs - update pipeline bbox immediately on change
                 col_x, col_y = st.columns(2)
@@ -795,7 +832,7 @@ def main():
                         min_value=0, 
                         max_value=img_width-1, 
                         value=default_x,
-                        key="manual_x"
+                        key=f"manual_x_{current_id}"
                     )
                 with col_y:
                     manual_y = st.number_input(
@@ -803,7 +840,7 @@ def main():
                         min_value=0, 
                         max_value=img_height-1, 
                         value=default_y,
-                        key="manual_y"
+                        key=f"manual_y_{current_id}"
                     )
                 
                 col_w, col_h = st.columns(2)
@@ -813,7 +850,7 @@ def main():
                         min_value=1, 
                         max_value=img_width, 
                         value=default_w,
-                        key="manual_w"
+                        key=f"manual_w_{current_id}"
                     )
                 with col_h:
                     manual_h = st.number_input(
@@ -821,11 +858,15 @@ def main():
                         min_value=1, 
                         max_value=img_height, 
                         value=default_h,
-                        key="manual_h"
+                        key=f"manual_h_{current_id}"
                     )
                 
                 # Update pipeline bbox immediately when inputs change (no button needed)
-                new_coords = (int(manual_x), int(manual_y), int(manual_w), int(manual_h))
+                new_x = int(manual_x)
+                new_y = int(manual_y)
+                new_w = min(int(manual_w), img_width - new_x)
+                new_h = min(int(manual_h), img_height - new_y)
+                new_coords = (new_x, new_y, new_w, new_h)
                 if new_coords != current_bbox:
                     st.session_state[global_bbox_key] = new_coords
                 
@@ -856,7 +897,7 @@ def main():
                      "Much faster when a template matches.",
             )
             if use_watermark_templates:
-                template_names = [name for name, _ in available_templates]
+                template_names = [template.name for template in available_templates]
                 selected_names = st.multiselect(
                     "Templates to try",
                     options=template_names,
@@ -864,8 +905,8 @@ def main():
                     help="Select which templates to try (first match wins)",
                 )
                 selected_templates = [
-                    (name, rgba) for name, rgba in available_templates
-                    if name in selected_names
+                    template for template in available_templates
+                    if template.name in selected_names
                 ]
                 if selected_templates:
                     st.caption(f"{len(selected_templates)} template(s) selected")
@@ -908,14 +949,23 @@ def main():
         )
         if uploaded_template is not None:
             import cv2 as _cv2
-            file_bytes = np.frombuffer(uploaded_template.read(), dtype=np.uint8)
+            uploaded_template_bytes = uploaded_template.getvalue()
+            upload_fingerprint = (
+                f"{uploaded_template.name}:"
+                f"{hashlib.md5(uploaded_template_bytes).hexdigest()}"
+            )
+            file_bytes = np.frombuffer(uploaded_template_bytes, dtype=np.uint8)
             rgba = _cv2.imdecode(file_bytes, _cv2.IMREAD_UNCHANGED)
             if rgba is not None and rgba.ndim == 3 and rgba.shape[2] == 4:
                 save_path = WATERMARKS_DIR / uploaded_template.name
-                WATERMARKS_DIR.mkdir(parents=True, exist_ok=True)
-                _cv2.imwrite(str(save_path), rgba)
-                st.success(f"Saved: {uploaded_template.name}")
-                st.rerun()
+                if st.session_state.get("last_saved_template_upload") != upload_fingerprint:
+                    WATERMARKS_DIR.mkdir(parents=True, exist_ok=True)
+                    _cv2.imwrite(str(save_path), rgba)
+                    st.session_state.last_saved_template_upload = upload_fingerprint
+                    st.success(f"Saved: {uploaded_template.name}")
+                    st.rerun()
+                else:
+                    st.caption(f"Template already saved: {uploaded_template.name}")
             else:
                 st.error("File must be an RGBA PNG (4 channels)")
 
@@ -984,7 +1034,9 @@ def main():
     # ── Main content area ──────────────────────────────────────────────
     final_target_color = target_color if enable_color_enhancement and target_color else None
     auto_detections = []
+    sorted_detections = []
     selected_detection_indices = set()
+    superset_bbox = None
     use_superset = False
 
     col1, col2 = st.columns(2)
@@ -1000,7 +1052,8 @@ def main():
             uploaded_file = st.file_uploader(
                 "Choose an image file",
                 type=['png', 'jpg', 'jpeg', 'bmp', 'tiff', 'webp'],
-                help="Drag and drop an image or click to browse"
+                help="Drag and drop an image or click to browse",
+                key="source_image_uploader",
             )
         
         with ingest_col:
@@ -1044,10 +1097,21 @@ def main():
                 st.rerun()
         
         # Determine which image source to use: ingested image takes priority over uploaded file
+        image_bytes, image_name = resolve_active_image(
+            st.session_state.get("ingested_image_bytes"),
+            st.session_state.get("ingested_image_name"),
+            uploaded_file,
+        )
+        image_state_id = make_image_state_id(image_name, image_bytes)
+
+        if st.session_state.get("active_image_id") != image_state_id:
+            st.session_state["sorted_detections"] = []
+            st.session_state.result_image = None
+            st.session_state.mask_image = None
+            st.session_state.timing_data = None
+            st.session_state.active_image_id = image_state_id
+
         if 'ingested_image_bytes' in st.session_state and st.session_state.ingested_image_bytes is not None:
-            # Use ingested image
-            image_bytes = st.session_state.ingested_image_bytes
-            image_name = st.session_state.ingested_image_name
             st.info(f"🔄 Using ingested result: {image_name}")
             
             # Add button to clear ingested and go back to file uploader
@@ -1055,17 +1119,12 @@ def main():
                 st.session_state.ingested_image_bytes = None
                 st.session_state.ingested_image_name = None
                 st.rerun()
-        elif uploaded_file is not None:
-            image_bytes = uploaded_file.getvalue()
-            image_name = uploaded_file.name
-        else:
-            image_bytes = None
-            image_name = None
         
         # Store in session state for other parts of the app
         st.session_state.uploaded_file = uploaded_file
         st.session_state.current_image_bytes = image_bytes
         st.session_state.current_image_name = image_name
+        st.session_state.current_image_id = image_state_id
         
         if image_bytes is not None:
             # Load original image from bytes
@@ -1161,7 +1220,7 @@ def main():
                     st.subheader("📦 Select Regions to Remove")
                     
                     # Initialize session state for selected boxes - auto-select first (best) region
-                    selection_key = f"selected_detections_{image_name}"
+                    selection_key = f"selected_detections_{image_state_id}"
                     if selection_key not in st.session_state:
                         # Auto-select the first (highest-scoring) detection
                         st.session_state[selection_key] = {0} if sorted_detections else set()
@@ -1181,7 +1240,7 @@ def main():
                         is_selected = st.checkbox(
                             label,
                             value=(i in st.session_state[selection_key]),
-                            key=f"detection_checkbox_{i}_{image_name}"
+                            key=f"detection_checkbox_{i}_{image_state_id}"
                         )
                         
                         # Update session state
@@ -1207,7 +1266,7 @@ def main():
                             use_superset = st.checkbox(
                                 superset_label,
                                 value=False,
-                                key=f"superset_checkbox_{image_name}",
+                                key=f"superset_checkbox_{image_state_id}",
                                 help="Use a single bounding box that contains all selected regions"
                             )
                     else:
@@ -1230,13 +1289,14 @@ def main():
                     st.image(annotated_image, caption=caption, width='stretch')
                     
                 else:
+                    st.session_state['sorted_detections'] = []
                     st.warning("⚠️ No consensus regions detected")
                     st.info("💡 Try lowering confidence threshold or switch to manual mode")
                     st.image(original_image, caption="Original Image", width='stretch')
             
             elif not watermark_handled:
                 # Manual mode - show interactive canvas overlay on image
-                global_bbox_key = f"pipeline_bbox_{image_name}"
+                global_bbox_key = f"pipeline_bbox_{image_state_id}"
                 
                 # Initialize session state
                 if global_bbox_key not in st.session_state:
@@ -1278,7 +1338,7 @@ def main():
                     height=display_height,  # Canvas pixel height (coordinate system uses this)
                     drawing_mode="rect" if initial_drawing is None else "transform",  # Allow drawing if no existing rectangle
                     point_display_radius=0,
-                    key=f"manual_rect_canvas_{image_name}_{hash(image_bytes[:1000]) if image_bytes else 0}_{st.session_state.get('canvas_refresh_counter', 0)}",
+                    key=f"manual_rect_canvas_{image_state_id}_{st.session_state.get('canvas_refresh_counter', 0)}",
                     initial_drawing=initial_drawing  # This handles everything - dragging, resizing, out-of-frame
                 )
                 
@@ -1327,7 +1387,7 @@ def main():
             
             elif not watermark_handled and detection_mode == MODE_DRAW_MANUALLY:
                 # Manual mode - get bbox from pipeline state
-                global_bbox_key = f"pipeline_bbox_{image_name}"
+                global_bbox_key = f"pipeline_bbox_{image_state_id}"
                 if global_bbox_key in st.session_state and st.session_state[global_bbox_key] is not None:
                     force_bbox_coords = st.session_state[global_bbox_key]
                     x, y, w, h = force_bbox_coords

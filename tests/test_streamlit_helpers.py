@@ -15,7 +15,18 @@ from streamlit_app import (
     bbox_to_fabric_rect,
     fabric_rect_to_bbox,
     encode_result_for_download,
+    make_image_state_id,
+    resolve_active_image,
 )
+
+
+class FakeUploadedFile:
+    def __init__(self, name, data):
+        self.name = name
+        self._data = data
+
+    def getvalue(self):
+        return self._data
 
 
 def test_streamlit_cli_compatibility_imports_are_available():
@@ -52,6 +63,41 @@ def test_initialize_consensus_models_accepts_streamlit_legacy_kwargs(monkeypatch
     initialize_consensus_models(confidence_threshold=0.25, device="cpu")
 
     assert calls == ["cpu"]
+
+
+def test_make_image_state_id_includes_content_hash():
+    same_name_a = make_image_state_id("photo.png", b"first")
+    same_name_b = make_image_state_id("photo.png", b"second")
+
+    assert same_name_a.startswith("photo_")
+    assert same_name_b.startswith("photo_")
+    assert same_name_a != same_name_b
+
+
+def test_make_image_state_id_handles_missing_name():
+    assert make_image_state_id(None, b"bytes").startswith("image_")
+
+
+def test_make_image_state_id_none_without_bytes():
+    assert make_image_state_id("photo.png", None) is None
+
+
+def test_resolve_active_image_prefers_ingested_result():
+    uploaded = FakeUploadedFile("upload.png", b"uploaded")
+
+    image_bytes, image_name = resolve_active_image(b"ingested", "pass_1.png", uploaded)
+
+    assert image_bytes == b"ingested"
+    assert image_name == "pass_1.png"
+
+
+def test_resolve_active_image_falls_back_to_upload():
+    uploaded = FakeUploadedFile("upload.png", b"uploaded")
+
+    image_bytes, image_name = resolve_active_image(None, None, uploaded)
+
+    assert image_bytes == b"uploaded"
+    assert image_name == "upload.png"
 
 
 # =========================================================================
