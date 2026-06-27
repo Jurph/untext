@@ -228,3 +228,4 @@ tests/images/fixtures/*
 
 # Claude Code project instructions (local only)
 CLAUDE.md
+tests/images/archived/
