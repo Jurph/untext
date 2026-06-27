@@ -1,10 +1,8 @@
-"""Text detection module using DocTR.
+"""Text detector loaders and adapters for DocTR, EasyOCR, and EAST.
 
-This module provides functionality to detect text regions in images using the DocTR library.
-It includes preprocessing integration and returns bounding boxes for detected text regions.
-
-WARNING: DO NOT ASSUME DocTR's OUTPUT FORMAT! 
-The format is documented in their codebase at docs/doctr/doctr/io/elements.py.
+This module owns shared model instances, normalizes detector outputs into the
+project's detection shape, and exposes single-detector entry points used by the
+consensus layer.
 """
 
 
@@ -556,7 +554,7 @@ def _geometry_to_bbox(geometry: np.ndarray) -> BBox:
     return (int(x_min), int(y_min), int(x_max - x_min), int(y_max - y_min))
 
 class TextDetector:
-    """Text detector using DocTR with optimized preprocessing."""
+    """DocTR DBNet detector wrapper with output parsing and filtering."""
     
     def __init__(
         self, 
@@ -618,8 +616,8 @@ class TextDetector:
             raise ValueError("Image must be HxWx3 BGR")
         
         try:
-            # Use the image as provided (preprocessing now handled uniformly by caller)
-            logger.debug("Running DocTR detection on preprocessed image")
+            # Use the image as provided; callers own any project-level preprocessing.
+            logger.debug("Running DocTR detection")
             
             # Run detection (torch.no_grad context prevents gradient accumulation)
             raw = self.predictor([image])

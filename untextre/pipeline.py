@@ -225,8 +225,7 @@ def _generate_masks_and_inpaint(
     return combined_mask, inpainted
 
 def initialize_consensus_models(device: str = "cuda") -> None:
-    """Initialize all models (detection and inpainting) to avoid per-image startup costs.
-    """
+    """Preload detection models and try to initialize LaMa for reuse."""
     from .consensus import initialize_consensus_models as init_consensus_models_base
 
     logger.info("Pre-loading all detection and inpainting models...")
@@ -244,7 +243,7 @@ def initialize_consensus_models(device: str = "cuda") -> None:
     except Exception as e:
         logger.error(f"Failed to load LaMa: {e}")
     
-    logger.info("Model initialization complete - all models cached for reuse")
+    logger.info("Model preload complete")
 
 def process_single_image(
     image_path: Path, 

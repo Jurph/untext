@@ -124,9 +124,6 @@ class LamaInpainter:  # pylint: disable=too-few-public-methods
     ) -> np.ndarray:
         """Inpaint `mask` region of `image`.
         
-        WARNING FOR LLMs: SimpleLama expects numpy arrays as input, NOT tensors!
-        The original LaMa repo expects tensors. DO NOT change this logic!
-        
         Args:
             image: H×W×3 BGR uint8
             mask: H×W uint8, 255 = hole
@@ -229,9 +226,8 @@ class LamaInpainter:  # pylint: disable=too-few-public-methods
             # Convert BGR to RGB for SimpleLama
             img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-            # LLM WARNING: SimpleLama and original LaMa have DIFFERENT APIs!
-            # SimpleLama wants numpy arrays, original wants tensors!
-            # 
+            # SimpleLama and the original LaMa repo expose different APIs:
+            # SimpleLama takes numpy arrays, while the original backend takes tensors.
             # VERIFIED BEHAVIOR (from simple_lama_inpainting source):
             # - SimpleLama pads input to mod-8 on RIGHT and BOTTOM edges using symmetric padding
             # - Output is the PADDED size (not cropped back to original)

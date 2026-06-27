@@ -260,7 +260,7 @@ st.set_page_config(
 
 @st.cache_resource
 def initialize_models():
-    """Initialize all models once at startup with progress feedback."""
+    """Preload detection models and try to initialize LaMa with progress feedback."""
     
     # Create placeholder for progress messages
     progress_placeholder = st.empty()
