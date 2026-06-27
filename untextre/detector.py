@@ -118,7 +118,11 @@ def cleanup_vram() -> None:
         torch.cuda.synchronize()
 
 
-def detect_text_regions(image: ImageArray, method: str = "doctr", confidence_threshold: float = 0.3) -> List[BBox]:
+def detect_text_regions(
+    image: ImageArray,
+    method: str = "doctr",
+    confidence_threshold: float = CLI_DEFAULT_CONFIDENCE,
+) -> List[BBox]:
     """Detect text regions in an image and return bounding boxes.
     
     This is the main entry point for text detection. It applies preprocessing,

@@ -101,7 +101,6 @@ class TestSaveCleanTimingReport:
             _make_timing(name="gray.png", failover="gray_enhancement"),
             _make_timing(name="white.png", failover="white_enhancement"),
             _make_timing(name="target.png", failover="target_color"),
-            _make_timing(name="base.png", failover="watermark"),
         ]
         out_file = tmp_path / "report.txt"
         _save_clean_timing_report(
@@ -116,7 +115,6 @@ class TestSaveCleanTimingReport:
         assert "Gray enhancement: 1" in text
         assert "White enhancement: 1" in text
         assert "Target color enhancement: 1" in text
-        assert "Baseline watermark regions: 1" in text
 
     def test_none_timing_values_handled(self, tmp_path):
         """Images that failed mid-pipeline may have None for some timing fields."""
@@ -145,7 +143,7 @@ class TestSaveCleanTimingReport:
             forced_bbox=(10, 20, 100, 50),
         )
         text = out_file.read_text()
-        assert "(128, 128, 128)" in text
+        assert "Target color: (128, 128, 128)" in text
         assert "(10, 20, 100, 50)" in text
 
     def test_retry_count_shown(self, tmp_path):

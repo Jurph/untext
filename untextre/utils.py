@@ -519,19 +519,6 @@ def pad_bbox_to_multiple(bbox: BBox, multiple: int = 4, image_shape: Optional[Tu
     return (new_x, new_y, final_w, final_h)
 
 
-def dilate_by_pixels(image: ImageArray, bbox: BBox, pixels: int) -> BBox:
-    """Dilate a bounding box by a specific number of pixels.
-    
-    Args:
-        image: Input image to get dimensions from
-        bbox: Bounding box as (x, y, width, height)
-        pixels: Number of pixels to dilate by
-        
-    Returns:
-        Dilated bounding box clamped to image bounds
-    """
-    return dilate_bbox(bbox, pixels, image.shape[:2])
-
 def color_distance(color1: Color, color2: Color) -> float:
     """Calculate Euclidean distance between two BGR colors.
     

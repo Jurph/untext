@@ -251,12 +251,6 @@ def bucket_images_by_size(
 
 
 
-def _aspect_ratio(crop: np.ndarray) -> float:
-    """Return width/height ratio of a crop array (H×W×4)."""
-    h, w = crop.shape[:2]
-    return w / h if h > 0 else 1.0
-
-
 def _precision_outlier_threshold_from_log_precision(log_prec: np.ndarray) -> float:
     """Convert log-precision samples to a Tukey extreme-outlier variance threshold."""
     flat = log_prec.flatten().astype(np.float64)

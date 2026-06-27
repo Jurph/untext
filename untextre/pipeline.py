@@ -512,10 +512,6 @@ def process_single_image(
                 timings['color_time'] += time.time() - retry_start
                 logger.info("Retry with g=8 complete")
     
-    # 4. Record inpaint time (already done in generate_masks_and_inpaint)
-    inpaint_start = time.time()
-    timings['inpaint_time'] = time.time() - inpaint_start  # Near-zero, actual time in color_time
-    
     # Save results
     output_path = output_dir / f"{image_path.stem}_clean{image_path.suffix}"
     save_image(result, output_path, source_path=image_path)

@@ -11,7 +11,6 @@ dimensions divisible by 4/8) and for ensuring masks don't exceed image bounds.
 """
 
 import pytest
-import numpy as np
 
 from untextre.utils import (
     dilate_bbox,
@@ -19,7 +18,6 @@ from untextre.utils import (
     clamp_bbox_to_image,
     calculate_bbox_superset,
     color_distance,
-    dilate_by_pixels,
     get_image_files,
 )
 
@@ -511,31 +509,6 @@ class TestColorDistance:
 
     def test_returns_float(self):
         assert isinstance(color_distance((0, 0, 0), (1, 1, 1)), float)
-
-
-class TestDilateByPixels:
-    """Tests for dilate_by_pixels (thin wrapper around dilate_bbox)."""
-
-    def test_basic_dilation(self):
-        image = np.ones((200, 200, 3), dtype=np.uint8)
-        bbox = (50, 50, 40, 40)
-        dilated = dilate_by_pixels(image, bbox, 10)
-        # Should expand by 10 px on each side
-        assert dilated == (40, 40, 60, 60)
-
-    def test_zero_pixels_unchanged(self):
-        image = np.ones((200, 200, 3), dtype=np.uint8)
-        bbox = (50, 50, 40, 40)
-        dilated = dilate_by_pixels(image, bbox, 0)
-        assert dilated == bbox
-
-    def test_clamped_to_image_bounds(self):
-        image = np.ones((100, 100, 3), dtype=np.uint8)
-        bbox = (5, 5, 30, 30)
-        dilated = dilate_by_pixels(image, bbox, 50)
-        x, y, w, h = dilated
-        assert x >= 0 and y >= 0
-        assert x + w <= 100 and y + h <= 100
 
 
 class TestGetImageFiles:

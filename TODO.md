@@ -11,11 +11,8 @@ README or preserve old completed review notes.
 
 - [ ] **EAST download reliability**: Add timeout, file-size check, and a human-readable
   error to the EAST model download; prevent silent HTML-404 corruption of the cached
-  `.pb` file. `(detector.py:244-245)`
-
-- [ ] **"(deprecated)" in timing report**: Remove the word "(deprecated)" from
-  `"Target color (deprecated): ..."` — `--target-color` is not deprecated and the
-  label is factually wrong in user output. `(reports.py:61)`
+  `.pb` file. If automatic download fails, print a long-term reliable manual-download
+  URL and tell the user where to place the `.pb` file. `(detector.py:244-245)`
 
 ---
 
@@ -36,10 +33,6 @@ README or preserve old completed review notes.
   re-exports from `cli.py` lines 25-28; do not let them ship as implicit public API.
   `(cli.py:22-28)`
 
-- [ ] **detect_text_regions constant coupling**: Replace the hardcoded `0.3` default
-  in `detect_text_regions` with `CLI_DEFAULT_CONFIDENCE` to prevent silent divergence.
-  `(detector.py:121)`
-
 - [ ] **LaMa paste-back coordinates**: Replace the redundant `subregion[0] + edge_pad_*`
   recomputation at paste-back with the already-adjusted `x1, y1, x2, y2` local
   variables — two sources of truth in a correctness-critical path.
@@ -48,15 +41,9 @@ README or preserve old completed review notes.
 - [ ] **edge_pad_size empirical label**: Add `# EMPIRICAL` label (or architectural
   derivation) to `edge_pad_size = 32`. `(lama_inpainter.py:193-196)`
 
-- [ ] **Delete dilate_by_pixels**: Remove the dead `dilate_by_pixels` wrapper that
-  has zero callers and is not in `__all__`. `(utils.py:522-533)`
-
 - [ ] **Formula weight labels**: Add `# EMPIRICAL` labels to the floating-point
   weights in `_component_shape_weight` and `compatibility`.
   `(watermark_consensus.py:624-625, 780-787)`
-
-- [ ] **Dead _aspect_ratio**: Remove the dead `_aspect_ratio` function (zero callers).
-  `(discovery.py:254)`
 
 - [ ] **Minimum-n label**: Add `# EMPIRICAL — minimum n for Welford variance; broader
   validation pending` to the `n < 3` guard. `(discovery.py:349)`
@@ -82,10 +69,6 @@ README or preserve old completed review notes.
 - [ ] **Remove initialize_models**: Delete the dead `initialize_models` function from
   `detector.py` and remove it from `__init__.py`'s `__all__`.
   `(detector.py:86-107, __init__.py:14)`
-
-- [ ] **Delete inpaint timing dead block**: Delete the two-line `inpaint_start` /
-  `inpaint_time` block that records a near-zero interval and admits it in a comment.
-  `(pipeline.py:515-517)`
 
 - [ ] **IoU threshold empirical note**: Update the IoU comment to read "EMPIRICAL —
   validated on N=400 has-text-2 samples; broader validation pending".
@@ -133,9 +116,6 @@ README or preserve old completed review notes.
 - [ ] **8-parameter report signature**: Refactor `_save_clean_timing_report` to take
   a config dict for its optional `target_color` and `forced_bbox` parameters.
   `(reports.py:51)`
-
-- [ ] **Dead 'watermark' failover marker**: Remove the dead `failover_type == 'watermark'`
-  branch and its unreachable "Baseline watermark regions" stats line. `(reports.py:95-96)`
 
 - [ ] **Detector position filtering**: Convert the position-based filtering TODO to
   a tracked issue and remove the in-code placeholder. Either implement with tests

@@ -58,7 +58,7 @@ def _save_clean_timing_report(detailed_timings: list, total_time: float, avg_tim
         f.write("TF-IDF granularity: g=4 (auto-retry with g=8 if needed)\n")
         f.write(f"Inpainting method: {method}\n")
         if target_color:
-            f.write(f"Target color (deprecated): {target_color}\n")
+            f.write(f"Target color: {target_color}\n")
         if forced_bbox:
             f.write(f"Forced bbox: {forced_bbox}\n")
         
@@ -92,8 +92,6 @@ def _save_clean_timing_report(detailed_timings: list, total_time: float, avg_tim
                 failover_marker = "G"
             elif failover_type == 'white_enhancement':
                 failover_marker = "W"
-            elif failover_type == 'watermark':
-                failover_marker = "B"  # Baseline watermark regions
             else:
                 failover_marker = ""
 
@@ -179,4 +177,3 @@ def _save_clean_timing_report(detailed_timings: list, total_time: float, avg_tim
         f.write(f"  Target color enhancement: {failover_counts.get('target_color', 0)}\n")
         f.write(f"  Gray enhancement: {failover_counts.get('gray_enhancement', 0)}\n")
         f.write(f"  White enhancement: {failover_counts.get('white_enhancement', 0)}\n")
-        f.write(f"  Baseline watermark regions: {failover_counts.get('watermark', 0)}\n")
