@@ -27,7 +27,7 @@ from untextre.consensus import (
     run_consensus_detection,
     find_consensus_boxes,
 )
-from untextre.cli import (
+from untextre.pipeline import (
     initialize_consensus_models as init_all_models,
     _apply_color_enhancement,
     _try_color_enhanced_detection

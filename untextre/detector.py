@@ -12,6 +12,8 @@ import cv2
 import gc
 import numpy as np
 import torch
+import urllib.request
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from doctr.models import detection
 from doctr.models.detection.predictor import DetectionPredictor
@@ -31,6 +33,11 @@ Detection = Dict[str, np.ndarray]  # {'geometry': points, 'confidence': score}
 _doctr_detector: Optional['TextDetector'] = None
 _easyocr_reader: Optional[object] = None
 _east_net: Optional[cv2.dnn_Net] = None
+
+EAST_MODEL_URL = "https://github.com/oyyd/frozen_east_text_detection.pb/raw/master/frozen_east_text_detection.pb"
+EAST_MODEL_DOCS = "docs/detector-models.md"
+EAST_DOWNLOAD_TIMEOUT_SECONDS = 60
+EAST_MODEL_MIN_BYTES = 10 * 1024 * 1024
 
 
 def get_doctr_detector(
@@ -220,6 +227,59 @@ def _detect_with_easyocr(image: ImageArray, reader: object, confidence_threshold
         logger.error(f"EasyOCR detection failed: {e}")
         raise RuntimeError("EasyOCR detection failed") from e
 
+def _get_east_model_path() -> Path:
+    """Return the persistent cache path for the EAST model."""
+    model_dir = Path.home() / ".untextre" / "models"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    return model_dir / "frozen_east_text_detection.pb"
+
+
+def _east_manual_download_message(model_path: Path, reason: str) -> str:
+    return (
+        f"{reason}. Download the EAST model manually from {EAST_MODEL_URL} "
+        f"and save it as {model_path}. See {EAST_MODEL_DOCS} for detector model sources."
+    )
+
+
+def _validate_east_model_file(model_path: Path) -> None:
+    if model_path.stat().st_size < EAST_MODEL_MIN_BYTES:
+        raise RuntimeError(
+            _east_manual_download_message(
+                model_path,
+                f"EAST model file is too small: {model_path}",
+            )
+        )
+
+
+def _download_east_model(
+    model_path: Path,
+    *,
+    urlopen=urllib.request.urlopen,
+) -> None:
+    """Download the EAST model atomically and reject truncated/error responses."""
+    tmp_path = Path(f"{model_path}.tmp")
+    try:
+        with urlopen(EAST_MODEL_URL, timeout=EAST_DOWNLOAD_TIMEOUT_SECONDS) as response:
+            with tmp_path.open("wb") as handle:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+
+        _validate_east_model_file(tmp_path)
+        tmp_path.replace(model_path)
+    except Exception as exc:
+        tmp_path.unlink(missing_ok=True)
+        if isinstance(exc, RuntimeError):
+            raise RuntimeError(
+                _east_manual_download_message(model_path, "EAST model download failed")
+            ) from exc
+        raise RuntimeError(
+            _east_manual_download_message(model_path, "EAST model download failed")
+        ) from exc
+
+
 def _load_east_model() -> cv2.dnn_Net:
     """Load the EAST text detection model.
     
@@ -234,29 +294,29 @@ def _load_east_model() -> cv2.dnn_Net:
         RuntimeError: If model loading fails
     """
     try:
-        import urllib.request
-        from pathlib import Path
-        
-        # Define model path in user's home directory for persistence
-        model_dir = Path.home() / ".untextre" / "models"
-        model_dir.mkdir(parents=True, exist_ok=True)
-        model_path = model_dir / "frozen_east_text_detection.pb"
+        model_path = _get_east_model_path()
         
         # Download model if it doesn't exist
         if not model_path.exists():
             logger.info("Downloading EAST text detection model...")
-            model_url = "https://github.com/oyyd/frozen_east_text_detection.pb/raw/master/frozen_east_text_detection.pb"
-            urllib.request.urlretrieve(model_url, model_path)
+            _download_east_model(model_path)
             logger.info(f"EAST model downloaded to: {model_path}")
+
+        _validate_east_model_file(model_path)
         
         # Load the network
         net = cv2.dnn.readNet(str(model_path))
         logger.debug(f"EAST model loaded from: {model_path}")
         return net
         
+    except RuntimeError:
+        raise
     except Exception as e:
         logger.error(f"Failed to load EAST model: {e}")
-        raise RuntimeError("EAST model loading failed") from e
+        model_path = _get_east_model_path()
+        raise RuntimeError(
+            _east_manual_download_message(model_path, "EAST model loading failed")
+        ) from e
 
 def _detect_with_east(image: ImageArray, net: cv2.dnn_Net, 
                      min_confidence: float = 0.3, 

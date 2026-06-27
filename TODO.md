@@ -3,15 +3,6 @@
 This file tracks current problems in the codebase. It should not duplicate the
 README or preserve old completed review notes.
 
-## Must Fix Before v1.0
-
-- [ ] **EAST download reliability**: Add timeout, file-size check, and a human-readable
-  error to the EAST model download; prevent silent HTML-404 corruption of the cached
-  `.pb` file. If automatic download fails, print a long-term reliable manual-download
-  URL and tell the user where to place the `.pb` file. `(detector.py:244-245)`
-
----
-
 ## Should Fix
 
 - [ ] **Lowe ratio-test citation**: Add a Lowe (2004) citation comment to the `0.75`
