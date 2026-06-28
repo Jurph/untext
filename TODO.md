@@ -134,6 +134,22 @@ README or preserve old completed review notes.
   and connected-component fraction only. Evaluate whether these metrics improve mask
   quality before adding them to the scoring path.
 
+- [ ] **Direct CRAFT detector diversification**: Consider adding a direct CRAFT pass
+  alongside EasyOCR. EasyOCR already uses OCR-oriented detection internally, but a
+  standalone CRAFT detector may expose different boxes/thresholds for cursive,
+  curved, or fragmented text and reduce detector misses.
+
+- [ ] **DB++ detector diversification**: Consider adding DB++ via PaddleOCR or an
+  available DocTR variant alongside the current DocTR DBNet detector. Validate that
+  its errors are independent enough to improve consensus before accepting the
+  dependency/runtime cost.
+
+- [ ] **CLIP/ViT semantic bbox adjudication**: Consider scoring detector-proposed
+  bbox crops with a lightweight OpenCLIP ViT (`ViT-B-32`/`ViT-B-16`) against prompt
+  axes such as text/logo/URL vs natural texture/clothing/grass/backdrop. Use the
+  scores as voting/deconfliction features, not as a standalone detector, and validate
+  whether they separate true overlay text from structured-background false positives.
+
 - [ ] **Output-quality regression coverage is still indirect**: The suite has strong
   unit/workflow coverage but few image-in/image-out assertions for final visual quality.
   Add focused regression tests around known failure cases.

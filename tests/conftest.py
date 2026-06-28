@@ -10,6 +10,49 @@ import pytest
 from pathlib import Path
 
 
+_SAVE_IMAGES_DIR = Path(__file__).parent / "images" / "output"
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--save-test-images",
+        action="store_true",
+        default=False,
+        help="Write diagnostic images from tests that produce visual output.",
+    )
+    parser.addoption(
+        "--generated-text-cases",
+        type=int,
+        default=12,
+        help="Number of Monte Carlo cases for the generated text benchmark.",
+    )
+    parser.addoption(
+        "--generated-text-seed",
+        type=int,
+        default=20260627,
+        help="Random seed for the generated text benchmark.",
+    )
+    parser.addoption(
+        "--generated-text-color-sensitivities",
+        default="4,8,16",
+        help="Comma-separated color sensitivity values sampled by the generated text benchmark.",
+    )
+    parser.addoption(
+        "--generated-text-report",
+        default=None,
+        help="Optional JSONL path for generated text benchmark rows.",
+    )
+
+
+@pytest.fixture
+def save_images_dir(request: pytest.FixtureRequest) -> "Path | None":
+    """Return the fixed output path when --save-test-images is passed, else None."""
+    if not request.config.getoption("--save-test-images"):
+        return None
+    _SAVE_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    return _SAVE_IMAGES_DIR
+
+
 @pytest.fixture
 def blank_white_200():
     """200x200 white BGR image -- no structure, no text."""

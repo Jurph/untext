@@ -12,10 +12,15 @@ import pytest
 from PIL import Image
 
 from streamlit_app import (
+    MODE_DRAW_MANUALLY,
+    MODE_LOCAL_COLOR,
+    MODE_LOCAL_SHAPE,
+    MODE_REGIONAL,
     bbox_to_fabric_rect,
     fabric_rect_to_bbox,
     encode_result_for_download,
     make_image_state_id,
+    resolve_mask_mode_options,
     resolve_active_image,
 )
 
@@ -62,6 +67,32 @@ def test_resolve_active_image_falls_back_to_upload():
 
     assert image_bytes == b"uploaded"
     assert image_name == "upload.png"
+
+
+def test_resolve_mask_mode_options_match_sidebar_choices():
+    assert resolve_mask_mode_options(MODE_REGIONAL) == {
+        "expand_bboxes": False,
+        "use_grabcut": False,
+        "use_grabcut_expand": True,
+    }
+    assert resolve_mask_mode_options(MODE_LOCAL_SHAPE) == {
+        "expand_bboxes": False,
+        "use_grabcut": True,
+        "use_grabcut_expand": False,
+    }
+    assert resolve_mask_mode_options(MODE_LOCAL_COLOR) == {
+        "expand_bboxes": False,
+        "use_grabcut": False,
+        "use_grabcut_expand": False,
+    }
+
+
+def test_manual_mode_uses_local_shape_mask_without_expansion():
+    assert resolve_mask_mode_options(MODE_DRAW_MANUALLY) == {
+        "expand_bboxes": False,
+        "use_grabcut": True,
+        "use_grabcut_expand": False,
+    }
 
 
 # =========================================================================

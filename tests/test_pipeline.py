@@ -12,8 +12,34 @@ from untextre.pipeline import (
     _apply_color_enhancement,
     _generate_masks_and_inpaint,
     _translate_rotated_bbox_to_original,
+    mask_mode_options,
+    process_image_array,
     process_single_image,
 )
+
+
+def test_mask_mode_options_match_user_facing_modes():
+    assert mask_mode_options("regional") == {
+        "expand_bboxes": False,
+        "use_grabcut": False,
+        "use_grabcut_expand": True,
+    }
+    assert mask_mode_options("local-shape") == {
+        "expand_bboxes": False,
+        "use_grabcut": True,
+        "use_grabcut_expand": False,
+    }
+    assert mask_mode_options("local-color") == {
+        "expand_bboxes": False,
+        "use_grabcut": False,
+        "use_grabcut_expand": False,
+    }
+
+
+def test_mask_mode_options_reject_unknown_mode():
+    with pytest.raises(ValueError, match="Unknown mask mode"):
+        mask_mode_options("legacy")
+
 
 def test_translate_rotated_bbox_to_original_uses_hand_calculated_inverse():
     """A bbox from a 90-degree-clockwise image maps back to original coordinates."""
@@ -119,6 +145,39 @@ class TestProcessSingleImageSmoke:
 
         mask_output = output_dir / "synthetic_mask.png"
         assert mask_output.exists(), f"Expected mask at {mask_output}"
+
+
+class TestProcessImageArray:
+    def test_forced_bbox_telea_returns_result_without_file_io(self, monkeypatch):
+        image = np.ones((40, 80, 3), dtype=np.uint8) * 200
+        mask = np.zeros((40, 80), dtype=np.uint8)
+        mask[10:20, 15:35] = 255
+        cleaned = image.copy()
+        cleaned[mask > 0] = 128
+
+        monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: image.copy())
+        monkeypatch.setattr(metrics_mod, "needs_retry", lambda _region: False)
+
+        def fake_generate(img, boxes, _g, _method, _target, **_kw):
+            assert boxes == [(12, 8, 24, 16)]
+            return mask.copy(), cleaned.copy()
+
+        monkeypatch.setattr(pipeline_mod, "_generate_masks_and_inpaint", fake_generate)
+
+        result = process_image_array(
+            image,
+            image_name="memory.png",
+            method="telea",
+            forced_bbox=(12, 8, 24, 16),
+            expand_bboxes=False,
+            auto_retry=False,
+        )
+
+        assert result.timings["image_name"] == "memory.png"
+        assert result.timings["consensus_boxes_count"] == 1
+        np.testing.assert_array_equal(result.mask, mask)
+        np.testing.assert_array_equal(result.image, cleaned)
+        np.testing.assert_array_equal(image, np.ones((40, 80, 3), dtype=np.uint8) * 200)
 
 
 class TestProcessSingleImageFailovers:
@@ -246,6 +305,31 @@ class TestProcessSingleImageFailovers:
         assert timings["mask_found"] is False
         assert timings["consensus_boxes_count"] == 0
         assert color_attempts == [("#808080", 3), ("#FFFFFF", 3)]
+
+    def test_generic_color_failovers_use_configured_sensitivity(self, monkeypatch):
+        image = np.ones((50, 50, 3), dtype=np.uint8) * 255
+        monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: image.copy())
+        monkeypatch.setattr(consensus_mod, "run_consensus_detection", lambda *_args, **_kwargs: [])
+
+        color_attempts = []
+
+        def fake_try_color(_image, _threshold, target_hex, sensitivity=3):
+            color_attempts.append((target_hex, sensitivity))
+            return []
+
+        monkeypatch.setattr(pipeline_mod, "_try_color_enhanced_detection", fake_try_color)
+
+        result = process_image_array(
+            image,
+            image_name="memory.png",
+            method="telea",
+            expand_bboxes=False,
+            auto_retry=False,
+            color_sensitivity=8,
+        )
+
+        assert result.timings["skipped"] is True
+        assert color_attempts == [("#808080", 8), ("#FFFFFF", 8)]
 
 
 class TestGenerateMasksAndInpaint:

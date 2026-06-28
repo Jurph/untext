@@ -35,7 +35,11 @@ from untextre.orb_matcher import (
     try_watermark_cascade,
 )
 from untextre.pipeline import (
+    MASK_MODE_LOCAL_COLOR,
+    MASK_MODE_LOCAL_SHAPE,
+    MASK_MODE_REGIONAL,
     initialize_consensus_models,
+    mask_mode_options,
     process_single_image,
 )
 import numpy as np
@@ -48,11 +52,17 @@ from PIL import ImageDraw, ImageFont
 # UI / layout constants  (single source of truth for magic numbers)
 # ---------------------------------------------------------------------------
 
-# Detection mode radio options — used in st.radio and equality checks.
+# Mask mode radio options - used in st.radio and equality checks.
 # Changing the label here automatically updates the widget and all comparisons.
-MODE_AUTO_DETECT = "🤖 Auto-detect"
-MODE_GRABCUT_EXPAND = "🔬 Color-guided expand"
-MODE_DRAW_MANUALLY = "✏️ Draw manually"
+MODE_REGIONAL = "Expanded color mask"
+MODE_LOCAL_SHAPE = "Localized shape mask"
+MODE_LOCAL_COLOR = "Localized color mask"
+MODE_DRAW_MANUALLY = "Draw manually"
+MODE_TO_MASK_MODE = {
+    MODE_REGIONAL: MASK_MODE_REGIONAL,
+    MODE_LOCAL_SHAPE: MASK_MODE_LOCAL_SHAPE,
+    MODE_LOCAL_COLOR: MASK_MODE_LOCAL_COLOR,
+}
 
 # Color input method radio options
 COLOR_INPUT_PICKER = "Color picker"
@@ -98,6 +108,12 @@ def resolve_active_image(ingested_bytes, ingested_name, uploaded_file):
     if uploaded_file is not None:
         return uploaded_file.getvalue(), uploaded_file.name
     return None, None
+
+
+def resolve_mask_mode_options(detection_mode):
+    """Return pipeline mask options for a sidebar detection-mode label."""
+    selected_mask_mode = MODE_TO_MASK_MODE.get(detection_mode, MASK_MODE_LOCAL_SHAPE)
+    return mask_mode_options(selected_mask_mode)
 
 
 def bbox_to_fabric_rect(bbox, scale_x, scale_y):
@@ -538,6 +554,7 @@ def display_lama_status():
 def process_image_streamlit(
     image_bytes, confidence_threshold, granularity, method, keep_masks,
     target_color=None, color_sensitivity=3, forced_bbox=None,
+    expand_bboxes=False,
     use_grabcut=False,
     use_grabcut_expand=False,
 ):
@@ -586,7 +603,7 @@ def process_image_streamlit(
                     st.warning(f"Invalid hex color format: {target_color}. Ignoring color enhancement.")
                     target_color_bgr = None
             
-            # Web UI: user controls granularity directly, no auto-retry or bbox expansion
+            # Web UI: user controls granularity directly; mask mode controls expansion.
             timing_data = process_single_image(
                 image_path=input_path,
                 output_dir=output_dir,
@@ -598,7 +615,7 @@ def process_image_streamlit(
                 granularity=granularity,
                 forced_bbox=forced_bbox,
                 color_sensitivity=color_sensitivity,
-                expand_bboxes=False,
+                expand_bboxes=expand_bboxes,
                 auto_retry=False,
                 use_grabcut=use_grabcut,
                 use_grabcut_expand=use_grabcut_expand,
@@ -684,11 +701,11 @@ def main():
     with st.sidebar:
         st.header("⚙️ Processing Options")
         
-        # Detection Mode Selector
-        st.subheader("🎯 Detection Mode")
+        # Mask mode selector
+        st.subheader("Mask Mode")
         
         # Check for mode override (when user draws on canvas in auto mode)
-        _all_modes = [MODE_AUTO_DETECT, MODE_GRABCUT_EXPAND, MODE_DRAW_MANUALLY]
+        _all_modes = [MODE_REGIONAL, MODE_LOCAL_SHAPE, MODE_LOCAL_COLOR, MODE_DRAW_MANUALLY]
         if hasattr(st.session_state, 'detection_mode_override'):
             override_mode = st.session_state.detection_mode_override
             mode_index = _all_modes.index(override_mode) if override_mode in _all_modes else 0
@@ -698,18 +715,22 @@ def main():
             mode_index = 0
 
         detection_mode = st.radio(
-            "How to select region:",
+            "How to build the removal mask:",
             options=_all_modes,
             index=mode_index,
             help=(
-                "Auto-detect: Let AI find text regions\n"
-                "Color-guided expand: Auto-detect then extend the mask using the "
-                "watermark's color cluster and GrabCut (good for partial detections)\n"
-                "Draw manually: Specify exact coordinates"
+                "Expanded color mask: Finds foreground colors and removes matching "
+                "pixels near the detected mark.\n"
+                "Localized shape mask: Finds foreground colors and removes them only "
+                "inside the detection zone, refined by local foreground/background shape.\n"
+                "Localized color mask: Finds watermark-like color clusters and removes "
+                "them only inside the detection zone.\n"
+                "Draw manually: Specify exact coordinates; the mask is refined "
+                "inside that box without expanding beyond it."
             )
         )
         is_auto_mode = detection_mode != MODE_DRAW_MANUALLY
-        use_grabcut_expand = detection_mode == MODE_GRABCUT_EXPAND
+        mask_options = resolve_mask_mode_options(detection_mode)
         
         st.divider()
         
@@ -783,13 +804,6 @@ def main():
             # Show current target if valid
             if target_color:
                 st.success(f"🎨 Target: {target_color} ±{color_sensitivity}")
-
-        use_grabcut = st.checkbox(
-            "GrabCut mask refinement",
-            value=False,
-            help="Refine text masks with GrabCut for smoother, spatially coherent edges. "
-                 "Adds ~50-200ms per region. Try this if masks look ragged or grab stray pixels."
-        )
 
         st.divider()
         
@@ -1188,7 +1202,7 @@ def main():
                             f"No watermark template matched ({wm_cascade_elapsed:.2f}s)"
                         )
             
-            # ── Auto-detect or manual canvas ─────────────────────────────
+            # ── Automatic mask mode or manual canvas ─────────────────────
             if not watermark_handled and is_auto_mode:
                 # Run detections immediately
                 with st.spinner("🔍 Running consensus detection..."):
@@ -1447,8 +1461,9 @@ def main():
                             image_bytes, confidence_threshold, granularity, method, keep_masks,
                             target_color=final_target_color, color_sensitivity=color_sensitivity,
                             forced_bbox=force_bbox_coords,
-                            use_grabcut=use_grabcut,
-                            use_grabcut_expand=use_grabcut_expand,
+                            expand_bboxes=mask_options["expand_bboxes"],
+                            use_grabcut=mask_options["use_grabcut"],
+                            use_grabcut_expand=mask_options["use_grabcut_expand"],
                         )
                     
                     processing_time = time.time() - start_time

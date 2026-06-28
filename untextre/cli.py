@@ -35,6 +35,7 @@ def main() -> None:
     """Main entry point for the consensus-based text watermark removal tool."""
     args = create_parser().parse_args()
     configure_logging(verbose=args.verbose, logfile=args.logfile)
+    mask_options = pipeline.mask_mode_options(args.mask_mode)
     if args.verbose:
         logger.debug("Debug logging enabled")
     if args.logfile:
@@ -133,7 +134,7 @@ def main() -> None:
             known_mask_path = Path(args.known_mask)
             watermark_templates = orb_matcher.load_watermark_templates(known_mask_path)
             if not watermark_templates:
-                logger.error(f"No valid RGBA templates found at: {args.known_mask}")
+                logger.error(f"No valid BGRA/RGBA watermark templates found at: {args.known_mask}")
                 sys.exit(1)
         else:
             # Auto-check the watermarks/ directory next to the package root
@@ -146,9 +147,7 @@ def main() -> None:
     else:
         logger.info(f"Using consensus detection with confidence threshold: {args.confidence_threshold}")
         logger.info(f"Using spatial TF-IDF with g=4 (auto-retry with g=8 if needed: {not args.no_retry})")
-        bbox_expansion_on = not args.no_expand and not args.grabcut_expand
-        logger.info(f"Bbox expansion enabled: {bbox_expansion_on}"
-                    + (" (suppressed by --grabcut-expand)" if args.grabcut_expand else ""))
+        logger.info(f"Using mask mode: {args.mask_mode}")
     
     # Initialize models once for persistent loading.
     # If -K was given (explicit override), we ONLY try templates — no detection fallback.
@@ -225,10 +224,10 @@ def main() -> None:
                     confidence_threshold=args.confidence_threshold,
                     granularity=args.granularity,
                     forced_bbox=forced_bbox,
-                    expand_bboxes=not (args.no_expand or args.grabcut_expand),
+                    expand_bboxes=mask_options["expand_bboxes"],
                     auto_retry=not args.no_retry,
-                    use_grabcut=args.grabcut,
-                    use_grabcut_expand=args.grabcut_expand,
+                    use_grabcut=mask_options["use_grabcut"],
+                    use_grabcut_expand=mask_options["use_grabcut_expand"],
                     coverage_limit=args.coverage_limit,
                 )
             
@@ -322,12 +321,6 @@ def create_parser() -> argparse.ArgumentParser:
     )
     
     parser.add_argument(
-        "--no-expand",
-        action="store_true",
-        help="Disable automatic bbox expansion along long axis"
-    )
-    
-    parser.add_argument(
         "--no-retry",
         action="store_true",
         help="Disable automatic retry with g=8 if text remnants detected"
@@ -342,8 +335,22 @@ def create_parser() -> argparse.ArgumentParser:
     )
     
     parser.add_argument(
-        "-m", "--maskfile",
-        help="Path to mask file (PNG) to use instead of auto-generated mask"
+        "-m", "--mask-mode",
+        choices=pipeline.MASK_MODE_CHOICES,
+        default=pipeline.DEFAULT_MASK_MODE,
+        help=(
+            "Mask-generation mode (default: regional). Use local-shape or "
+            "local-color if regional expands the mask too aggressively."
+        ),
+    )
+
+    parser.add_argument(
+        "--maskfile",
+        help=(
+            "Path to a binary black/white mask PNG to use instead of an "
+            "auto-generated mask. White pixels are inpainted at the mask's "
+            "fixed image coordinates; black pixels are preserved."
+        ),
     )
     
     parser.add_argument(
@@ -392,10 +399,11 @@ def create_parser() -> argparse.ArgumentParser:
     mask_group = parser.add_mutually_exclusive_group()
     mask_group.add_argument(
         "-K", "--known-mask",
-        help="Path to RGBA image (PNG with transparency) of a known watermark/logo, "
-             "or a directory of such images. Uses ORB feature matching to find and mask "
-             "the watermark at any scale/position (first match wins). The alpha channel "
-             "defines the mask. Skips consensus detection when used."
+        help="Path to a BGRA/RGBA watermark image (PNG with transparency), "
+             "or a directory of such images. Uses ORB feature matching to localize "
+             "the watermark in each input image at any scale/position. The alpha "
+             "channel defines the watermark mask after localization. Skips consensus "
+             "detection when used."
     )
     mask_group.add_argument(
         "-U", "--unknown-watermark",
@@ -420,23 +428,6 @@ def create_parser() -> argparse.ArgumentParser:
         default=False,
         help="Allow output directory to be the same as input directory. "
              "WARNING: cleaned images will overwrite originals."
-    )
-
-    parser.add_argument(
-        "--grabcut",
-        action="store_true",
-        help="Refine FOM masks with GrabCut for spatially coherent edges. "
-             "Adds ~50-200ms per region but may produce cleaner mask boundaries."
-    )
-
-    parser.add_argument(
-        "--grabcut-expand",
-        action="store_true",
-        help="Extend masks beyond detected bboxes using color-guided GrabCut. "
-             "Within an expanded ROI, seeds GrabCut with the highest-FOM color cluster "
-             "as foreground and the lowest-FOM cluster as background. Automatically "
-             "disables long-axis bbox expansion (--no-expand) since color_guided_expand "
-             "handles the outward search itself. Useful for partially-detected watermarks."
     )
 
     parser.add_argument(

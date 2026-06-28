@@ -36,7 +36,7 @@ class TestParseArgs:
         assert args.paint == "lama"
         assert args.device == "cuda"
         assert args.granularity is None
-        assert args.no_expand is False
+        assert args.mask_mode == "regional"
         assert args.no_retry is False
         assert args.keep_masks is False
         assert args.timing is False
@@ -45,6 +45,21 @@ class TestParseArgs:
         assert args.maskfile is None
         assert args.force_bbox is None
         assert args.known_mask is None
+
+    def test_mask_mode_choices(self, monkeypatch):
+        for mode in ("regional", "local-shape", "local-color"):
+            monkeypatch.setattr(
+                sys, "argv", ["prog", "-i", "x.png", "-o", "o/", "-m", mode]
+            )
+            args = parse_args()
+            assert args.mask_mode == mode
+
+    def test_invalid_mask_mode_rejected(self, monkeypatch):
+        monkeypatch.setattr(
+            sys, "argv", ["prog", "-i", "x.png", "-o", "o/", "-m", "bad-mode"]
+        )
+        with pytest.raises(SystemExit):
+            parse_args()
 
     def test_confidence_threshold_default(self, monkeypatch):
         from untextre.utils import CLI_DEFAULT_CONFIDENCE
@@ -87,10 +102,9 @@ class TestParseArgs:
         monkeypatch.setattr(
             sys,
             "argv",
-            ["prog", "-i", "x.png", "-o", "o/", "--no-expand", "--no-retry", "-k", "-t", "-v"],
+            ["prog", "-i", "x.png", "-o", "o/", "--no-retry", "-k", "-t", "-v"],
         )
         args = parse_args()
-        assert args.no_expand is True
         assert args.no_retry is True
         assert args.keep_masks is True
         assert args.timing is True
@@ -114,6 +128,13 @@ class TestParseArgs:
         )
         args = parse_args()
         assert args.known_mask == "watermarks/logo.png"
+
+    def test_maskfile_is_long_only(self, monkeypatch):
+        monkeypatch.setattr(
+            sys, "argv", ["prog", "-i", "x.png", "-o", "o/", "--maskfile", "mask.png"]
+        )
+        args = parse_args()
+        assert args.maskfile == "mask.png"
 
 
 # =========================================================================
@@ -318,6 +339,21 @@ class TestMainIntegrationPaths:
         # Should have saved a "_clean" file (the original copied as-is)
         assert any("_clean" in str(p) for p in saved.keys())
         assert all(source_path is not None for _arr, source_path in saved.values())
+
+    def test_mask_mode_reaches_pipeline(self, monkeypatch, tmp_path):
+        """-m local-shape should select local GrabCut refinement without expansion."""
+        self._run_main(monkeypatch, tmp_path, ["-m", "local-shape"])
+        captured = {}
+
+        def capture_process(**kw):
+            captured.update(kw)
+            return {"total_time": 0.1, "skipped": False}
+
+        monkeypatch.setattr(pipeline_mod, "process_single_image", capture_process)
+        main()
+        assert captured["expand_bboxes"] is False
+        assert captured["use_grabcut"] is True
+        assert captured["use_grabcut_expand"] is False
 
     def test_timing_flag_saves_report(self, monkeypatch, tmp_path):
         """--timing produces timing_report.txt."""

@@ -209,6 +209,12 @@ debug_output/
 coverage_report/
 cleaned-*/
 
+# Local benchmark payloads; summaries in docs/benchmark-results/README.md are tracked.
+docs/benchmark-results/*.jsonl
+docs/benchmark-results/*.csv
+docs/benchmark-results/*.png
+docs/benchmark-results/*.jpg
+
 # Experiment outputs
 experimental_output.csv
 *.experiment.csv
@@ -225,6 +231,7 @@ watermarks/*
 # Directory is tracked via .gitkeep; image contents are local only.
 tests/images/fixtures/*
 !tests/images/fixtures/.gitkeep
+tests/images/output/
 
 # Claude Code project instructions (local only)
 CLAUDE.md

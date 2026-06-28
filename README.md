@@ -28,7 +28,7 @@ A tool for removing watermarks from images using consensus detection, Figure of 
 
 * **Text Detection via Three-Model Consensus**: Combines three text detection methods ([EAST](https://arxiv.org/abs/1704.03155), [DocTR](https://github.com/mindee/doctr), [EasyOCR](https://github.com/JaidedAI/EasyOCR)) to find regions where multiple detectors agree, for higher-confidence text detection
 * **Figure of Merit (FOM) Analysis**: Within regions detected as containing text, identifies text-like color clusters using a weighted combination of TF-IDF distinctiveness, border underrepresentation, and connected-component fragmentation
-* **Known Watermark Detection via [ORB](https://doi.org/10.1109/ICCV.2011.6126544) feature matching** (`-K`): If you have already isolated the watermark to an RGBA file in .PNG format, place it in the `/watermarks` directory and if it matches the watermark on an image, `untextre` will use that watermark's mask instead of the slower text-detection and color-estimation approach. Matching is done via ORB (Oriented FAST and Rotated BRIEF).
+* **Known Watermark Detection via [ORB](https://doi.org/10.1109/ICCV.2011.6126544) feature matching** (`-K`): If you have isolated the watermark as a transparent PNG, `untextre` can localize that reusable watermark template in each image and use its alpha channel as the mask instead of the slower text-detection and color-estimation path. Matching is done via ORB (Oriented FAST and Rotated BRIEF).
 * **Automatic Watermark Discovery** (`-U`): Given a directory of at least 3 same-resolution images that all carry the same watermark, automatically discovers the template by finding pixels with near-zero population variance across the full image stack. Discovered templates are saved as RGBA PNGs for future reuse with `-K`. Works best with large, consistent image sets.
 * **Inpainting**: [LaMa](https://arxiv.org/abs/2109.07161) (default) or [TELEA](https://doi.org/10.1080/10867651.2004.10487596) inpainting, applied only to masked regions
 
@@ -165,9 +165,11 @@ python -m untextre.cli -i image.jpg -o results/ --keep-masks --verbose --timing
 
 * `-g`, `--granularity K` - Override TF-IDF cluster count (e.g. 4, 8). If set, uses this K only (no retry). Defaults to 4, with an automatic second pass at 8 if remnants are detected.
 
-* `--no-expand` - Disable automatic bbox expansion along long axis
-  - By default, detected bboxes are expanded to catch text that detectors may have missed
-  - Use this flag if expansion is capturing too much background
+* `-m`, `--mask-mode MODE` - Choose how masks are generated (default: `regional`)
+  - `regional`: Expanded color mask. Finds foreground color(s) and removes matching pixels near the detected mark.
+  - `local-shape`: Localized shape mask. Uses local foreground/background shape refinement inside the detection zone.
+  - `local-color`: Localized color mask. Uses color-cluster scoring inside the detection zone only.
+  - If the default mode expands the mask too greedily, try `-m local-shape` first, then `-m local-color`.
 
 * `--no-retry` - Disable automatic retry with granularity=8
   - By default, CLI uses g=4 and auto-retries with g=8 if text remnants are detected
@@ -175,9 +177,9 @@ python -m untextre.cli -i image.jpg -o results/ --keep-masks --verbose --timing
 
 #### Input/Output Control
 
-* `-K`, `--known-mask PATH` - Path to RGBA PNG of a known watermark/logo template
-  - Uses ORB feature matching to find the template at any scale/position
-  - The alpha channel defines which pixels to mask
+* `-K`, `--known-mask PATH` - Path to a BGRA/RGBA PNG of a known watermark/logo template, or a directory of templates
+  - Uses ORB feature matching to localize the watermark in each input image at any scale/position
+  - The alpha channel defines which localized watermark pixels to mask
   - **Skips consensus detection** — about 10x faster for consistent watermarks
   - Example: `--known-mask logo_template.png`
 
@@ -192,7 +194,10 @@ python -m untextre.cli -i image.jpg -o results/ --keep-masks --verbose --timing
 
 * `-c`, `--color COLOR` - Target text color as hex (#FF0000) or HTML name (red). Text colors are normally detected automatically via FOM analysis. This flag triggers immediate color enhancement if consensus detection finds no regions. Use for subtle watermarks that standard detection misses.
 
-* `-m`, `--maskfile PATH` - Use existing mask file instead of generating one
+* `--maskfile PATH` - Use a binary black/white mask PNG instead of generating one
+  - White pixels are inpainted at the mask's fixed image coordinates
+  - Black pixels are preserved
+  - Use this when you already know the exact spatial mask for that image; use `-K` when you have a reusable watermark template that must be localized first
 
 * `-f`, `--force-bbox X,Y,W,H` - Force specific bounding box (x,y,width,height) where x,y is the top-left corner
   - Example: `--force-bbox 100,200,300,50` for 300x50 region at position (100,200)
@@ -299,7 +304,7 @@ If wrong colors are being masked:
 
 ### Watermark Detection
 
-The system runs **ORB** against the target image, testing all of the transparent PNG images found in the `watermarks/` subfolder. If a match is found, the image's alpha channel is used to construct a binary mask for the watermark. If no known watermarks are found, it runs three different text detection algorithms:
+The system runs **ORB** against the target image, testing transparent PNG watermark templates from `-K` or the `watermarks/` subfolder. If a match is found, the localized template's alpha channel is used to construct the binary mask for that image. This is distinct from `--maskfile`, which takes a fixed black/white mask already aligned to one image. If no known watermark matches, the pipeline runs three text detection algorithms:
 
 - **EAST**: Fast OpenCV-based detection
 - **DocTR**: Deep learning document text recognition  

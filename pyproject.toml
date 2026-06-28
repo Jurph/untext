@@ -93,6 +93,7 @@ norecursedirs = [
 ]
 markers = [
     "slow: marks tests that load ML models, GPU resources, or long-running real-image fixtures (deselect with '-m \"not slow\"')",
+    "very_slow: marks heavyweight benchmark-style tests that can run hundreds of generated cases",
 ]
 
 [tool.ruff]

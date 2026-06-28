@@ -1,6 +1,7 @@
 """Consensus detection, masking, and inpainting pipeline helpers."""
 
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -17,6 +18,38 @@ from .utils import (
 )
 
 logger = setup_logger(__name__)
+
+MASK_MODE_REGIONAL = "regional"
+MASK_MODE_LOCAL_SHAPE = "local-shape"
+MASK_MODE_LOCAL_COLOR = "local-color"
+MASK_MODE_CHOICES = (
+    MASK_MODE_REGIONAL,
+    MASK_MODE_LOCAL_SHAPE,
+    MASK_MODE_LOCAL_COLOR,
+)
+DEFAULT_MASK_MODE = MASK_MODE_REGIONAL
+
+
+def mask_mode_options(mask_mode: str) -> dict:
+    """Translate a user-facing mask mode to pipeline keyword arguments."""
+    if mask_mode not in MASK_MODE_CHOICES:
+        raise ValueError(f"Unknown mask mode: {mask_mode}")
+    return {
+        "expand_bboxes": False,
+        "use_grabcut": mask_mode == MASK_MODE_LOCAL_SHAPE,
+        "use_grabcut_expand": mask_mode == MASK_MODE_REGIONAL,
+    }
+
+
+@dataclass
+class PipelineResult:
+    """In-memory result from the consensus text-removal pipeline."""
+
+    image: np.ndarray
+    mask: np.ndarray
+    timings: dict
+    consensus_boxes: List[Tuple[int, int, int, int]]
+
 
 def _translate_rotated_bbox_to_original(
     rotated_bbox: Tuple[int, int, int, int],
@@ -245,13 +278,13 @@ def initialize_consensus_models(device: str = "cuda") -> None:
     
     logger.info("Model preload complete")
 
-def process_single_image(
-    image_path: Path, 
-    output_dir: Path, 
+def process_image_array(
+    image: np.ndarray,
+    *,
+    image_name: str = "<memory>",
     target_color: Optional[tuple] = None,
-    keep_masks: bool = False,
     method: str = "lama",
-    maskfile: Optional[str] = None,
+    mask: Optional[np.ndarray] = None,
     confidence_threshold: float = CLI_DEFAULT_CONFIDENCE,
     granularity: Optional[int] = None,
     forced_bbox: Optional[tuple] = None,
@@ -261,19 +294,18 @@ def process_single_image(
     use_grabcut: bool = False,
     use_grabcut_expand: bool = False,
     coverage_limit: float = 0.06,
-) -> Optional[dict]:
-    """Process a single image through the consensus-based spatial TF-IDF pipeline.
+) -> PipelineResult:
+    """Process an in-memory image through the consensus-based text-removal pipeline.
 
     For CLI (automated detection): Uses g=4 by default with auto-retry at g=8.
     For Web UI (user-controlled): User specifies granularity, no auto-retry.
 
     Args:
-        image_path: Path to input image
-        output_dir: Directory to save outputs
+        image: Input image as HxWx3 BGR uint8.
+        image_name: Name used for logs and timing reports.
         target_color: Optional target color as BGR tuple - will be used for color enhancement failover
-        keep_masks: Whether to save debug masks
         method: Inpainting method to use ("lama" or "telea")
-        maskfile: Optional path to mask file to use instead of auto-generation
+        mask: Optional in-memory mask to use instead of auto-generation
         confidence_threshold: Confidence threshold for consensus detection
             (see CLI_DEFAULT_CONFIDENCE / WEB_DEFAULT_CONFIDENCE in utils.py)
         granularity: Number of color clusters for spatial TF-IDF. If None, uses g=4 with
@@ -293,17 +325,17 @@ def process_single_image(
                        inpainting when mask exceeds this fraction of image area.
 
     Returns:
-        Dictionary with timing details, or None if processing failed
+        PipelineResult containing cleaned image, mask, timings, and consensus boxes.
     """
     from .preprocessor import preprocess_image
     from .consensus import run_consensus_detection
     from .metrics import expand_bbox_along_long_axis, needs_retry
 
-    logger.info(f"Loading image: {image_path.name}")
+    logger.info(f"Processing image array: {image_name}")
     
     # Initialize timing dictionary
     timings = {
-        'image_name': image_path.name,
+        'image_name': image_name,
         'load_time': 0,
         'detection_time': 0,
         'color_time': 0, 
@@ -320,9 +352,8 @@ def process_single_image(
     
     start_time = time.time()
     
-    # 1. Load and preprocess image
+    # 1. Preprocess image
     load_start = time.time()
-    image = load_image(image_path)
     preprocessed = preprocess_image(image)
     if preprocessed is None:
         raise ValueError("Image preprocessing failed")
@@ -405,26 +436,35 @@ def process_single_image(
             else:
                 logger.warning("No consensus regions detected after rotation failover, trying generic color enhancements...")
                 
-                # Try gray enhancement (#808080 with ±3 sensitivity gives #7D7D7D-#838383)
-                consensus_boxes = _try_color_enhanced_detection(image, confidence_threshold, "#808080", sensitivity=3)
+                # Try gray enhancement with the configured sensitivity.
+                consensus_boxes = _try_color_enhanced_detection(
+                    image,
+                    confidence_threshold,
+                    "#808080",
+                    sensitivity=color_sensitivity,
+                )
                 
                 if consensus_boxes:
                     timings['failover_type'] = 'gray_enhancement'
                 else:
-                    # Try white enhancement (#FFFFFF with ±3 sensitivity gives #FCFCFC-#FFFFFF)
-                    consensus_boxes = _try_color_enhanced_detection(image, confidence_threshold, "#FFFFFF", sensitivity=3)
+                    # Try white enhancement with the configured sensitivity.
+                    consensus_boxes = _try_color_enhanced_detection(
+                        image,
+                        confidence_threshold,
+                        "#FFFFFF",
+                        sensitivity=color_sensitivity,
+                    )
                     
                     if consensus_boxes:
                         timings['failover_type'] = 'white_enhancement'
                     else:
-                        logger.warning(
-                            f"No text detected in {image_path.name} after all failovers - skipping"
-                        )
+                        logger.warning(f"No text detected in {image_name} after all failovers - skipping")
                         timings['mask_found'] = False
                         timings['detection_time'] = time.time() - detection_start
                         timings['total_time'] = time.time() - start_time
                         timings['skipped'] = True
-                        return timings
+                        empty_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+                        return PipelineResult(image.copy(), empty_mask, timings, [])
     
     timings['detection_time'] = time.time() - detection_start
     
@@ -442,15 +482,10 @@ def process_single_image(
     timings['total_bbox_area'] = sum(bbox[2] * bbox[3] for bbox in consensus_boxes)
     
     # 3. Generate or load mask
-    if maskfile:
+    if mask is not None:
         from .inpaint import inpaint_image
 
         mask_start = time.time()
-        logger.info(f"Loading mask from file: {maskfile}")
-        mask_path = Path(maskfile)
-        if not mask_path.exists():
-            raise ValueError(f"Mask file not found: {maskfile}")
-        mask = load_image(mask_path)
         # Ensure mask is single channel
         if len(mask.shape) > 2:
             mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
@@ -510,7 +545,67 @@ def process_single_image(
                 timings['retried_with_g8'] = True
                 timings['color_time'] += time.time() - retry_start
                 logger.info("Retry with g=8 complete")
-    
+
+    timings['total_time'] = time.time() - start_time
+    return PipelineResult(result, mask, timings, consensus_boxes)
+
+
+def process_single_image(
+    image_path: Path,
+    output_dir: Path,
+    target_color: Optional[tuple] = None,
+    keep_masks: bool = False,
+    method: str = "lama",
+    maskfile: Optional[str] = None,
+    confidence_threshold: float = CLI_DEFAULT_CONFIDENCE,
+    granularity: Optional[int] = None,
+    forced_bbox: Optional[tuple] = None,
+    color_sensitivity: int = 3,
+    expand_bboxes: bool = True,
+    auto_retry: bool = True,
+    use_grabcut: bool = False,
+    use_grabcut_expand: bool = False,
+    coverage_limit: float = 0.06,
+) -> Optional[dict]:
+    """Process a single image file and save the cleaned output."""
+    logger.info(f"Loading image: {image_path.name}")
+
+    load_start = time.time()
+    image = load_image(image_path)
+    extra_load_time = time.time() - load_start
+
+    loaded_mask = None
+    if maskfile:
+        logger.info(f"Loading mask from file: {maskfile}")
+        mask_path = Path(maskfile)
+        if not mask_path.exists():
+            raise ValueError(f"Mask file not found: {maskfile}")
+        loaded_mask = load_image(mask_path)
+
+    pipeline_result = process_image_array(
+        image,
+        image_name=image_path.name,
+        target_color=target_color,
+        method=method,
+        mask=loaded_mask,
+        confidence_threshold=confidence_threshold,
+        granularity=granularity,
+        forced_bbox=forced_bbox,
+        color_sensitivity=color_sensitivity,
+        expand_bboxes=expand_bboxes,
+        auto_retry=auto_retry,
+        use_grabcut=use_grabcut,
+        use_grabcut_expand=use_grabcut_expand,
+        coverage_limit=coverage_limit,
+    )
+    result = pipeline_result.image
+    mask = pipeline_result.mask
+    timings = pipeline_result.timings
+    timings['load_time'] += extra_load_time
+
+    if timings.get('skipped'):
+        return timings
+
     # Save results
     output_path = output_dir / f"{image_path.stem}_clean{image_path.suffix}"
     save_image(result, output_path, source_path=image_path)
@@ -522,6 +617,4 @@ def process_single_image(
         save_image(mask, mask_path)
         logger.info(f"Saved mask to: {mask_path.name}")
     
-    # Calculate total time and return timings
-    timings['total_time'] = time.time() - start_time
     return timings
