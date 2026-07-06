@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from statistics import median
 from pathlib import Path
 from typing import Sequence
 
@@ -91,6 +92,75 @@ def box_metrics_against_truth(boxes: list[dict], truth_bbox: Sequence[float]) ->
         "best_center_distance": metrics[0]["center_distance"] if metrics else None,
         "best_truth_center_contained": metrics[0]["truth_center_contained"] if metrics else False,
         "top_boxes": metrics[:5],
+    }
+
+
+def summarize_detector_rows(detector: str, pairs: dict[str, dict], rows: list[dict]) -> dict:
+    """Summarize one detector's clean/twin evidence without choosing hit thresholds."""
+    clean_fires: set[str] = set()
+    twin_fires: set[str] = set()
+    twin_ious: list[float] = []
+    twin_confidences: list[float] = []
+    clean_confidences: list[float] = []
+
+    for row in rows:
+        pair_id = row.get("pair_id")
+        boxes = row.get("boxes") or []
+        fired = bool(boxes)
+        max_confidence = max((float(box.get("confidence", 0.0)) for box in boxes), default=0.0)
+        if row.get("state") == "clean":
+            if fired:
+                clean_fires.add(pair_id)
+                clean_confidences.append(max_confidence)
+            continue
+
+        if row.get("state") != "twin":
+            continue
+        if fired:
+            twin_fires.add(pair_id)
+            twin_confidences.append(max_confidence)
+        pair = pairs.get(pair_id, {})
+        truth_bbox = pair.get("truth_bbox")
+        if truth_bbox is not None:
+            twin_ious.append(box_metrics_against_truth(boxes, truth_bbox)["best_iou"])
+
+    pair_count = len(pairs)
+    return {
+        "detector": detector,
+        "pair_count": pair_count,
+        "clean_fired_count": len(clean_fires),
+        "twin_fired_count": len(twin_fires),
+        "clean_fire_rate": len(clean_fires) / pair_count if pair_count else 0.0,
+        "twin_fire_rate": len(twin_fires) / pair_count if pair_count else 0.0,
+        "median_best_iou": float(median(twin_ious)) if twin_ious else 0.0,
+        "max_clean_confidence": max(clean_confidences, default=0.0),
+        "max_twin_confidence": max(twin_confidences, default=0.0),
+        "clean_fire_pair_ids": sorted(clean_fires),
+        "twin_fire_pair_ids": sorted(twin_fires),
+    }
+
+
+def pairwise_fire_overlap(
+    left: str,
+    left_fires: set[str],
+    right: str,
+    right_fires: set[str],
+    *,
+    universe: set[str],
+) -> dict:
+    """Compare detector fire sets without implying whether the fires are correct."""
+    both = left_fires & right_fires
+    left_only = left_fires - right_fires
+    right_only = right_fires - left_fires
+    union = left_fires | right_fires
+    return {
+        "left": left,
+        "right": right,
+        "both": len(both),
+        "left_only": len(left_only),
+        "right_only": len(right_only),
+        "neither": len(universe - union),
+        "jaccard": len(both) / len(union) if union else 0.0,
     }
 
 

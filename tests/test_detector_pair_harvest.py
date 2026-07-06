@@ -13,9 +13,11 @@ from untextre.detector_pair_harvest import (
     center_distance,
     contains_point,
     image_key,
-    normalize_detection_box,
     load_jsonl,
+    normalize_detection_box,
     pair_id_for_path,
+    pairwise_fire_overlap,
+    summarize_detector_rows,
 )
 
 from scripts import run_detector_pair_harvest as harvest_script
@@ -171,3 +173,42 @@ def test_detector_error_rows_include_dimensions_after_image_load(tmp_path, monke
     assert all(row["error"] == "ValueError: detector down" for row in rows)
     assert all(row["width"] == 36 for row in rows)
     assert all(row["height"] == 24 for row in rows)
+
+
+def test_summarize_detector_rows_counts_clean_fires_and_twin_geometry():
+    pairs = {
+        "a": {"truth_bbox": [0, 0, 10, 10]},
+        "b": {"truth_bbox": [50, 50, 10, 10]},
+    }
+    rows = [
+        {"pair_id": "a", "state": "clean", "boxes": []},
+        {"pair_id": "a", "state": "twin", "boxes": [{"xywh": [0, 0, 10, 10], "confidence": 0.9}]},
+        {"pair_id": "b", "state": "clean", "boxes": [{"xywh": [1, 1, 2, 2], "confidence": 0.5}]},
+        {"pair_id": "b", "state": "twin", "boxes": [{"xywh": [0, 0, 10, 10], "confidence": 0.4}]},
+    ]
+    summary = summarize_detector_rows("fake", pairs, rows)
+    assert summary["detector"] == "fake"
+    assert summary["pair_count"] == 2
+    assert summary["clean_fired_count"] == 1
+    assert summary["twin_fired_count"] == 2
+    assert summary["clean_row_count"] == 2
+    assert summary["twin_row_count"] == 2
+    assert summary["clean_mean_boxes"] == 0.5
+    assert summary["twin_mean_boxes"] == 1.0
+    assert summary["max_best_iou"] == 1.0
+    assert summary["median_best_iou"] == 0.5
+
+
+def test_pairwise_fire_overlap_reports_sets_without_decision_claims():
+    a = {"img1", "img2"}
+    b = {"img2", "img3"}
+    result = pairwise_fire_overlap("a", a, "b", b, universe={"img1", "img2", "img3", "img4"})
+    assert result == {
+        "left": "a",
+        "right": "b",
+        "both": 1,
+        "left_only": 1,
+        "right_only": 1,
+        "neither": 1,
+        "jaccard": 1 / 3,
+    }
