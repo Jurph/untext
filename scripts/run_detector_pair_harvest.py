@@ -155,6 +155,10 @@ def image_path_for_state(harvest_root: Path, clean_dir: Path, pair: dict, state:
     return harvest_root / rel, rel
 
 
+def image_dimensions(image_bgr) -> dict[str, int]:
+    return {"width": int(image_bgr.shape[1]), "height": int(image_bgr.shape[0])}
+
+
 def evidence_row(
     pair: dict,
     state: str,
@@ -170,8 +174,7 @@ def evidence_row(
         "state": state,
         "detector": detector,
         "image_relative_path": rel,
-        "width": int(image_bgr.shape[1]),
-        "height": int(image_bgr.shape[0]),
+        **image_dimensions(image_bgr),
         "harvest_floor": floor,
         "elapsed_ms": elapsed_ms,
         "boxes": boxes,
@@ -186,17 +189,25 @@ def error_row(
     floor: float,
     elapsed_ms: float,
     exc: Exception,
+    image_bgr=None,
 ) -> dict:
-    return {
+    row = {
         "pair_id": pair["pair_id"],
         "state": state,
         "detector": detector,
         "image_relative_path": rel,
-        "harvest_floor": floor,
-        "elapsed_ms": elapsed_ms,
-        "boxes": [],
-        "error": f"{type(exc).__name__}: {exc}",
     }
+    if image_bgr is not None:
+        row.update(image_dimensions(image_bgr))
+    row.update(
+        {
+            "harvest_floor": floor,
+            "elapsed_ms": elapsed_ms,
+            "boxes": [],
+            "error": f"{type(exc).__name__}: {exc}",
+        }
+    )
+    return row
 
 
 def main() -> None:
@@ -206,9 +217,6 @@ def main() -> None:
     if args.limit is not None:
         pair_rows = pair_rows[: args.limit]
 
-    yolo_model = None
-    if "yolo11x" in args.detectors:
-        yolo_model = load_yolo_model(args.yolo_weights)
 
     for detector in args.detectors:
         out_path = args.harvest_root / "evidence" / f"{detector}.jsonl"
@@ -219,6 +227,14 @@ def main() -> None:
         if args.resume and out_path.exists():
             done = {(row["pair_id"], row["state"]) for row in load_jsonl(out_path)}
 
+        yolo_model = None
+        detector_error = None
+        if detector == "yolo11x":
+            try:
+                yolo_model = load_yolo_model(args.yolo_weights)
+            except Exception as exc:
+                detector_error = exc
+
         for index, pair in enumerate(pair_rows, start=1):
             for state in ("clean", "twin"):
                 if (pair["pair_id"], state) in done:
@@ -226,8 +242,11 @@ def main() -> None:
 
                 image_path, rel = image_path_for_state(args.harvest_root, args.clean_dir, pair, state)
                 started = time.time()
+                image = None
                 try:
                     image = load_image(image_path)
+                    if detector_error is not None:
+                        raise detector_error
                     boxes = detector_boxes(detector, image_path, image, yolo_model, args.floor)
                     row = evidence_row(
                         pair,
@@ -248,6 +267,7 @@ def main() -> None:
                         args.floor,
                         round(1000 * (time.time() - started), 1),
                         exc,
+                        image,
                     )
                 append_jsonl(out_path, row)
             print(f"{detector} [{index}/{len(pair_rows)}] {pair['pair_id']}", flush=True)

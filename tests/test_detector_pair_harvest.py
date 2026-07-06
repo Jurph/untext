@@ -1,3 +1,4 @@
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,39 @@ from untextre.detector_pair_harvest import (
     load_jsonl,
     pair_id_for_path,
 )
+
+from scripts import run_detector_pair_harvest as harvest_script
+
+
+class _StubImage:
+    shape = (24, 36, 3)
+
+
+def _write_single_pair_manifest(harvest_root: Path) -> None:
+    append_jsonl(
+        harvest_root / "pairs" / "pair_manifest.jsonl",
+        {
+            "pair_id": "sample__jpg",
+            "clean_relative_path": "sample.jpg",
+            "twin_relative_path": "pairs/sample__jpg.jpg",
+        },
+    )
+
+
+def _stub_harvest_args(monkeypatch, tmp_path: Path, harvest_root: Path, detectors: list[str]) -> None:
+    monkeypatch.setattr(
+        harvest_script,
+        "parse_args",
+        lambda: Namespace(
+            harvest_root=harvest_root,
+            clean_dir=tmp_path / "clean",
+            detectors=detectors,
+            floor=0.5,
+            yolo_weights=tmp_path / "missing-yolo.pt",
+            limit=None,
+            resume=False,
+        ),
+    )
 
 
 def test_image_key_preserves_extension_to_avoid_stem_collision():
@@ -91,3 +125,49 @@ def test_normalize_detection_box_rounds_geometry_but_keeps_raw_payload():
     assert box["confidence"] == 0.9877
     assert box["label"] == "watermark"
     assert box["raw_payload"] == {"source": "unit"}
+
+
+def test_yolo_load_failure_is_isolated_to_yolo_evidence_rows(tmp_path, monkeypatch):
+    harvest_root = tmp_path / "harvest"
+    _write_single_pair_manifest(harvest_root)
+    _stub_harvest_args(monkeypatch, tmp_path, harvest_root, ["yolo11x", "fake"])
+    monkeypatch.setattr(harvest_script, "load_image", lambda _path: _StubImage())
+
+    def fail_load_yolo_model(_weights_path: Path):
+        raise RuntimeError("missing yolo")
+
+    monkeypatch.setattr(harvest_script, "load_yolo_model", fail_load_yolo_model)
+
+    harvest_script.main()
+
+    fake_rows = load_jsonl(harvest_root / "evidence" / "fake.jsonl")
+    assert [row["state"] for row in fake_rows] == ["clean", "twin"]
+    assert all(row["detector"] == "fake" for row in fake_rows)
+    assert all("error" not in row for row in fake_rows)
+
+    yolo_rows = load_jsonl(harvest_root / "evidence" / "yolo11x.jsonl")
+    assert [row["state"] for row in yolo_rows] == ["clean", "twin"]
+    assert all(row["boxes"] == [] for row in yolo_rows)
+    assert all(row["error"] == "RuntimeError: missing yolo" for row in yolo_rows)
+    assert all(row["width"] == 36 for row in yolo_rows)
+    assert all(row["height"] == 24 for row in yolo_rows)
+
+
+def test_detector_error_rows_include_dimensions_after_image_load(tmp_path, monkeypatch):
+    harvest_root = tmp_path / "harvest"
+    _write_single_pair_manifest(harvest_root)
+    _stub_harvest_args(monkeypatch, tmp_path, harvest_root, ["fake"])
+    monkeypatch.setattr(harvest_script, "load_image", lambda _path: _StubImage())
+
+    def fail_detector_boxes(*_args, **_kwargs):
+        raise ValueError("detector down")
+
+    monkeypatch.setattr(harvest_script, "detector_boxes", fail_detector_boxes)
+
+    harvest_script.main()
+
+    rows = load_jsonl(harvest_root / "evidence" / "fake.jsonl")
+    assert [row["state"] for row in rows] == ["clean", "twin"]
+    assert all(row["error"] == "ValueError: detector down" for row in rows)
+    assert all(row["width"] == 36 for row in rows)
+    assert all(row["height"] == 24 for row in rows)
