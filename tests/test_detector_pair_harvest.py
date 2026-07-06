@@ -12,6 +12,7 @@ from untextre.detector_pair_harvest import (
     center_distance,
     contains_point,
     image_key,
+    normalize_detection_box,
     load_jsonl,
     pair_id_for_path,
 )
@@ -81,3 +82,12 @@ def test_build_pair_row_carries_visibility_and_truth_metadata():
     assert row["truth_bbox"] == [1, 2, 30, 4]
     assert row["measured_visibility_delta_e"] == 12.5
     assert row["synthetic_metadata"]["color_class"] == "white"
+
+
+
+def test_normalize_detection_box_rounds_geometry_but_keeps_raw_payload():
+    box = normalize_detection_box([1.234, 2.5, 30.0, 4.0], 0.98765, "watermark", {"source": "unit"})
+    assert box["xywh"] == [1.2, 2.5, 30.0, 4.0]
+    assert box["confidence"] == 0.9877
+    assert box["label"] == "watermark"
+    assert box["raw_payload"] == {"source": "unit"}

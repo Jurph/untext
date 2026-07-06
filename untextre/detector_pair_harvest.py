@@ -15,6 +15,20 @@ def image_key(path: Path | str) -> str:
     return f"{stem}__{suffix}"
 
 
+def normalize_detection_box(
+    xywh: Sequence[float],
+    confidence: float,
+    label: str,
+    raw_payload: dict | None = None,
+) -> dict:
+    return {
+        "xywh": [round(float(value), 1) for value in xywh],
+        "confidence": round(float(confidence), 4),
+        "label": str(label),
+        "raw_payload": dict(raw_payload or {}),
+    }
+
+
 def bbox_area(box: Sequence[float]) -> float:
     _x, _y, width, height = [float(value) for value in box]
     return max(0.0, width) * max(0.0, height)
