@@ -8,10 +8,12 @@ from untextre.detector_pair_harvest import (
     bbox_center,
     bbox_iou,
     box_metrics_against_truth,
+    build_pair_row,
     center_distance,
     contains_point,
     image_key,
     load_jsonl,
+    pair_id_for_path,
 )
 
 
@@ -54,3 +56,28 @@ def test_jsonl_helpers_round_trip(tmp_path):
     append_jsonl(path, {"b": 2, "a": 1})
     append_jsonl(path, {"c": [3]})
     assert load_jsonl(path) == [{"a": 1, "b": 2}, {"c": [3]}]
+
+
+def test_pair_id_for_path_preserves_extension():
+    assert pair_id_for_path(Path("foo bar.jpeg")) == "foo_bar__jpeg"
+
+
+def test_build_pair_row_carries_visibility_and_truth_metadata():
+    row = build_pair_row(
+        "img__jpg",
+        "img.jpg",
+        "pairs/synthetic_twins/img__jpg.jpg",
+        {
+            "measured_visibility_delta_e": 12.5,
+            "visibility_attempts": 1,
+            "visibility_fallback": False,
+            "color_class": "white",
+        },
+        [1, 2, 30, 4],
+        640,
+        480,
+    )
+    assert row["pair_id"] == "img__jpg"
+    assert row["truth_bbox"] == [1, 2, 30, 4]
+    assert row["measured_visibility_delta_e"] == 12.5
+    assert row["synthetic_metadata"]["color_class"] == "white"

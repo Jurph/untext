@@ -80,6 +80,35 @@ def box_metrics_against_truth(boxes: list[dict], truth_bbox: Sequence[float]) ->
     }
 
 
+
+def pair_id_for_path(path: Path | str) -> str:
+    return image_key(path)
+
+
+def build_pair_row(
+    pair_id: str,
+    clean_relative_path: str,
+    twin_relative_path: str,
+    case_metadata: dict,
+    truth_bbox: Sequence[int],
+    width: int,
+    height: int,
+) -> dict:
+    return {
+        "pair_id": pair_id,
+        "clean_relative_path": clean_relative_path,
+        "twin_relative_path": twin_relative_path,
+        "base_width": int(width),
+        "base_height": int(height),
+        "truth_bbox": [int(value) for value in truth_bbox],
+        "truth_bbox_coverage": case_metadata.get("truth_bbox_coverage"),
+        "truth_alpha_coverage": case_metadata.get("truth_alpha_coverage"),
+        "measured_visibility_delta_e": case_metadata.get("measured_visibility_delta_e"),
+        "visibility_attempts": case_metadata.get("visibility_attempts"),
+        "visibility_fallback": case_metadata.get("visibility_fallback"),
+        "synthetic_metadata": dict(case_metadata),
+    }
+
 def append_jsonl(path: Path, row: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
