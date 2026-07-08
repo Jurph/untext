@@ -236,3 +236,23 @@ tests/images/output/
 # Claude Code project instructions (local only)
 CLAUDE.md
 tests/images/archived/
+
+# Superpowers session working documents — agent scratchpad, not product artifacts.
+.superpowers/
+
+# Experiment corpora and harvested data.
+# These directories are under tests/images/ for historical reasons but are NOT
+# unit-test fixtures — they are large locally-generated datasets that should be
+# regenerated locally. Only tests/images/originals/ and tests/images/watermarked/
+# (the deliberate functional fixtures) are tracked.
+tests/images/detector_pair_harvest/
+tests/images/generated_text_watermarks/images/
+tests/images/generated_text_watermarks/masks/
+tests/images/has_text_2_*/
+tests/images/text_sources/
+tests/images/zero/
+tests/images/zero_detector_fp_baseline/
+tests/images/zero_synthetic_watermark_benchmark/
+# Loose READMEs co-located with the above ignored directories
+tests/images/has_text_2_detector_threshold_sweep_README.md
+tests/images/zero_synthetic_watermark_benchmark_README.md
