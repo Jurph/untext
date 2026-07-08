@@ -1,0 +1,572 @@
+{
+  "description": "Deterministic high-contrast generated text-watermark fixtures.",
+  "case_count": 17,
+  "font_family_counts": {
+    "serif": 7,
+    "sans": 7,
+    "cursive": 3
+  },
+  "cases": [
+    {
+      "slug": "elena_floor_black_sans",
+      "source": "portraits/elena_koshka_let_my_body.jpg",
+      "text": "ElenaFans.co",
+      "family": "sans",
+      "color": [
+        8,
+        8,
+        8
+      ],
+      "anchor": "lb",
+      "x_frac": 0.08,
+      "y_frac": 0.92,
+      "width_frac": 0.38,
+      "opacity": 225,
+      "image": "images/elena_floor_black_sans.jpg",
+      "mask": "masks/elena_floor_black_sans_mask.png",
+      "font": "C:\\Windows\\Fonts\\corbelb.ttf",
+      "font_size": 71,
+      "bbox_xyxy": [
+        92,
+        1276,
+        487,
+        1327
+      ],
+      "bbox_xywh": [
+        92,
+        1276,
+        395,
+        51
+      ],
+      "mask_coverage": 0.0048488940329218105
+    },
+    {
+      "slug": "evelyn_flowers_white_serif",
+      "source": "portraits/evelyn_cherry_blossoms.jpg",
+      "text": "EvelynBloom.net",
+      "family": "serif",
+      "color": [
+        245,
+        245,
+        245
+      ],
+      "anchor": "rt",
+      "x_frac": 0.94,
+      "y_frac": 0.08,
+      "width_frac": 0.4,
+      "opacity": 225,
+      "image": "images/evelyn_flowers_white_serif.jpg",
+      "mask": "masks/evelyn_flowers_white_serif_mask.png",
+      "font": "C:\\Windows\\Fonts\\georgiab.ttf",
+      "font_size": 48,
+      "bbox_xyxy": [
+        591,
+        124,
+        1015,
+        170
+      ],
+      "bbox_xywh": [
+        591,
+        124,
+        424,
+        46
+      ],
+      "mask_coverage": 0.004058641975308642
+    },
+    {
+      "slug": "evelyn_diner_white_sans",
+      "source": "portraits/evelyn_coffee.jpg",
+      "text": "DinerEvelyn.com",
+      "family": "sans",
+      "color": [
+        248,
+        248,
+        248
+      ],
+      "anchor": "rb",
+      "x_frac": 0.92,
+      "y_frac": 0.82,
+      "width_frac": 0.36,
+      "opacity": 225,
+      "image": "images/evelyn_diner_white_sans.jpg",
+      "mask": "masks/evelyn_diner_white_sans_mask.png",
+      "font": "C:\\Windows\\Fonts\\corbelb.ttf",
+      "font_size": 52,
+      "bbox_xyxy": [
+        611,
+        1133,
+        990,
+        1182
+      ],
+      "bbox_xywh": [
+        611,
+        1133,
+        379,
+        49
+      ],
+      "mask_coverage": 0.0034304269547325104
+    },
+    {
+      "slug": "evelyn_corset_gray_cursive",
+      "source": "portraits/evelyn_rennfaire.jpg",
+      "text": "FaireEvelyn.co",
+      "family": "cursive",
+      "color": [
+        132,
+        132,
+        132
+      ],
+      "anchor": "mm",
+      "x_frac": 0.5,
+      "y_frac": 0.63,
+      "width_frac": 0.4,
+      "opacity": 225,
+      "image": "images/evelyn_corset_gray_cursive.jpg",
+      "mask": "masks/evelyn_corset_gray_cursive_mask.png",
+      "font": "C:\\Windows\\Fonts\\AlexBrush-Regular.ttf",
+      "font_size": 85,
+      "bbox_xyxy": [
+        324,
+        884,
+        754,
+        960
+      ],
+      "bbox_xywh": [
+        324,
+        884,
+        430,
+        76
+      ],
+      "mask_coverage": 0.005066872427983539
+    },
+    {
+      "slug": "kenna_avn_black_serif",
+      "source": "portraits/kenna_james_avn_2016.jpg",
+      "text": "KennaStage.org",
+      "family": "serif",
+      "color": [
+        10,
+        10,
+        10
+      ],
+      "anchor": "lt",
+      "x_frac": 0.08,
+      "y_frac": 0.12,
+      "width_frac": 0.38,
+      "opacity": 225,
+      "image": "images/kenna_avn_black_serif.jpg",
+      "mask": "masks/kenna_avn_black_serif_mask.png",
+      "font": "C:\\Windows\\Fonts\\georgiab.ttf",
+      "font_size": 49,
+      "bbox_xyxy": [
+        87,
+        183,
+        488,
+        228
+      ],
+      "bbox_xywh": [
+        87,
+        183,
+        401,
+        45
+      ],
+      "mask_coverage": 0.004171167695473251
+    },
+    {
+      "slug": "kenna_march_black_sans",
+      "source": "portraits/kenna_james_march2023.jpg",
+      "text": "KennaLookbook.net",
+      "family": "sans",
+      "color": [
+        8,
+        8,
+        8
+      ],
+      "anchor": "rt",
+      "x_frac": 0.9,
+      "y_frac": 0.12,
+      "width_frac": 0.42,
+      "opacity": 225,
+      "image": "images/kenna_march_black_sans.jpg",
+      "mask": "masks/kenna_march_black_sans_mask.png",
+      "font": "C:\\Windows\\Fonts\\corbelb.ttf",
+      "font_size": 51,
+      "bbox_xyxy": [
+        528,
+        174,
+        972,
+        211
+      ],
+      "bbox_xywh": [
+        528,
+        174,
+        444,
+        37
+      ],
+      "mask_coverage": 0.004173739711934157
+    },
+    {
+      "slug": "lamar_crowd_white_serif",
+      "source": "portraits/lamar_jackson_2021.jpg",
+      "text": "RavensZone2026",
+      "family": "serif",
+      "color": [
+        250,
+        250,
+        250
+      ],
+      "anchor": "lt",
+      "x_frac": 0.07,
+      "y_frac": 0.12,
+      "width_frac": 0.42,
+      "opacity": 225,
+      "image": "images/lamar_crowd_white_serif.jpg",
+      "mask": "masks/lamar_crowd_white_serif_mask.png",
+      "font": "C:\\Windows\\Fonts\\georgiab.ttf",
+      "font_size": 50,
+      "bbox_xyxy": [
+        76,
+        183,
+        521,
+        219
+      ],
+      "bbox_xywh": [
+        76,
+        183,
+        445,
+        36
+      ],
+      "mask_coverage": 0.004471450617283951
+    },
+    {
+      "slug": "lamar_turf_white_sans",
+      "source": "portraits/lamar_jackson_passing_2020.jpg",
+      "text": "LamarFilmRoom.tv",
+      "family": "sans",
+      "color": [
+        248,
+        248,
+        248
+      ],
+      "anchor": "lb",
+      "x_frac": 0.08,
+      "y_frac": 0.9,
+      "width_frac": 0.42,
+      "opacity": 225,
+      "image": "images/lamar_turf_white_sans.jpg",
+      "mask": "masks/lamar_turf_white_sans_mask.png",
+      "font": "C:\\Windows\\Fonts\\corbelb.ttf",
+      "font_size": 53,
+      "bbox_xyxy": [
+        90,
+        1259,
+        529,
+        1298
+      ],
+      "bbox_xywh": [
+        90,
+        1259,
+        439,
+        39
+      ],
+      "mask_coverage": 0.003890817901234568
+    },
+    {
+      "slug": "tay_iheart_gray_cursive",
+      "source": "portraits/taylor_swift_2019.jpg",
+      "text": "SwiftieZone (2026)",
+      "family": "cursive",
+      "color": [
+        176,
+        176,
+        176
+      ],
+      "anchor": "rt",
+      "x_frac": 0.94,
+      "y_frac": 0.12,
+      "width_frac": 0.46,
+      "opacity": 225,
+      "image": "images/tay_iheart_gray_cursive.jpg",
+      "mask": "masks/tay_iheart_gray_cursive_mask.png",
+      "font": "C:\\Windows\\Fonts\\AlexBrush-Regular.ttf",
+      "font_size": 63,
+      "bbox_xyxy": [
+        518,
+        176,
+        1014,
+        238
+      ],
+      "bbox_xywh": [
+        518,
+        176,
+        496,
+        62
+      ],
+      "mask_coverage": 0.004980066872427983
+    },
+    {
+      "slug": "tay_globes_gray_serif",
+      "source": "portraits/taylor_swift_golden_globes_2024.jpg",
+      "text": "TayStyle.blog",
+      "family": "serif",
+      "color": [
+        168,
+        168,
+        168
+      ],
+      "anchor": "rb",
+      "x_frac": 0.92,
+      "y_frac": 0.88,
+      "width_frac": 0.36,
+      "opacity": 225,
+      "image": "images/tay_globes_gray_serif.jpg",
+      "mask": "masks/tay_globes_gray_serif_mask.png",
+      "font": "C:\\Windows\\Fonts\\georgiab.ttf",
+      "font_size": 56,
+      "bbox_xyxy": [
+        609,
+        1223,
+        993,
+        1277
+      ],
+      "bbox_xywh": [
+        609,
+        1223,
+        384,
+        54
+      ],
+      "mask_coverage": 0.004562114197530864
+    },
+    {
+      "slug": "cleveland_bottom_white_sans",
+      "source": "landscapes/cleveland_skyline.jpg",
+      "text": "ClevelandSkyline.fans",
+      "family": "sans",
+      "color": [
+        245,
+        245,
+        245
+      ],
+      "anchor": "mb",
+      "x_frac": 0.5,
+      "y_frac": 0.92,
+      "width_frac": 0.38,
+      "opacity": 225,
+      "image": "images/cleveland_bottom_white_sans.jpg",
+      "mask": "masks/cleveland_bottom_white_sans_mask.png",
+      "font": "C:\\Windows\\Fonts\\corbelb.ttf",
+      "font_size": 76,
+      "bbox_xyxy": [
+        604,
+        1107,
+        1319,
+        1179
+      ],
+      "bbox_xywh": [
+        604,
+        1107,
+        715,
+        72
+      ],
+      "mask_coverage": 0.0062434895833333335
+    },
+    {
+      "slug": "copenhagen_bottom_gray_serif",
+      "source": "landscapes/copenhagen_lakes.jpg",
+      "text": "cityscapes.nl/fans",
+      "family": "serif",
+      "color": [
+        220,
+        220,
+        220
+      ],
+      "anchor": "mb",
+      "x_frac": 0.5,
+      "y_frac": 0.91,
+      "width_frac": 0.34,
+      "opacity": 225,
+      "image": "images/copenhagen_bottom_gray_serif.jpg",
+      "mask": "masks/copenhagen_bottom_gray_serif_mask.png",
+      "font": "C:\\Windows\\Fonts\\georgiab.ttf",
+      "font_size": 70,
+      "bbox_xyxy": [
+        638,
+        1108,
+        1282,
+        1176
+      ],
+      "bbox_xywh": [
+        638,
+        1108,
+        644,
+        68
+      ],
+      "mask_coverage": 0.005640462239583333
+    },
+    {
+      "slug": "frankfurt_bottom_white_sans",
+      "source": "landscapes/frankfurt_skyline.jpg",
+      "text": "FrankfurtView.de",
+      "family": "sans",
+      "color": [
+        248,
+        248,
+        248
+      ],
+      "anchor": "mb",
+      "x_frac": 0.5,
+      "y_frac": 0.91,
+      "width_frac": 0.34,
+      "opacity": 225,
+      "image": "images/frankfurt_bottom_white_sans.jpg",
+      "mask": "masks/frankfurt_bottom_white_sans_mask.png",
+      "font": "C:\\Windows\\Fonts\\corbelb.ttf",
+      "font_size": 86,
+      "bbox_xyxy": [
+        642,
+        1103,
+        1282,
+        1166
+      ],
+      "bbox_xywh": [
+        642,
+        1103,
+        640,
+        63
+      ],
+      "mask_coverage": 0.005997721354166667
+    },
+    {
+      "slug": "taipei_bottom_gray_cursive",
+      "source": "landscapes/taipei_night.jpg",
+      "text": "TaipeiAfterDark.tw",
+      "family": "cursive",
+      "color": [
+        214,
+        214,
+        214
+      ],
+      "anchor": "mb",
+      "x_frac": 0.5,
+      "y_frac": 0.91,
+      "width_frac": 0.36,
+      "opacity": 225,
+      "image": "images/taipei_bottom_gray_cursive.jpg",
+      "mask": "masks/taipei_bottom_gray_cursive_mask.png",
+      "font": "C:\\Windows\\Fonts\\AlexBrush-Regular.ttf",
+      "font_size": 92,
+      "bbox_xyxy": [
+        617,
+        1089,
+        1305,
+        1175
+      ],
+      "bbox_xywh": [
+        617,
+        1089,
+        688,
+        86
+      ],
+      "mask_coverage": 0.005809326171875
+    },
+    {
+      "slug": "hongkong_high_black_serif",
+      "source": "landscapes/hong_kong_harbour.jpg",
+      "text": "HarbourWatch.hk",
+      "family": "serif",
+      "color": [
+        10,
+        10,
+        10
+      ],
+      "anchor": "mt",
+      "x_frac": 0.5,
+      "y_frac": 0.08,
+      "width_frac": 0.36,
+      "opacity": 225,
+      "image": "images/hongkong_high_black_serif.jpg",
+      "mask": "masks/hongkong_high_black_serif_mask.png",
+      "font": "C:\\Windows\\Fonts\\georgiab.ttf",
+      "font_size": 45,
+      "bbox_xyxy": [
+        387,
+        72,
+        815,
+        106
+      ],
+      "bbox_xywh": [
+        387,
+        72,
+        428,
+        34
+      ],
+      "mask_coverage": 0.0065114583333333335
+    },
+    {
+      "slug": "harbaugh_parka_white_sans",
+      "source": "landscapes/harbaugh_iphone.jpg",
+      "text": "SidelineReport.net",
+      "family": "sans",
+      "color": [
+        250,
+        250,
+        250
+      ],
+      "anchor": "rb",
+      "x_frac": 0.93,
+      "y_frac": 0.82,
+      "width_frac": 0.38,
+      "opacity": 225,
+      "image": "images/harbaugh_parka_white_sans.jpg",
+      "mask": "masks/harbaugh_parka_white_sans_mask.png",
+      "font": "C:\\Windows\\Fonts\\corbelb.ttf",
+      "font_size": 55,
+      "bbox_xyxy": [
+        668,
+        607,
+        1114,
+        658
+      ],
+      "bbox_xywh": [
+        668,
+        607,
+        446,
+        51
+      ],
+      "mask_coverage": 0.007178125
+    },
+    {
+      "slug": "evelyn_interview_lightgray_serif",
+      "source": "landscapes/evelyn_claire_hru_2023.jpg",
+      "text": "EvelynInterview.tv",
+      "family": "serif",
+      "color": [
+        214,
+        214,
+        214
+      ],
+      "anchor": "rb",
+      "x_frac": 0.94,
+      "y_frac": 0.86,
+      "width_frac": 0.38,
+      "opacity": 225,
+      "image": "images/evelyn_interview_lightgray_serif.jpg",
+      "mask": "masks/evelyn_interview_lightgray_serif_mask.png",
+      "font": "C:\\Windows\\Fonts\\georgiab.ttf",
+      "font_size": 46,
+      "bbox_xyxy": [
+        681,
+        651,
+        1128,
+        696
+      ],
+      "bbox_xywh": [
+        681,
+        651,
+        447,
+        45
+      ],
+      "mask_coverage": 0.006313541666666667
+    }
+  ]
+}
