@@ -211,6 +211,7 @@ def color_guided_expand(
     color_radius_multiplier: float = 1.0,
     bg_radius_multiplier: float = 1.0,
     iterations: int = 5,
+    zero_bbox_cluster_ids: tuple = (),
     debug: bool = False,
 ) -> np.ndarray:
     """Expand a confirmed text mask using adaptive color matching and GrabCut.
@@ -296,18 +297,40 @@ def color_guided_expand(
         return confirmed_mask
 
     # --- Build GrabCut init mask ---
-    #   Within color_radius of top centroid → GC_FGD
-    #   Within bg_radius of bottom centroid → GC_BGD
-    #   Everything else                     → GC_PR_BGD
-    #   FGD takes priority if both conditions hold
+    #   Within color_radius of top centroid  → GC_FGD
+    #   Within bg_radius of bottom centroid  → GC_BGD
+    #   Nearest centroid has zero bbox pixels → GC_BGD  (exclusive background)
+    #   Everything else                      → GC_PR_BGD
+    #   FGD always wins ties
     gc_init = np.full((roi_h, roi_w), cv2.GC_PR_BGD, dtype=np.uint8)
     gc_init[d_bot <= bg_radius] = cv2.GC_BGD
-    gc_init[fgd_mask == 255] = cv2.GC_FGD  # FGD wins ties
+
+    if zero_bbox_cluster_ids:
+        # Assign each ROI pixel to its nearest centroid; pixels whose nearest
+        # centroid had strictly zero presence inside the detection bbox are
+        # definitionally background — lock them as GC_BGD.
+        n_centroids = len(centers)
+        all_dists = np.stack(
+            [np.linalg.norm(roi_flat - centers[cid].astype(np.float32), axis=1)
+             for cid in range(n_centroids)],
+            axis=1,
+        )  # (N_pixels, K)
+        nearest = np.argmin(all_dists, axis=1).reshape(roi_h, roi_w)
+        for cid in zero_bbox_cluster_ids:
+            gc_init[nearest == cid] = cv2.GC_BGD
+
+    gc_init[fgd_mask == 255] = cv2.GC_FGD  # FGD wins all ties
 
     if debug:
         n_fgd_gc = int(np.sum(gc_init == cv2.GC_FGD))
         n_bgd_gc = int(np.sum(gc_init == cv2.GC_BGD))
-        logger.debug(f"Color expand: GC_FGD={n_fgd_gc}, GC_BGD={n_bgd_gc}")
+        n_pr_bgd  = int(np.sum(gc_init == cv2.GC_PR_BGD))
+        n_excl    = int(np.sum(nearest[..., np.newaxis] == np.array(zero_bbox_cluster_ids)).item()) if zero_bbox_cluster_ids else 0
+        logger.debug(
+            f"Color expand: GC_FGD={n_fgd_gc}, GC_BGD={n_bgd_gc} "
+            f"(excl-bg clusters={list(zero_bbox_cluster_ids)}, excl-bg px≈{n_excl}), "
+            f"GC_PR_BGD={n_pr_bgd}"
+        )
 
     bgd_model = np.zeros((1, 65), np.float64)
     fgd_model = np.zeros((1, 65), np.float64)
@@ -900,5 +923,9 @@ def find_mask_by_spatial_tf_idf(
             "bot_id": bot_id,
             "color_radius": color_radius,
             "bg_radius": bg_radius,
+            "zero_bbox_cluster_ids": tuple(
+                int(cid) for cid in range(num_clusters)
+                if bbox_cluster_counts[cid] == 0
+            ),
         }
     return cleaned_mask 

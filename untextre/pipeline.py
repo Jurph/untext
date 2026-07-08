@@ -246,6 +246,7 @@ def _generate_masks_and_inpaint(
                         min_cc_px=mask_config.get("min_cc_px", 10),
                         color_radius_multiplier=mask_config.get("color_radius_multiplier", 1.0),
                         bg_radius_multiplier=mask_config.get("bg_radius_multiplier", 1.0),
+                        zero_bbox_cluster_ids=cluster_data.get("zero_bbox_cluster_ids", ()),
                         debug=True,
                     )
                 elif use_budgeted_expand:
