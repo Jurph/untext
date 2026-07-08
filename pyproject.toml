@@ -30,6 +30,7 @@ dependencies = [
     "simple-lama-inpainting==0.1.2",
     "torch==2.6.0",
     "torchvision==0.21.0",
+    "ultralytics>=8.0",
 ]
 
 [project.urls]
