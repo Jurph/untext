@@ -101,8 +101,12 @@ automatic download breaks.
   the checkpoint for YOLO detections.
 - **Invented by / maintained by:** The checkpoint is published by Hugging Face
   user `fancyfeast`. The YOLO runtime and `YOLO` loader come from Ultralytics.
-- **Publication / upstream docs:** The source Space does not cite a paper for
-  this checkpoint. The runtime documentation is Ultralytics' YOLO11 model guide.
+- **Publication / upstream docs:** The source Space does not cite a dedicated
+  paper for this checkpoint. For the YOLO11-era runtime family, cite Sapkota,
+  R.; et al. "Ultralytics YOLO Evolution: An Overview of YOLO26, YOLO11,
+  YOLOv8 and YOLOv5 Object Detectors for Computer Vision and Pattern
+  Recognition." *arXiv*, 2026. [arXiv:2510.09653](https://arxiv.org/abs/2510.09653).
+  Use the Ultralytics YOLO11 docs as the implementation reference.
 - **How we ingest it:** `get_yolo11x_model()` returns a module-level singleton.
   `_load_yolo11x_model()` checks
   `~/.untextre/models/yolo11x-train28-best.pt`. If the file is missing,
@@ -124,4 +128,5 @@ automatic download breaks.
   - Source Space: https://huggingface.co/spaces/fancyfeast/joycaption-watermark-detection
   - Model file: https://huggingface.co/spaces/fancyfeast/joycaption-watermark-detection/resolve/main/yolo11x-train28-best.pt
   - Source app: https://huggingface.co/spaces/fancyfeast/joycaption-watermark-detection/blob/main/app.py
+  - Ultralytics YOLO Evolution overview (YOLO11-era): https://arxiv.org/abs/2510.09653
   - Ultralytics YOLO11 docs: https://docs.ultralytics.com/models/yolo11/
