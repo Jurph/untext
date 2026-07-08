@@ -31,11 +31,17 @@ Detection = Dict[str, np.ndarray]  # {'geometry': points, 'confidence': score}
 _doctr_detector: Optional['TextDetector'] = None
 _easyocr_reader: Optional[object] = None
 _east_net: Optional[cv2.dnn_Net] = None
+_yolo11x_model: Optional[object] = None
 
 EAST_MODEL_URL = "https://github.com/oyyd/frozen_east_text_detection.pb/raw/master/frozen_east_text_detection.pb"
 EAST_MODEL_DOCS = "docs/detector-models.md"
 EAST_DOWNLOAD_TIMEOUT_SECONDS = 60
 EAST_MODEL_MIN_BYTES = 10 * 1024 * 1024
+
+YOLO11X_MODEL_URL = "https://huggingface.co/spaces/fancyfeast/joycaption-watermark-detection/resolve/main/yolo11x-train28-best.pt"
+YOLO11X_MODEL_DOCS = "docs/detector-models.md"
+YOLO11X_DOWNLOAD_TIMEOUT_SECONDS = 120
+YOLO11X_MODEL_MIN_BYTES = 50 * 1024 * 1024
 
 
 def get_doctr_detector(
@@ -86,6 +92,17 @@ def get_east_net() -> cv2.dnn_Net:
         logger.info("EAST model ready")
 
     return _east_net
+
+def get_yolo11x_model() -> object:
+    """Return the shared YOLO11x watermark detector."""
+    global _yolo11x_model
+
+    if _yolo11x_model is None:
+        logger.info("Initializing YOLO11x watermark detector...")
+        _yolo11x_model = _load_yolo11x_model()
+        logger.info("YOLO11x model ready")
+
+    return _yolo11x_model
 
 
 def cleanup_vram() -> None:
@@ -292,6 +309,99 @@ def _load_east_model() -> cv2.dnn_Net:
         raise RuntimeError(
             _east_manual_download_message(model_path, "EAST model loading failed")
         ) from e
+
+
+def _get_yolo11x_model_path() -> Path:
+    """Return the persistent cache path for the YOLO11x model."""
+    model_dir = Path.home() / ".untextre" / "models"
+    model_dir.mkdir(parents=True, exist_ok=True)
+    return model_dir / "yolo11x-train28-best.pt"
+
+
+def _yolo11x_manual_download_message(model_path: Path, reason: str) -> str:
+    return (
+        f"{reason}. Download the YOLO11x model manually from {YOLO11X_MODEL_URL} "
+        f"and save it as {model_path}. See {YOLO11X_MODEL_DOCS} for detector model sources."
+    )
+
+
+def _validate_yolo11x_model_file(model_path: Path) -> None:
+    if model_path.stat().st_size < YOLO11X_MODEL_MIN_BYTES:
+        raise RuntimeError(
+            _yolo11x_manual_download_message(
+                model_path,
+                f"YOLO11x model file is too small: {model_path}",
+            )
+        )
+
+
+def _download_yolo11x_model(
+    model_path: Path,
+    *,
+    urlopen=urllib.request.urlopen,
+) -> None:
+    """Download the YOLO11x model atomically and reject truncated/error responses."""
+    tmp_path = Path(f"{model_path}.tmp")
+    try:
+        with urlopen(YOLO11X_MODEL_URL, timeout=YOLO11X_DOWNLOAD_TIMEOUT_SECONDS) as response:
+            with tmp_path.open("wb") as handle:
+                while True:
+                    chunk = response.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+
+        _validate_yolo11x_model_file(tmp_path)
+        tmp_path.replace(model_path)
+    except Exception as exc:
+        tmp_path.unlink(missing_ok=True)
+        if isinstance(exc, RuntimeError):
+            raise RuntimeError(
+                _yolo11x_manual_download_message(model_path, "YOLO11x model download failed")
+            ) from exc
+        raise RuntimeError(
+            _yolo11x_manual_download_message(model_path, "YOLO11x model download failed")
+        ) from exc
+
+
+def _load_yolo11x_model() -> object:
+    """Load the YOLO11x watermark detection model.
+
+    This function attempts to download the YOLO11x model if it doesn't exist
+    locally. The model is an Ultralytics YOLO checkpoint fine-tuned for
+    watermark detection.
+
+    Returns:
+        ultralytics.YOLO instance ready for prediction
+
+    Raises:
+        RuntimeError: If the model file is missing, truncated, or fails to load
+    """
+    try:
+        model_path = _get_yolo11x_model_path()
+
+        if not model_path.exists():
+            logger.info("Downloading YOLO11x watermark detection model...")
+            _download_yolo11x_model(model_path)
+            logger.info(f"YOLO11x model downloaded to: {model_path}")
+
+        _validate_yolo11x_model_file(model_path)
+
+        from ultralytics import YOLO
+
+        model = YOLO(str(model_path))
+        logger.debug(f"YOLO11x model loaded from: {model_path}")
+        return model
+
+    except RuntimeError:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to load YOLO11x model: {e}")
+        model_path = _get_yolo11x_model_path()
+        raise RuntimeError(
+            _yolo11x_manual_download_message(model_path, "YOLO11x model loading failed")
+        ) from e
+
 
 def _detect_with_east(image: ImageArray, net: cv2.dnn_Net, 
                      min_confidence: float = 0.3, 

@@ -1,8 +1,9 @@
 # Detector Model Bibliography
 
-This project uses three text detectors in consensus. This note records where
-each model comes from, how `untextre` loads it, and where to fetch model files
-manually if an automatic download breaks.
+The production consensus uses EAST, EasyOCR, and YOLO11x. DocTR remains
+available for research use. This note records where each model comes from,
+how `untextre` loads it, and where to fetch model files manually if an
+automatic download breaks.
 
 ## EAST
 
@@ -91,3 +92,36 @@ manually if an automatic download breaks.
   - Official CRAFT implementation: https://github.com/clovaai/CRAFT-pytorch
   - EasyOCR API docs: https://www.jaided.ai/easyocr/documentation/
   - EasyOCR model hub: https://www.jaided.ai/easyocr/modelhub/
+
+## YOLO11x
+
+- **Model used here:** `yolo11x-train28-best.pt`, an Ultralytics YOLO11x
+  checkpoint from the `fancyfeast/joycaption-watermark-detection` Hugging Face
+  Space. The Space labels the project "Joycaption Watermark Detection" and uses
+  the checkpoint for YOLO detections.
+- **Invented by / maintained by:** The checkpoint is published by Hugging Face
+  user `fancyfeast`. The YOLO runtime and `YOLO` loader come from Ultralytics.
+- **Publication / upstream docs:** The source Space does not cite a paper for
+  this checkpoint. The runtime documentation is Ultralytics' YOLO11 model guide.
+- **How we ingest it:** `get_yolo11x_model()` returns a module-level singleton.
+  `_load_yolo11x_model()` checks
+  `~/.untextre/models/yolo11x-train28-best.pt`. If the file is missing,
+  `_download_yolo11x_model()` downloads it to a temporary file, rejects files
+  under 50 MB, and atomically moves the validated checkpoint into the cache.
+  Ultralytics loads the cached file with `YOLO(str(model_path))`;
+  `detect_with_yolo11x()` runs it at `MODEL_CONFIDENCE_FLOOR` and post-filters
+  by the caller's confidence threshold.
+- **Automatic download URL used by this repo:**
+  `https://huggingface.co/spaces/fancyfeast/joycaption-watermark-detection/resolve/main/yolo11x-train28-best.pt`
+- **Manual fallback:** Download `yolo11x-train28-best.pt` from the URL above
+  and place it at `~/.untextre/models/yolo11x-train28-best.pt`. If the source
+  Space changes, use the `yolo11x-train28-best.pt` file from the
+  `fancyfeast/joycaption-watermark-detection` Space.
+- **License caveat:** No `LICENSE` file is present on the source HF Space as of
+  2026-07-07. Do not redistribute this checkpoint from this repository without
+  a separate license grant.
+- **Primary references:**
+  - Source Space: https://huggingface.co/spaces/fancyfeast/joycaption-watermark-detection
+  - Model file: https://huggingface.co/spaces/fancyfeast/joycaption-watermark-detection/resolve/main/yolo11x-train28-best.pt
+  - Source app: https://huggingface.co/spaces/fancyfeast/joycaption-watermark-detection/blob/main/app.py
+  - Ultralytics YOLO11 docs: https://docs.ultralytics.com/models/yolo11/

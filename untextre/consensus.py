@@ -1,6 +1,6 @@
 """Consensus detection utilities combining multiple text detectors.
 
-This module provides functions to run EAST, DocTR, and EasyOCR detectors
+This module provides functions to run EAST, EasyOCR, and YOLO11x detectors
 and combine their results using consensus logic to find high-confidence
 text regions where multiple detectors agree.
 """
@@ -96,6 +96,45 @@ def detect_with_easyocr(image: np.ndarray, confidence_threshold: float = CLI_DEF
         
     except Exception as e:
         logger.warning(f"EasyOCR detection failed: {e}")
+        return []
+
+
+def detect_with_yolo11x(image: np.ndarray, confidence_threshold: float = CLI_DEFAULT_CONFIDENCE) -> List[Tuple[int, int, int, int, float]]:
+    """Run YOLO11x watermark detection with configurable confidence threshold.
+
+    Args:
+        image: Input image as H×W×3 BGR numpy array
+        confidence_threshold: Minimum confidence for detections (0.0-1.0)
+
+    Returns:
+        List of (x, y, width, height, confidence_pct) tuples
+    """
+    try:
+        model = detector_mod.get_yolo11x_model()
+        # Run at MODEL_CONFIDENCE_FLOOR so the model captures everything;
+        # the caller's confidence_threshold is applied as a post-filter.
+        results = model.predict(image, conf=MODEL_CONFIDENCE_FLOOR, verbose=False)
+
+        detections = []
+        for result in results:
+            boxes = getattr(result, "boxes", [])
+            if boxes is None:
+                continue
+
+            for box in boxes:
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                confidence = float(box.conf[0])
+                if confidence < confidence_threshold:
+                    continue
+
+                x, y = int(x1), int(y1)
+                w, h = int(x2 - x1), int(y2 - y1)
+                detections.append((x, y, w, h, confidence * 100))
+
+        return detections
+
+    except Exception as e:
+        logger.warning(f"YOLO11x detection failed: {e}")
         return []
 
 
@@ -337,7 +376,7 @@ def run_consensus_detection(image: np.ndarray, confidence_threshold: float = CLI
     """Run consensus detection and return padded bounding boxes.
     
     This is the main entry point for consensus detection. It runs all three
-    detectors (EAST, DocTR, EasyOCR), finds regions where 2+ detectors agree,
+    production detectors (EAST, EasyOCR, YOLO11x), finds regions where 2+ detectors agree,
     and returns padded bounding boxes ready for processing.
     
     Args:
@@ -366,12 +405,12 @@ def run_consensus_detection(image: np.ndarray, confidence_threshold: float = CLI
         detections['east'] = []
     
     try:
-        doctr_detections = detect_with_doctr(image_bgr, confidence_threshold)
-        detections['doctr'] = doctr_detections
-        logger.debug(f"DocTR found {len(doctr_detections)} detections")
+        yolo11x_detections = detect_with_yolo11x(image_bgr, confidence_threshold)
+        detections['yolo11x'] = yolo11x_detections
+        logger.debug(f"YOLO11x found {len(yolo11x_detections)} detections")
     except Exception as e:
-        logger.error(f"DocTR detection failed: {e}")
-        detections['doctr'] = []
+        logger.error(f"YOLO11x detection failed: {e}")
+        detections['yolo11x'] = []
     
     try:
         easyocr_detections = detect_with_easyocr(image_bgr, confidence_threshold)
@@ -429,15 +468,12 @@ def initialize_consensus_models() -> None:
     """
     logger.info("Pre-loading all detection models...")
     
-    # Initialize DocTR with MODEL_CONFIDENCE_FLOOR -- actual threshold applied as post-filter
+    # Initialize YOLO11x
     try:
-        detector_mod.get_doctr_detector(
-            confidence_threshold=MODEL_CONFIDENCE_FLOOR,
-            min_text_size=3,
-        )
-        logger.info("[OK] DocTR model loaded")
+        detector_mod.get_yolo11x_model()
+        logger.info("[OK] YOLO11x model loaded")
     except Exception as e:
-        logger.error(f"Failed to load DocTR: {e}")
+        logger.error(f"Failed to load YOLO11x: {e}")
     
     # Initialize EasyOCR
     try:

@@ -4,6 +4,7 @@ import sys
 import types
 
 import pytest
+from unittest.mock import Mock
 
 import untextre.consensus as consensus_mod
 import untextre.detector as detector_mod
@@ -11,39 +12,35 @@ import untextre.inpaint as inpaint_mod
 from untextre.utils import MODEL_CONFIDENCE_FLOOR
 
 
-def test_initialize_consensus_models_keeps_existing_instances(monkeypatch):
-    """Repeated preload calls must not replace already-loaded detector models."""
-    existing_doctr = types.SimpleNamespace(
-        confidence_threshold=MODEL_CONFIDENCE_FLOOR,
-        min_text_size=3,
-    )
+def test_initialize_consensus_models_keeps_existing_yolo11x_instances(monkeypatch):
+    """Repeated preload calls must not replace already-loaded production detector models."""
+    existing_yolo = object()
     existing_easyocr = object()
     existing_east = object()
-    monkeypatch.setattr(detector_mod, "_doctr_detector", existing_doctr)
+    monkeypatch.setattr(detector_mod, "_yolo11x_model", existing_yolo)
     monkeypatch.setattr(detector_mod, "_easyocr_reader", existing_easyocr)
     monkeypatch.setattr(detector_mod, "_east_net", existing_east)
 
     def fail_loader(*_args, **_kwargs):
         raise AssertionError("model loader should not be called when instance exists")
 
-    monkeypatch.setattr(detector_mod, "TextDetector", fail_loader)
+    doctr_getter = Mock(side_effect=AssertionError("DocTR should not be preloaded"))
+    monkeypatch.setattr(detector_mod, "get_doctr_detector", doctr_getter)
+    monkeypatch.setattr(detector_mod, "_load_yolo11x_model", fail_loader)
     monkeypatch.setattr(detector_mod, "_load_east_model", fail_loader)
 
     consensus_mod.initialize_consensus_models()
 
-    assert detector_mod._doctr_detector is existing_doctr
+    assert detector_mod._yolo11x_model is existing_yolo
     assert detector_mod._easyocr_reader is existing_easyocr
     assert detector_mod._east_net is existing_east
+    assert doctr_getter.call_count == 0
 
 
-def test_initialize_consensus_models_uses_detector_cache(monkeypatch):
-    """Consensus preload should share detector.py model instances, not duplicate them."""
+def test_initialize_consensus_models_uses_yolo11x_detector_cache(monkeypatch):
+    """Consensus preload should share detector.py production model instances."""
+    fake_yolo = object()
     fake_east = object()
-
-    class FakeTextDetector:
-        def __init__(self, confidence_threshold, min_text_size):
-            self.confidence_threshold = confidence_threshold
-            self.min_text_size = min_text_size
 
     class FakeReader:
         def __init__(self, langs, verbose=False):
@@ -55,21 +52,17 @@ def test_initialize_consensus_models_uses_detector_cache(monkeypatch):
     monkeypatch.setitem(sys.modules, "easyocr", fake_easyocr)
 
     monkeypatch.setattr(detector_mod, "_doctr_detector", None)
+    monkeypatch.setattr(detector_mod, "_yolo11x_model", None)
     monkeypatch.setattr(detector_mod, "_easyocr_reader", None)
     monkeypatch.setattr(detector_mod, "_east_net", None)
-    monkeypatch.setattr(detector_mod, "TextDetector", FakeTextDetector)
+    monkeypatch.setattr(detector_mod, "get_doctr_detector", Mock(side_effect=AssertionError("DocTR should not be preloaded")))
+    monkeypatch.setattr(detector_mod, "_load_yolo11x_model", Mock(return_value=fake_yolo))
     monkeypatch.setattr(detector_mod, "_load_east_model", lambda: fake_east)
-
-    def fail_local_loader(*_args, **_kwargs):
-        raise AssertionError("consensus should delegate model loading to detector.py")
-
-    monkeypatch.setattr(consensus_mod, "TextDetector", fail_local_loader, raising=False)
 
     consensus_mod.initialize_consensus_models()
 
-    assert isinstance(detector_mod._doctr_detector, FakeTextDetector)
-    assert detector_mod._doctr_detector.confidence_threshold == MODEL_CONFIDENCE_FLOOR
-    assert detector_mod._doctr_detector.min_text_size == 3
+    assert detector_mod._doctr_detector is None
+    assert detector_mod._yolo11x_model is fake_yolo
     assert isinstance(detector_mod._easyocr_reader, FakeReader)
     assert detector_mod._easyocr_reader.langs == ["en"]
     assert detector_mod._east_net is fake_east

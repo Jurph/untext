@@ -1,7 +1,7 @@
 """Tests for consensus detection utilities.
 
 This module tests the consensus detection logic that combines results from
-multiple text detectors (EAST, DocTR, EasyOCR) to find high-confidence regions.
+the production detectors (EAST, EasyOCR, YOLO11x) to find high-confidence regions.
 
 High diagnostic value tests:
 - Bbox overlap calculation with edge cases (no overlap, partial, full)
@@ -11,7 +11,15 @@ High diagnostic value tests:
 - Boundary conditions and error cases
 """
 
+import types
+from unittest.mock import Mock
+
+import numpy as np
 import pytest
+
+import untextre.consensus as consensus_mod
+from untextre import detector as detector_mod
+from untextre.utils import MODEL_CONFIDENCE_FLOOR
 
 from untextre.consensus import (
     calculate_bbox_overlap,
@@ -19,6 +27,97 @@ from untextre.consensus import (
     calculate_hybrid_confidence,
     find_consensus_boxes,
 )
+
+
+class _YoloVector:
+    def __init__(self, values):
+        self._values = values
+
+    def tolist(self):
+        return self._values
+
+
+class _YoloBox:
+    def __init__(self, xyxy, confidence):
+        self.xyxy = [_YoloVector(xyxy)]
+        self.conf = [confidence]
+
+
+def test_detect_with_yolo11x_returns_xywh_conf_pct_tuples(monkeypatch):
+    """YOLO11x consensus wrapper must match the other detector tuple contract."""
+    image = np.zeros((100, 200, 3), dtype=np.uint8)
+    fake_model = types.SimpleNamespace(
+        predict=Mock(
+            return_value=[
+                types.SimpleNamespace(
+                    boxes=[_YoloBox([10.0, 20.0, 110.0, 70.0], 0.85)]
+                )
+            ]
+        )
+    )
+    monkeypatch.setattr(detector_mod, "get_yolo11x_model", Mock(return_value=fake_model))
+
+    results = consensus_mod.detect_with_yolo11x(image, confidence_threshold=0.3)
+
+    args, kwargs = fake_model.predict.call_args
+    assert args[0] is image
+    assert kwargs == {"conf": MODEL_CONFIDENCE_FLOOR, "verbose": False}
+    assert results == [(10, 20, 100, 50, 85.0)]
+
+
+def test_detect_with_yolo11x_post_filters_confidence(monkeypatch):
+    """YOLO11x must run at the model floor and then apply the caller threshold."""
+    fake_model = types.SimpleNamespace(
+        predict=Mock(
+            return_value=[
+                types.SimpleNamespace(
+                    boxes=[
+                        _YoloBox([0.0, 0.0, 50.0, 50.0], 0.29),
+                        _YoloBox([5.0, 6.0, 9.0, 16.0], 0.31),
+                    ]
+                )
+            ]
+        )
+    )
+    monkeypatch.setattr(detector_mod, "get_yolo11x_model", Mock(return_value=fake_model))
+
+    results = consensus_mod.detect_with_yolo11x(
+        np.zeros((100, 100, 3), dtype=np.uint8),
+        confidence_threshold=0.3,
+    )
+
+    assert results == [(5, 6, 4, 10, 31.0)]
+
+
+def test_detect_with_yolo11x_returns_empty_on_model_failure(monkeypatch):
+    """YOLO11x detection failures should match the existing detector wrappers."""
+    fake_model = types.SimpleNamespace(predict=Mock(side_effect=RuntimeError("GPU exploded")))
+    monkeypatch.setattr(detector_mod, "get_yolo11x_model", Mock(return_value=fake_model))
+
+    results = consensus_mod.detect_with_yolo11x(np.zeros((100, 100, 3), dtype=np.uint8))
+
+    assert results == []
+
+
+def test_run_consensus_detection_uses_yolo11x_detector_key(monkeypatch):
+    """Production consensus must use east+easyocr+yolo11x, not DocTR as a fourth detector."""
+    image = np.zeros((100, 100, 3), dtype=np.uint8)
+    find_consensus = Mock(return_value=[])
+    doctr_detector = Mock(return_value=[(20, 20, 10, 10, 80.0)])
+    yolo_detector = Mock(return_value=[(20, 20, 10, 10, 80.0)])
+    monkeypatch.setattr(consensus_mod, "detect_with_east", Mock(return_value=[(10, 10, 10, 10, 90.0)]))
+    monkeypatch.setattr(consensus_mod, "detect_with_easyocr", Mock(return_value=[(10, 10, 10, 10, 90.0)]))
+    monkeypatch.setattr(consensus_mod, "detect_with_doctr", doctr_detector)
+    monkeypatch.setattr(consensus_mod, "detect_with_yolo11x", yolo_detector, raising=False)
+    monkeypatch.setattr(consensus_mod, "find_consensus_boxes", find_consensus)
+    monkeypatch.setattr(consensus_mod, "cleanup_vram", Mock())
+
+    assert consensus_mod.run_consensus_detection(image, confidence_threshold=0.42) == []
+
+    assert doctr_detector.call_count == 0
+    yolo_detector.assert_called_once_with(image, 0.42)
+    detections = find_consensus.call_args[0][0]
+    assert set(detections) == {"east", "easyocr", "yolo11x"}
 
 
 class TestBboxOverlap:
