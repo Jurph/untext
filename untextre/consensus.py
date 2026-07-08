@@ -279,11 +279,25 @@ def calculate_hybrid_confidence(confidences: List[float]) -> float:
 def find_consensus_boxes(detections: Dict[str, List[Tuple[int, int, int, int, float]]],
                         overlap_threshold: float = 0.1) -> List[Dict]:
     """Find consensus boxes where multiple detectors agree.
-    
+
+    Uses graph connected components rather than a seed-based nested loop.
+    Nodes are individual detections; an edge connects two detections from
+    DISTINCT detectors when their IoU >= overlap_threshold.  Every connected
+    component with 2+ distinct detectors becomes one consensus box whose bbox
+    is the union of all member bboxes.
+
+    This is order-independent: the old nested-loop approach could drop a
+    detection B (yolo) when the production flattening order put B before a
+    later detection C (easyocr) that overlapped both B and the seed A (east).
+    B was skipped against A (no overlap), C was added and marked used, and the
+    inner-inner scan started after C so B was never reconsidered against C.
+    Graph-CC adds A-C and B-C edges independently, placing all three in one
+    component regardless of iteration order.
+
     Args:
         detections: Dictionary mapping detector name to list of (x, y, w, h, conf) tuples
         overlap_threshold: Minimum bbox IoU for consensus (default: 0.1)
-        
+
     Returns:
         List of consensus box dictionaries with keys:
             - 'bbox': (x, y, width, height)
@@ -292,83 +306,68 @@ def find_consensus_boxes(detections: Dict[str, List[Tuple[int, int, int, int, fl
             - 'detector_count': number of detectors that agreed
             - 'original_confidences': list of original confidence values
     """
-    consensus_boxes = []
-    all_detections = []
-    
-    # Flatten all detections with detector info
+    # Flatten all detections into a node list.
+    nodes: List[Dict] = []
     for detector_name, detection_list in detections.items():
         for detection in detection_list:
             x, y, w, h, conf = detection
-            all_detections.append({
+            nodes.append({
                 'detector': detector_name,
                 'bbox': (x, y, w, h),
                 'confidence': conf / 100.0 if conf > 1.0 else conf,
-                'used': False
             })
-    
-    # O(N^3) in the number of detections, which is acceptable here because
-    # detector outputs are small and bounded in normal watermark workflows.
-    # If this function ever sees hundreds of boxes per image, replace this
-    # grouping pass with a spatial index or graph connected-components pass.
-    # Find overlapping groups
-    for i, det1 in enumerate(all_detections):
-        if det1['used']:
-            continue
-            
-        overlapping_group = [det1]
-        det1['used'] = True
-        
-        # Check for overlaps with remaining detections
-        for j in range(i + 1, len(all_detections)):
-            det2 = all_detections[j]
-            if det2['used'] or det2['detector'] in {d['detector'] for d in overlapping_group}:
-                continue
-                
-            # EMPIRICAL — validated on ~400 has-text-2 samples; broader validation pending.
-            # IoU > 0.1 groups detections that substantially overlap across detectors.
-            overlap_ratio = calculate_bbox_iou(det1['bbox'], det2['bbox'])
 
-            if overlap_ratio >= overlap_threshold:
-                overlapping_group.append(det2)
-                det2['used'] = True
-                
-                # Check if this detection also overlaps with others in the group
-                for k in range(j + 1, len(all_detections)):
-                    det3 = all_detections[k]
-                    if det3['used'] or det3['detector'] in [d['detector'] for d in overlapping_group]:
-                        continue
-                    
-                    # Check overlap with any member of current group
-                    for group_det in overlapping_group:
-                        overlap_ratio = calculate_bbox_iou(group_det['bbox'], det3['bbox'])
-                        
-                        if overlap_ratio >= overlap_threshold:
-                            overlapping_group.append(det3)
-                            det3['used'] = True
-                            break
-        
-        # Create consensus box if we have multiple detectors
-        if len(overlapping_group) >= 2:
-            # Calculate union bounding box
-            union_bbox = overlapping_group[0]['bbox']
-            for det in overlapping_group[1:]:
-                union_bbox = calculate_bbox_union(union_bbox, det['bbox'])
-            
-            # Calculate hybrid confidence
-            confidences = [det['confidence'] for det in overlapping_group]
-            hybrid_conf = calculate_hybrid_confidence(confidences)
-            
-            # Get unique detector names (each detector counts once)
-            detector_names = sorted({det['detector'] for det in overlapping_group})
-            
-            consensus_boxes.append({
-                'bbox': union_bbox,
-                'confidence': hybrid_conf,
-                'detectors': detector_names,
-                'detector_count': len(detector_names),
-                'original_confidences': confidences
-            })
-    
+    n = len(nodes)
+    if n == 0:
+        return []
+
+    # Union-Find with path compression.
+    parent = list(range(n))
+
+    def _find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]   # path halving
+            x = parent[x]
+        return x
+
+    def _union(a: int, b: int) -> None:
+        parent[_find(a)] = _find(b)
+
+    # Add edges: only between distinct-detector pairs with IoU >= threshold.
+    # EMPIRICAL — IoU > 0.1 validated on ~400 has-text-2 samples.
+    for i in range(n):
+        for j in range(i + 1, n):
+            if nodes[i]['detector'] == nodes[j]['detector']:
+                continue
+            if calculate_bbox_iou(nodes[i]['bbox'], nodes[j]['bbox']) >= overlap_threshold:
+                _union(i, j)
+
+    # Group indices by component root.
+    components: Dict[int, List[int]] = {}
+    for i in range(n):
+        components.setdefault(_find(i), []).append(i)
+
+    # Emit one consensus box per component that spans >= 2 distinct detectors.
+    consensus_boxes = []
+    for indices in components.values():
+        members = [nodes[i] for i in indices]
+        detector_names = sorted({m['detector'] for m in members})
+        if len(detector_names) < 2:
+            continue
+
+        union_bbox = members[0]['bbox']
+        for m in members[1:]:
+            union_bbox = calculate_bbox_union(union_bbox, m['bbox'])
+
+        confidences = [m['confidence'] for m in members]
+        consensus_boxes.append({
+            'bbox': union_bbox,
+            'confidence': calculate_hybrid_confidence(confidences),
+            'detectors': detector_names,
+            'detector_count': len(detector_names),
+            'original_confidences': confidences,
+        })
+
     return consensus_boxes
 
 
