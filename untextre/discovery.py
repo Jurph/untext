@@ -340,7 +340,7 @@ def compute_stack_statistics(paths: List[Path]) -> Optional[Dict[str, np.ndarray
             gray_M2 += delta * (gray - gray_mean)
             bgr_mean += (bgr - bgr_mean) / n
 
-    if n < 3:
+    if n < 3:  # EMPIRICAL — minimum n for Welford variance; broader validation pending
         return None
 
     mean_bgr = bgr_mean.astype(np.uint8)

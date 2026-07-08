@@ -22,23 +22,28 @@ logger = setup_logger(__name__)
 MASK_MODE_REGIONAL = "regional"
 MASK_MODE_LOCAL_SHAPE = "local-shape"
 MASK_MODE_LOCAL_COLOR = "local-color"
+MASK_MODE_BUDGETED_REGIONAL = "budgeted-regional"
 MASK_MODE_CHOICES = (
     MASK_MODE_REGIONAL,
     MASK_MODE_LOCAL_SHAPE,
     MASK_MODE_LOCAL_COLOR,
 )
+INTERNAL_MASK_MODE_CHOICES = MASK_MODE_CHOICES + (MASK_MODE_BUDGETED_REGIONAL,)
 DEFAULT_MASK_MODE = MASK_MODE_REGIONAL
 
 
 def mask_mode_options(mask_mode: str) -> dict:
     """Translate a user-facing mask mode to pipeline keyword arguments."""
-    if mask_mode not in MASK_MODE_CHOICES:
+    if mask_mode not in INTERNAL_MASK_MODE_CHOICES:
         raise ValueError(f"Unknown mask mode: {mask_mode}")
-    return {
+    options = {
         "expand_bboxes": False,
         "use_grabcut": mask_mode == MASK_MODE_LOCAL_SHAPE,
         "use_grabcut_expand": mask_mode == MASK_MODE_REGIONAL,
     }
+    if mask_mode == MASK_MODE_BUDGETED_REGIONAL:
+        options["use_budgeted_expand"] = True
+    return options
 
 
 @dataclass
@@ -161,7 +166,9 @@ def _generate_masks_and_inpaint(
     target_color: Optional[tuple] = None,
     use_grabcut: bool = False,
     use_grabcut_expand: bool = False,
+    use_budgeted_expand: bool = False,
     coverage_limit: float = 0.06,
+    mask_config: Optional[dict] = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Run spatial TF-IDF masking and inpainting for each consensus region.
 
@@ -179,6 +186,8 @@ def _generate_masks_and_inpaint(
         use_grabcut_expand: If True, extend each region mask using global color
                             matching and GrabCut seeded by the highest- and
                             lowest-FOM clusters found in the bbox analysis.
+        use_budgeted_expand: If True, extend masks with color/GrabCut proposals
+                             constrained by geometry cost from the detector bbox.
         coverage_limit: Fraction of total image pixels (0-1) above which inpainting
                         is skipped as implausible. A has-text-2 batch run found the
                         largest true positive at 5.76%, so 0.06 rejects larger
@@ -189,12 +198,17 @@ def _generate_masks_and_inpaint(
         If the coverage guardrail fires, ``inpainted_image`` is the original
         image unchanged and the mask is still returned for inspection.
     """
-    from .find_text_colors import find_mask_by_spatial_tf_idf, color_guided_expand
+    from .find_text_colors import (
+        color_guided_expand,
+        find_mask_by_spatial_tf_idf,
+        geometry_budgeted_expand,
+    )
     from .inpaint import inpaint_image
 
     h, w = image.shape[:2]
     combined_mask = np.zeros((h, w), dtype=np.uint8)
     regions_processed = 0
+    mask_config = mask_config or {}
 
     for i, bbox in enumerate(consensus_boxes, 1):
         logger.info(f"Processing region {i}/{len(consensus_boxes)} with g={g_value}: {bbox}")
@@ -203,9 +217,13 @@ def _generate_masks_and_inpaint(
             mask_result = find_mask_by_spatial_tf_idf(
                 image, bbox, num_clusters=g_value, debug=True,
                 target_color=target_color, use_grabcut=use_grabcut,
-                return_cluster_data=use_grabcut_expand,
+                return_cluster_data=use_grabcut_expand or use_budgeted_expand,
+                fom_threshold=mask_config.get("fom_threshold", 0.30),
+                cc_guard=mask_config.get("cc_guard", 0.85),
+                cleanup_close_px=mask_config.get("cleanup_close_px", 11),
+                cleanup_dilate_px=mask_config.get("cleanup_dilate_px", 13),
             )
-            if use_grabcut_expand:
+            if use_grabcut_expand or use_budgeted_expand:
                 region_mask, cluster_data = mask_result
             else:
                 region_mask = mask_result
@@ -224,6 +242,30 @@ def _generate_masks_and_inpaint(
                         cluster_data["bot_id"],
                         cluster_data["color_radius"],
                         cluster_data["bg_radius"],
+                        expand_factor=mask_config.get("expand_factor", 2.0),
+                        min_cc_px=mask_config.get("min_cc_px", 10),
+                        color_radius_multiplier=mask_config.get("color_radius_multiplier", 1.0),
+                        bg_radius_multiplier=mask_config.get("bg_radius_multiplier", 1.0),
+                        debug=True,
+                    )
+                elif use_budgeted_expand:
+                    full_mask = geometry_budgeted_expand(
+                        image, bbox, full_mask,
+                        cluster_data["centers"],
+                        cluster_data["top_id"],
+                        cluster_data["bot_id"],
+                        cluster_data["color_radius"],
+                        cluster_data["bg_radius"],
+                        expand_factor=mask_config.get("expand_factor", 2.0),
+                        inside_rejection_credit=mask_config.get("inside_rejection_credit", 1.0),
+                        max_budget_fraction=mask_config.get("max_budget_fraction", 0.50),
+                        long_weight=mask_config.get("long_weight", 1.0),
+                        short_weight=mask_config.get("short_weight", 4.0),
+                        short_axis_power=mask_config.get("short_axis_power", 1.5),
+                        connectivity_dilation_px=mask_config.get("connectivity_dilation_px", 3),
+                        min_cc_px=mask_config.get("min_cc_px", 10),
+                        color_radius_multiplier=mask_config.get("color_radius_multiplier", 1.0),
+                        bg_radius_multiplier=mask_config.get("bg_radius_multiplier", 1.0),
                         debug=True,
                     )
 
@@ -293,7 +335,9 @@ def process_image_array(
     auto_retry: bool = True,
     use_grabcut: bool = False,
     use_grabcut_expand: bool = False,
+    use_budgeted_expand: bool = False,
     coverage_limit: float = 0.06,
+    mask_config: Optional[dict] = None,
 ) -> PipelineResult:
     """Process an in-memory image through the consensus-based text-removal pipeline.
 
@@ -321,6 +365,8 @@ def process_image_array(
         use_grabcut_expand: Whether to extend masks using global color matching
                            and GrabCut seeded by the highest- and lowest-FOM
                            clusters from the bbox analysis (default: False).
+        use_budgeted_expand: Whether to extend masks using the experimental
+                           geometry-budgeted regional expansion (default: False).
         coverage_limit: Passed through to _generate_masks_and_inpaint. Skips
                        inpainting when mask exceeds this fraction of image area.
 
@@ -512,7 +558,9 @@ def process_image_array(
             image, consensus_boxes, initial_g, method, target_color,
             use_grabcut=use_grabcut,
             use_grabcut_expand=use_grabcut_expand,
+            use_budgeted_expand=use_budgeted_expand,
             coverage_limit=coverage_limit,
+            mask_config=mask_config,
         )
 
         timings['color_time'] = time.time() - color_start
@@ -540,7 +588,9 @@ def process_image_array(
                     image, consensus_boxes, 8, method, target_color,
                     use_grabcut=use_grabcut,
                     use_grabcut_expand=use_grabcut_expand,
+                    use_budgeted_expand=use_budgeted_expand,
                     coverage_limit=coverage_limit,
+                    mask_config=mask_config,
                 )
                 timings['retried_with_g8'] = True
                 timings['color_time'] += time.time() - retry_start
@@ -565,7 +615,9 @@ def process_single_image(
     auto_retry: bool = True,
     use_grabcut: bool = False,
     use_grabcut_expand: bool = False,
+    use_budgeted_expand: bool = False,
     coverage_limit: float = 0.06,
+    mask_config: Optional[dict] = None,
 ) -> Optional[dict]:
     """Process a single image file and save the cleaned output."""
     logger.info(f"Loading image: {image_path.name}")
@@ -596,7 +648,9 @@ def process_single_image(
         auto_retry=auto_retry,
         use_grabcut=use_grabcut,
         use_grabcut_expand=use_grabcut_expand,
+        use_budgeted_expand=use_budgeted_expand,
         coverage_limit=coverage_limit,
+        mask_config=mask_config,
     )
     result = pipeline_result.image
     mask = pipeline_result.mask

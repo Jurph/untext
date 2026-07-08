@@ -5,10 +5,10 @@ README or preserve old completed review notes.
 
 ## Should Fix
 
-- [ ] **Lowe ratio-test citation**: Add a Lowe (2004) citation comment to the `0.75`
+- [x] **Lowe ratio-test citation**: Add a Lowe (2004) citation comment to the `0.75`
   ratio-test constant. `(orb_matcher.py:135)`
 
-- [ ] **50% coverage guard comment**: Add one sentence explaining why a watermark
+- [x] **50% coverage guard comment**: Add one sentence explaining why a watermark
   covering more than 50% of the image is treated as spurious. `(orb_matcher.py:252-256)`
 
 - [ ] **LaMa paste-back coordinates**: Replace the redundant `subregion[0] + edge_pad_*`
@@ -16,43 +16,43 @@ README or preserve old completed review notes.
   variables — two sources of truth in a correctness-critical path.
   `(lama_inpainter.py:292-295)`
 
-- [ ] **edge_pad_size empirical label**: Add `# EMPIRICAL` label (or architectural
+- [x] **edge_pad_size empirical label**: Add `# EMPIRICAL` label (or architectural
   derivation) to `edge_pad_size = 32`. `(lama_inpainter.py:193-196)`
 
-- [ ] **Formula weight labels**: Add `# EMPIRICAL` labels to the floating-point
+- [x] **Formula weight labels**: Add `# EMPIRICAL` labels to the floating-point
   weights in `_component_shape_weight` and `compatibility`.
   `(watermark_consensus.py:624-625, 780-787)`
 
-- [ ] **Minimum-n label**: Add `# EMPIRICAL — minimum n for Welford variance; broader
+- [x] **Minimum-n label**: Add `# EMPIRICAL — minimum n for Welford variance; broader
   validation pending` to the `n < 3` guard. `(discovery.py:349)`
 
-- [ ] **metrics.py constant cross-references**: Add `granularity_experiment.py`
+- [x] **metrics.py constant cross-references**: Add `granularity_experiment.py`
   cross-reference directly to each threshold constant's comment (not only the module
   docstring). `(metrics.py:27-32)`
 
-- [ ] **preprocessor.py dead alias**: Remove `result_img = image` alias; write
+- [x] **preprocessor.py dead alias**: Remove `result_img = image` alias; write
   `cv2.cvtColor(image, ...)` directly. `(preprocessor.py:44)`
 
 - [ ] **preprocessor.py CLAHE/bilateral citation**: Update the module docstring and
   inline comments to name the dataset and define the FOM metric for the grid-search
   result. `(preprocessor.py:52-57)`
 
-- [ ] **morph_clean_mask dead bbox param**: Remove the unused `bbox: BBox` parameter
+- [x] **morph_clean_mask dead bbox param**: Remove the unused `bbox: BBox` parameter
   from `morph_clean_mask` and update all call sites. `(mask_generator.py:27)`
 
-- [ ] **mask_generator kernel labels**: Add `# EMPIRICAL` labels to
+- [x] **mask_generator kernel labels**: Add `# EMPIRICAL` labels to
   `close_kernel_size = 11`, `dilate_size = 13`, `blur_size = 9`.
   `(mask_generator.py:37-39)`
 
-- [ ] **Remove initialize_models**: Delete the dead `initialize_models` function from
+- [x] **Remove initialize_models**: Delete the dead `initialize_models` function from
   `detector.py` and remove it from `__init__.py`'s `__all__`.
   `(detector.py:86-107, __init__.py:14)`
 
-- [ ] **IoU threshold empirical note**: Update the IoU comment to read "EMPIRICAL —
+- [x] **IoU threshold empirical note**: Update the IoU comment to read "EMPIRICAL —
   validated on N=400 has-text-2 samples; broader validation pending".
   `(consensus.py:289)`
 
-- [ ] **Consensus padding label**: Add `# EMPIRICAL` label to the 10%-per-side
+- [x] **Consensus padding label**: Add `# EMPIRICAL` label to the 10%-per-side
   padding constant. `(consensus.py:397-417)`
 
 - [ ] **process_with_known_mask API**: Document (or add a `WatermarkTemplate`
@@ -144,6 +144,37 @@ README or preserve old completed review notes.
   its errors are independent enough to improve consensus before accepting the
   dependency/runtime cost.
 
+- [ ] **YOLOv8 watermark-detector tryout**: Benchmark
+  [`mnemic/watermarks_yolov8`](https://huggingface.co/mnemic/watermarks_yolov8)
+  against the current EAST/DocTR/EasyOCR panel on (a) the zero-corpus FP baseline
+  (`tests/images/zero_detector_fp_baseline/`) and (b) the synthetic watermark
+  benchmark, measuring recall, FP rate, and per-image latency. Unlike the panel,
+  it is watermark-specific rather than text-generic, so it may catch logo marks
+  the text detectors miss. If it dominates the slowest/least-accurate panel
+  member, give it that seat; validate error independence before changing the
+  2-of-3 consensus rule.
+
+- [ ] **Replace DocTR with YOLO11x in production consensus panel**: Ready-to-implement
+  ticket at `docs/superpowers/specs/2026-07-07-replace-doctr-with-yolo11x.md`. Known-truth
+  simulation of the actual production `find_consensus_boxes` algorithm (415-pair corpus)
+  shows the swap improves recall 92.3%->96.1%, cuts false-positive incidents 3.6%->2.7%,
+  cuts masked FP area 0.018%->0.015%, and cuts detector wall-clock ~5x (DocTR is 68x
+  slower than YOLO11x per image). Every axis improves; no tradeoff. Reproduce with
+  `scripts/simulate_production_consensus_swap.py`.
+
+- [ ] **DocTR receives BGR input on the normal path**: `detector.py:599` feeds
+  `load_image`'s BGR array straight into the DocTR predictor (trained on RGB);
+  EAST (`swapRB=True`) and EasyOCR (`BGR2RGB`) both convert explicitly. A/B test
+  (2026-07-06, 6 synthetic vivid-text cases + 6 real flagged photos, script at
+  `.codex-tmp/doctr_ab/run_ab.py`) showed detection differences within noise:
+  6/6 truth hits both arms, confidence deltas < 0.03, one threshold-straddling
+  box flicker. DELIBERATELY left unchanged to keep the frozen FP baseline
+  consistent (a KNOWN QUIRK comment now marks the call site). Revisit if DocTR
+  is ever used for recognition (color-sensitive) or when thresholds are next
+  recalibrated. The misleading signposts are fixed (2026-07-06): the
+  preprocessor docstring now states the BGR-convention R==G==B contract, and
+  the GRAY2RGB/GRAY2BGR alias confusion is documented at the conversion site.
+
 - [ ] **CLIP/ViT semantic bbox adjudication**: Consider scoring detector-proposed
   bbox crops with a lightweight OpenCLIP ViT (`ViT-B-32`/`ViT-B-16`) against prompt
   axes such as text/logo/URL vs natural texture/clothing/grass/backdrop. Use the
@@ -153,6 +184,15 @@ README or preserve old completed review notes.
 - [ ] **Output-quality regression coverage is still indirect**: The suite has strong
   unit/workflow coverage but few image-in/image-out assertions for final visual quality.
   Add focused regression tests around known failure cases.
+
+- [ ] **Promote has-text-2 bbox harvest into bbox/blob-selection tests**:
+  `tests/images/has_text_2_pipeline_bbox_harvest/` contains a completed 405-image
+  full-pipeline bbox-of-record harvest with review slots and overlays. It has strong
+  candidates for bbox optimization and blob selection: 145 ambiguous cases, 58
+  near/full-width expansions, 43 cases with >=4x bbox growth, 73 multi-bbox cases,
+  16 failover-only bbox hits, and 201 unresolved controls. Use `review_template.json`
+  to add human or multimodal ground-truth watermark bboxes before turning selected
+  cases into regression fixtures.
 
 ---
 

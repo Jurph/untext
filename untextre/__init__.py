@@ -13,7 +13,6 @@ __author__ = "Untextre Team"
 
 __all__ = [
     "TextDetector",
-    "initialize_models",
     "cleanup_vram",
     "preprocess_image",
     "detect_text_regions",
@@ -45,7 +44,7 @@ def __getattr__(name: str):
         return getattr(utils, name)
 
     # Heavy modules — only load when someone asks for them
-    if name in ("TextDetector", "initialize_models", "cleanup_vram", "detect_text_regions"):
+    if name in ("TextDetector", "cleanup_vram", "detect_text_regions"):
         from . import detector
         return getattr(detector, name)
 

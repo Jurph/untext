@@ -88,29 +88,6 @@ def get_east_net() -> cv2.dnn_Net:
     return _east_net
 
 
-def initialize_models(
-    detector_methods: List[str],
-    doctr_confidence_threshold: float = CLI_DEFAULT_CONFIDENCE,
-    doctr_min_text_size: int = 10,
-) -> None:
-    """Initialize detection models once for reuse across multiple images.
-    
-    Args:
-        detector_methods: List of methods to initialize ("doctr", "easyocr", "east", or combinations)
-    """
-    if "doctr" in detector_methods:
-        get_doctr_detector(
-            confidence_threshold=doctr_confidence_threshold,
-            min_text_size=doctr_min_text_size,
-        )
-
-    if "easyocr" in detector_methods:
-        get_easyocr_reader()
-
-    if "east" in detector_methods:
-        get_east_net()
-
-
 def cleanup_vram() -> None:
     """Force cleanup of GPU memory after detection operations.
     
@@ -618,7 +595,12 @@ class TextDetector:
             # Use the image as provided; callers own any project-level preprocessing.
             logger.debug("Running DocTR detection")
             
-            # Run detection (torch.no_grad context prevents gradient accumulation)
+            # Run detection (torch.no_grad context prevents gradient accumulation).
+            # KNOWN QUIRK: the BGR array goes in as-is even though DocTR was trained
+            # on RGB. A/B tested 2026-07-06 (vivid synthetic text + real flagged
+            # photos): detection deltas were within noise, and changing the input
+            # would perturb the frozen zero-corpus FP baseline. See TODO.md
+            # "DocTR receives BGR input" before "fixing" this.
             raw = self.predictor([image])
             if not isinstance(raw, list) or len(raw) == 0:
                 logger.warning("No text detected")

@@ -17,9 +17,11 @@ import cv2
 import numpy as np
 import pytest
 from untextre.find_text_colors import (
+    _bbox_geometry_cost,
     color_guided_expand,
     compute_cluster_fom,
     find_mask_by_spatial_tf_idf,
+    geometry_budgeted_expand,
     grabcut_refine,
 )
 
@@ -259,6 +261,137 @@ class TestColorGuidedExpand:
         assert result.shape == (100, 100)
         assert result.dtype == np.uint8
         assert np.all(result[full_mask == 255] == 255), "Result must include all confirmed pixels"
+
+
+class TestGeometryBudgetedExpand:
+    @pytest.fixture
+    def expand_setup(self):
+        img = np.full((100, 100, 3), (128, 128, 128), dtype=np.uint8)
+        cv2.putText(img, "TEST TEXT", (5, 65), cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7, (0, 0, 220), 2)
+        bbox = (0, 0, 100, 75)
+        region_mask, cluster_data = find_mask_by_spatial_tf_idf(
+            img, bbox, num_clusters=4, return_cluster_data=True
+        )
+        full_mask = np.zeros((100, 100), dtype=np.uint8)
+        full_mask[0:region_mask.shape[0], 0:region_mask.shape[1]] = region_mask
+        return img, bbox, full_mask, cluster_data
+
+    def test_horizontal_bbox_makes_long_axis_expansion_cheaper(self):
+        bbox = (20, 20, 40, 10)
+        left_cost = _bbox_geometry_cost(
+            bbox,
+            yy=np.array([25]),
+            xx=np.array([10]),
+            long_weight=1.0,
+            short_weight=4.0,
+            short_axis_power=1.5,
+        )[0]
+        above_cost = _bbox_geometry_cost(
+            bbox,
+            yy=np.array([10]),
+            xx=np.array([40]),
+            long_weight=1.0,
+            short_weight=4.0,
+            short_axis_power=1.5,
+        )[0]
+
+        assert left_cost < above_cost
+
+    def test_vertical_bbox_mirrors_long_axis_preference(self):
+        bbox = (20, 20, 10, 40)
+        above_cost = _bbox_geometry_cost(
+            bbox,
+            yy=np.array([10]),
+            xx=np.array([25]),
+            long_weight=1.0,
+            short_weight=4.0,
+            short_axis_power=1.5,
+        )[0]
+        left_cost = _bbox_geometry_cost(
+            bbox,
+            yy=np.array([40]),
+            xx=np.array([10]),
+            long_weight=1.0,
+            short_weight=4.0,
+            short_axis_power=1.5,
+        )[0]
+
+        assert above_cost < left_cost
+
+    def test_short_axis_cost_grows_superlinearly(self):
+        bbox = (20, 20, 40, 10)
+        costs = _bbox_geometry_cost(
+            bbox,
+            yy=np.array([15, 10]),
+            xx=np.array([40, 40]),
+            long_weight=1.0,
+            short_weight=4.0,
+            short_axis_power=1.5,
+        )
+        near_delta = costs[0] - 1.0
+        far_delta = costs[1] - 1.0
+
+        assert far_delta > near_delta * 2
+
+    def test_zero_budget_returns_confirmed_mask_unchanged(self, monkeypatch):
+        image = np.full((30, 40, 3), (128, 128, 128), dtype=np.uint8)
+        image[12, 18:23] = (0, 0, 220)
+        bbox = (10, 10, 10, 6)
+        confirmed = np.zeros((30, 40), dtype=np.uint8)
+        confirmed[12, 18:20] = 255
+        centers = np.array([[220.0, 0.0, 0.0], [128.0, 128.0, 128.0]], dtype=np.float32)
+
+        def reject_one_inside_candidate(_roi, gc_init, *_args, **_kwargs):
+            gc_init[5, 13] = cv2.GC_BGD
+
+        monkeypatch.setattr(cv2, "grabCut", reject_one_inside_candidate)
+
+        result = geometry_budgeted_expand(
+            image,
+            bbox,
+            confirmed,
+            centers,
+            top_id=0,
+            bot_id=1,
+            color_radius=1.0,
+            bg_radius=1.0,
+            max_budget_fraction=0.0,
+        )
+
+        np.testing.assert_array_equal(result, confirmed)
+
+    def test_disconnected_outside_candidates_are_rejected(self, monkeypatch):
+        image = np.full((30, 40, 3), (128, 128, 128), dtype=np.uint8)
+        bbox = (10, 10, 10, 6)
+        image[12, 18:23] = (0, 0, 220)
+        image[12, 5:8] = (0, 0, 220)
+        confirmed = np.zeros((30, 40), dtype=np.uint8)
+        confirmed[12, 18:20] = 255
+        centers = np.array([[220.0, 0.0, 0.0], [128.0, 128.0, 128.0]], dtype=np.float32)
+
+        def reject_one_inside_candidate(_roi, gc_init, *_args, **_kwargs):
+            gc_init[5, 13] = cv2.GC_BGD
+
+        monkeypatch.setattr(cv2, "grabCut", reject_one_inside_candidate)
+
+        result = geometry_budgeted_expand(
+            image,
+            bbox,
+            confirmed,
+            centers,
+            top_id=0,
+            bot_id=1,
+            color_radius=1.0,
+            bg_radius=1.0,
+            inside_rejection_credit=10.0,
+            max_budget_fraction=1.0,
+            min_cc_px=1,
+        )
+
+        assert result[12, 20] == 255
+        assert result[12, 6] == 0
+        assert np.all(result[confirmed == 255] == 255)
 
     def test_tiny_bbox_returns_unchanged(self, expand_setup):
         """1×1 bbox expands to 2×2 which is below the 3px minimum — returns confirmed_mask."""

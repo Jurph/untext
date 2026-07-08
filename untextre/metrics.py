@@ -24,10 +24,12 @@ logger = setup_logger(__name__)
 # =============================================================================
 
 # For bbox expansion: minimum values that indicate text-like regions (P25 of detected text)
+# Source: experiments/granularity_experiment.py
 EXPANSION_BLACKHAT_THRESHOLD = 2.5  # P25 of detected text regions
 EXPANSION_EDGE_ROW_THRESHOLD = 0.15  # P25 of detected text regions
 
 # For retry decision: values above these suggest text remnants remain
+# Source: experiments/granularity_experiment.py
 RETRY_BLACKHAT_THRESHOLD = 3.0  # Balances recall (85%) vs unnecessary retries (45%)
 RETRY_EDGE_ROW_THRESHOLD = 0.08  # Complements blackhat for horizontal watermarks
 

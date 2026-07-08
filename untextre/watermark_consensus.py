@@ -622,6 +622,7 @@ def _component_shape_weight(
     aspect_delta = abs(
         np.log(max(ref_component.aspect_ratio, 1e-6) / max(mov_component.aspect_ratio, 1e-6))
     )
+    # EMPIRICAL — exponential decay scales (0.9, 0.35) not formally validated
     aspect_weight = float(np.exp(-aspect_delta / 0.9))
     fill_weight = float(np.exp(-abs(ref_component.fill_ratio - mov_component.fill_ratio) / 0.35))
     solidity_weight = float(np.exp(-abs(ref_component.solidity - mov_component.solidity) / 0.35))
@@ -777,6 +778,7 @@ def _evaluate_pairwise_scale(
     )
     translation_response = max(0.0, min(float(response), 1.0))
 
+    # EMPIRICAL — weights (0.55, 0.25, 0.10, -0.45, -0.45) not formally validated
     compatibility = (
         0.55 * shared_core
         + 0.25 * dice

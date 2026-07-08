@@ -186,7 +186,7 @@ class LamaInpainter:  # pylint: disable=too-few-public-methods
                 
                 # If any edge is touched, pad the image with BORDER_REFLECT to give LaMa context
                 if touches_left or touches_right or touches_top or touches_bottom:
-                    edge_pad_size = 32  # Provide 32px of reflected context at edges
+                    edge_pad_size = 32  # EMPIRICAL — provides reflected context at edges; not formally validated
                     
                     edge_pad_left = edge_pad_size if touches_left else 0
                     edge_pad_right = edge_pad_size if touches_right else 0

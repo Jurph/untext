@@ -285,9 +285,8 @@ def find_consensus_boxes(detections: Dict[str, List[Tuple[int, int, int, int, fl
             if det2['used'] or det2['detector'] in {d['detector'] for d in overlapping_group}:
                 continue
                 
-            # A quick sample of ~400 relevant images showed strong support for
-            # IoU > 0.1 for filtering out spurious detections that happen to
-            # overlap with different modes.
+            # EMPIRICAL — validated on ~400 has-text-2 samples; broader validation pending.
+            # IoU > 0.1 groups detections that substantially overlap across detectors.
             overlap_ratio = calculate_bbox_iou(det1['bbox'], det2['bbox'])
 
             if overlap_ratio >= overlap_threshold:
@@ -400,7 +399,7 @@ def run_consensus_detection(image: np.ndarray, confidence_threshold: float = CLI
         x, y, box_w, box_h = consensus['bbox']
         detector_names = "+".join(sorted(consensus['detectors']))
         
-        # Calculate padding (20% = 10% on each side)
+        # EMPIRICAL — 10% per side chosen as a soft expansion; not formally validated.
         pad_w = int(box_w * 0.1)
         pad_h = int(box_h * 0.1)
         

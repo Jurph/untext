@@ -125,7 +125,7 @@ def find_known_mask_in_image(
         for match_pair in matches:
             if len(match_pair) == 2:
                 m, n = match_pair
-                if m.distance < 0.75 * n.distance:
+                if m.distance < 0.75 * n.distance:  # Lowe (2004) ratio test
                     good_matches.append(m)
 
         logger.info(
@@ -242,6 +242,8 @@ def find_known_mask_in_image(
 
         mask_pixels = np.sum(binary_mask > 0)
         image_pixels = h_target * w_target
+        # A legitimate watermark rarely covers half the image; beyond 50% the
+        # match is almost certainly a false positive (background texture correlation).
         if mask_pixels >= image_pixels * 0.5:
             logger.warning(
                 f"Mask covers {100 * mask_pixels / image_pixels:.1f}% of image "

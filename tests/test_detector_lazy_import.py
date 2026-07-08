@@ -21,20 +21,3 @@ def test_detector_import_does_not_construct_easyocr_reader(monkeypatch):
     assert detector._easyocr_reader is None
 
 
-def test_initialize_models_imports_easyocr_only_for_easyocr(monkeypatch):
-    import untextre.detector as detector
-
-    class FakeReader:
-        def __init__(self, langs, verbose=False):
-            self.langs = langs
-            self.verbose = verbose
-
-    fake_easyocr = types.ModuleType("easyocr")
-    fake_easyocr.Reader = FakeReader
-    monkeypatch.setitem(sys.modules, "easyocr", fake_easyocr)
-    monkeypatch.setattr(detector, "_easyocr_reader", None)
-
-    detector.initialize_models(["easyocr"])
-
-    assert isinstance(detector._easyocr_reader, FakeReader)
-    assert detector._easyocr_reader.langs == ["en"]

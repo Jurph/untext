@@ -32,22 +32,19 @@ class TestMorphCleanMask:
 
     def test_output_is_binary(self, simple_mask):
         """Cleaned mask should contain only 0 and 255 values."""
-        bbox = (40, 40, 20, 20)
-        cleaned = morph_clean_mask(simple_mask, bbox)
+        cleaned = morph_clean_mask(simple_mask)
 
         unique_values = set(np.unique(cleaned))
         assert unique_values <= {0, 255}, f"Non-binary values found: {unique_values}"
 
     def test_preserves_shape(self, simple_mask):
         """Cleaned mask should have the same dimensions as input."""
-        bbox = (40, 40, 20, 20)
-        cleaned = morph_clean_mask(simple_mask, bbox)
+        cleaned = morph_clean_mask(simple_mask)
         assert cleaned.shape == simple_mask.shape
 
     def test_does_not_erase_solid_block(self, simple_mask):
         """A solid block should survive cleanup (possibly grow, but not vanish)."""
-        bbox = (40, 40, 20, 20)
-        cleaned = morph_clean_mask(simple_mask, bbox)
+        cleaned = morph_clean_mask(simple_mask)
 
         # The original 20x20 block had 400 white pixels.
         # After closing + dilation it should have at least as many.
@@ -56,6 +53,5 @@ class TestMorphCleanMask:
     def test_empty_mask_stays_empty(self):
         """An all-black mask should remain all-black after cleanup."""
         empty = np.zeros((100, 100), dtype=np.uint8)
-        bbox = (40, 40, 20, 20)
-        cleaned = morph_clean_mask(empty, bbox)
+        cleaned = morph_clean_mask(empty)
         assert np.sum(cleaned == 255) == 0

@@ -10,7 +10,8 @@ The main preprocessing pipeline includes:
 
 These settings were determined through comprehensive grid search testing that
 evaluated hundreds of parameter combinations against ground truth text on
-real test images, achieving a Figure of Merit of -3.1942 (see experiments/grid_search.py for scale, direction, and dataset details).
+real test images. Grid search winner at FOM = -3.1942 (lower is better; see
+experiments/grid_search.py for scale, direction, and dataset details).
 """
 
 import cv2
@@ -37,16 +38,16 @@ def preprocess_image(image: ImageArray) -> Optional[ImageArray]:
         image: Input image as numpy array (BGR format expected)
         
     Returns:
-        Preprocessed image as RGB numpy array, or None if processing fails
+        3-channel grayscale image (BGR-convention array with R == G == B) ready
+        for the detector paths, or None if processing fails
     """
     
     try:
-        result_img = image
         # Convert to grayscale before contrast/noise processing.
-        if len(result_img.shape) == 3:
-            gray = cv2.cvtColor(result_img, cv2.COLOR_BGR2GRAY)
+        if len(image.shape) == 3:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         else:
-            gray = result_img
+            gray = image
     
         # Apply optimized CLAHE for contrast enhancement (grid search winner)
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
@@ -58,8 +59,10 @@ def preprocess_image(image: ImageArray) -> Optional[ImageArray]:
         
         # Keep as grayscale - no thresholding (grid search found this works best).
         
-        # Convert back to 3 channels for detector APIs that expect color input.
-        preprocessed = cv2.cvtColor(filtered, cv2.COLOR_GRAY2RGB)
+        # Replicate gray into 3 channels for detector APIs that expect color input.
+        # GRAY2BGR to match the codebase-wide BGR convention (it is the same OpenCV
+        # enum as GRAY2RGB, and the output has R == G == B either way).
+        preprocessed = cv2.cvtColor(filtered, cv2.COLOR_GRAY2BGR)
         return preprocessed
         
     except Exception:

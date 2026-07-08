@@ -34,6 +34,12 @@ def test_mask_mode_options_match_user_facing_modes():
         "use_grabcut": False,
         "use_grabcut_expand": False,
     }
+    assert mask_mode_options("budgeted-regional") == {
+        "expand_bboxes": False,
+        "use_grabcut": False,
+        "use_grabcut_expand": False,
+        "use_budgeted_expand": True,
+    }
 
 
 def test_mask_mode_options_reject_unknown_mode():
@@ -178,6 +184,29 @@ class TestProcessImageArray:
         np.testing.assert_array_equal(result.mask, mask)
         np.testing.assert_array_equal(result.image, cleaned)
         np.testing.assert_array_equal(image, np.ones((40, 80, 3), dtype=np.uint8) * 200)
+
+    def test_budgeted_expand_option_reaches_mask_generation(self, monkeypatch):
+        image = np.ones((40, 80, 3), dtype=np.uint8) * 200
+        monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: image.copy())
+        monkeypatch.setattr(metrics_mod, "needs_retry", lambda _region: False)
+
+        captured = {}
+
+        def fake_generate(img, boxes, _g, _method, _target, **kwargs):
+            captured["use_budgeted_expand"] = kwargs["use_budgeted_expand"]
+            return np.zeros(img.shape[:2], dtype=np.uint8), img.copy()
+
+        monkeypatch.setattr(pipeline_mod, "_generate_masks_and_inpaint", fake_generate)
+
+        process_image_array(
+            image,
+            method="telea",
+            forced_bbox=(12, 8, 24, 16),
+            auto_retry=False,
+            use_budgeted_expand=True,
+        )
+
+        assert captured["use_budgeted_expand"] is True
 
 
 class TestProcessSingleImageFailovers:
@@ -362,6 +391,66 @@ class TestGenerateMasksAndInpaint:
 
         np.testing.assert_array_equal(combined_mask, mask)
         np.testing.assert_array_equal(result, image)
+
+    def test_budgeted_expand_requests_cluster_data_and_uses_budgeted_path(self, monkeypatch):
+        image = np.ones((20, 30, 3), dtype=np.uint8) * 180
+        region_mask = np.zeros((6, 10), dtype=np.uint8)
+        region_mask[2, 4:6] = 255
+        cluster_data = {
+            "centers": np.array([[0.0, 0.0, 0.0], [180.0, 180.0, 180.0]], dtype=np.float32),
+            "top_id": 0,
+            "bot_id": 1,
+            "color_radius": 1.0,
+            "bg_radius": 1.0,
+        }
+
+        import untextre.find_text_colors as colors_mod
+        import untextre.inpaint as inpaint_mod
+
+        calls = {}
+
+        def fake_find(*_args, **kwargs):
+            calls["return_cluster_data"] = kwargs["return_cluster_data"]
+            calls["use_grabcut"] = kwargs["use_grabcut"]
+            return region_mask, cluster_data
+
+        def fake_budgeted(img, bbox, confirmed, centers, top_id, bot_id, color_radius, bg_radius, **_kwargs):
+            calls["budgeted"] = {
+                "bbox": bbox,
+                "confirmed_pixels": int(np.sum(confirmed == 255)),
+                "top_id": top_id,
+                "bot_id": bot_id,
+            }
+            expanded = confirmed.copy()
+            expanded[12, 20] = 255
+            return expanded
+
+        def fail_color_guided(*_args, **_kwargs):
+            raise AssertionError("budgeted-regional should not call color_guided_expand")
+
+        monkeypatch.setattr(colors_mod, "find_mask_by_spatial_tf_idf", fake_find)
+        monkeypatch.setattr(colors_mod, "geometry_budgeted_expand", fake_budgeted)
+        monkeypatch.setattr(colors_mod, "color_guided_expand", fail_color_guided)
+        monkeypatch.setattr(inpaint_mod, "inpaint_image", lambda img, _mask, bbox=None, method="telea": img.copy())
+
+        combined_mask, _result = _generate_masks_and_inpaint(
+            image,
+            [(10, 10, 10, 6)],
+            g_value=4,
+            method="telea",
+            target_color=None,
+            use_budgeted_expand=True,
+        )
+
+        assert calls["return_cluster_data"] is True
+        assert calls["use_grabcut"] is False
+        assert calls["budgeted"] == {
+            "bbox": (10, 10, 10, 6),
+            "confirmed_pixels": 2,
+            "top_id": 0,
+            "bot_id": 1,
+        }
+        assert combined_mask[12, 20] == 255
 
 
 class TestProcessSingleImageEdgeCases:

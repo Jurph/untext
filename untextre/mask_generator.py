@@ -7,12 +7,17 @@ binary masks for better inpainting results.
 import cv2
 import numpy as np
 
-from .utils import MaskArray, BBox, setup_logger
+from .utils import MaskArray, setup_logger
 
 logger = setup_logger(__name__)
 
 
-def morph_clean_mask(mask: MaskArray, bbox: BBox) -> MaskArray:
+def morph_clean_mask(
+    mask: MaskArray,
+    *,
+    cleanup_close_px: int = 11,
+    cleanup_dilate_px: int = 13,
+) -> MaskArray:
     """Apply morphological operations to clean up a binary mask.
 
     This function applies a series of morphological operations to:
@@ -26,7 +31,6 @@ def morph_clean_mask(mask: MaskArray, bbox: BBox) -> MaskArray:
 
     Args:
         mask: Binary mask (H×W uint8)
-        bbox: Tuple (x, y, w, h) from the original text detection
 
     Returns:
         Cleaned binary mask
@@ -34,10 +38,9 @@ def morph_clean_mask(mask: MaskArray, bbox: BBox) -> MaskArray:
     initial_white_pixels = np.sum(mask == 255)
     logger.debug(f"Starting morphological cleanup with {initial_white_pixels} white pixels")
 
-    # Simplified parameters for detail preservation
-    close_kernel_size = 11
-    dilate_size = 13
-    blur_size = 9
+    close_kernel_size = int(cleanup_close_px)
+    dilate_size = int(cleanup_dilate_px)
+    blur_size = 9  # EMPIRICAL — not yet validated; chosen to match kernel scale
 
     # Pad mask to avoid edge artifacts during morphological operations
     # Use BORDER_REFLECT to mirror the pattern near edges (more realistic than REPLICATE)
@@ -48,14 +51,20 @@ def morph_clean_mask(mask: MaskArray, bbox: BBox) -> MaskArray:
     )
 
     # 1. Morphological closing to fill gaps and connect text fragments
-    kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (close_kernel_size, close_kernel_size))
-    padded_mask = cv2.morphologyEx(padded_mask, cv2.MORPH_CLOSE, kernel_close)
-    logger.debug(f"After closing: {np.sum(padded_mask == 255)} white pixels (padded)")
+    if close_kernel_size > 0:
+        close_kernel_size = max(1, close_kernel_size)
+        kernel_close = cv2.getStructuringElement(
+            cv2.MORPH_RECT, (close_kernel_size, close_kernel_size)
+        )
+        padded_mask = cv2.morphologyEx(padded_mask, cv2.MORPH_CLOSE, kernel_close)
+        logger.debug(f"After closing: {np.sum(padded_mask == 255)} white pixels (padded)")
 
     # 2. Light dilation to ensure good inpainting coverage
-    kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_size, dilate_size))
-    padded_mask = cv2.dilate(padded_mask, kernel_dilate)
-    logger.debug(f"After dilation: {np.sum(padded_mask == 255)} white pixels (padded)")
+    if dilate_size > 0:
+        dilate_size = max(1, dilate_size)
+        kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_size, dilate_size))
+        padded_mask = cv2.dilate(padded_mask, kernel_dilate)
+        logger.debug(f"After dilation: {np.sum(padded_mask == 255)} white pixels (padded)")
 
     # 3. Light Gaussian blur for smooth edges
     padded_mask = cv2.GaussianBlur(padded_mask, (blur_size, blur_size), 0)

@@ -208,6 +208,8 @@ def color_guided_expand(
     bg_radius: float,
     expand_factor: float = 2.0,
     min_cc_px: int = 10,
+    color_radius_multiplier: float = 1.0,
+    bg_radius_multiplier: float = 1.0,
     iterations: int = 5,
     debug: bool = False,
 ) -> np.ndarray:
@@ -262,6 +264,8 @@ def color_guided_expand(
     roi_flat = roi.reshape(-1, 3).astype(np.float32)[:, [2, 1, 0]]  # BGR→RGB
 
     # --- Distance-threshold color matching (not nearest-centroid) ---
+    color_radius = float(color_radius) * float(color_radius_multiplier)
+    bg_radius = float(bg_radius) * float(bg_radius_multiplier)
     d_top = np.sqrt(((roi_flat - centers[top_id]) ** 2).sum(axis=1))
     d_bot = np.sqrt(((roi_flat - centers[bot_id]) ** 2).sum(axis=1))
     roi_h, roi_w = roi.shape[:2]
@@ -331,6 +335,204 @@ def color_guided_expand(
     return result
 
 
+def _expanded_bbox_roi(
+    image_shape: tuple[int, int],
+    bbox: BBox,
+    expand_factor: float,
+) -> tuple[int, int, int, int]:
+    img_h, img_w = image_shape
+    x, y, w, h = bbox
+    cx, cy = x + w // 2, y + h // 2
+    ew, eh = int(w * expand_factor), int(h * expand_factor)
+    x1 = max(0, cx - ew // 2)
+    y1 = max(0, cy - eh // 2)
+    x2 = min(img_w, x1 + ew)
+    y2 = min(img_h, y1 + eh)
+    return x1, y1, x2, y2
+
+
+def _bbox_geometry_cost(
+    bbox: BBox,
+    yy: np.ndarray,
+    xx: np.ndarray,
+    *,
+    long_weight: float,
+    short_weight: float,
+    short_axis_power: float,
+) -> np.ndarray:
+    x, y, w, h = bbox
+    x2 = x + w - 1
+    y2 = y + h - 1
+
+    left = np.maximum(x - xx, 0)
+    right = np.maximum(xx - x2, 0)
+    above = np.maximum(y - yy, 0)
+    below = np.maximum(yy - y2, 0)
+
+    outside_x = np.maximum(left, right).astype(np.float32)
+    outside_y = np.maximum(above, below).astype(np.float32)
+    norm_w = max(float(w), 1.0)
+    norm_h = max(float(h), 1.0)
+
+    if w >= h:
+        long_distance = outside_x / norm_w
+        short_distance = outside_y / norm_h
+    else:
+        long_distance = outside_y / norm_h
+        short_distance = outside_x / norm_w
+
+    return (
+        1.0
+        + long_weight * long_distance
+        + short_weight * np.power(short_distance, short_axis_power)
+    )
+
+
+def _remove_small_components(mask: np.ndarray, min_cc_px: int) -> np.ndarray:
+    if min_cc_px <= 1 or int(np.sum(mask > 0)) == 0:
+        return mask
+    cleaned = mask.copy()
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(
+        cleaned.astype(np.uint8), connectivity=8
+    )
+    for cc_id in range(1, num_labels):
+        if stats[cc_id, cv2.CC_STAT_AREA] < min_cc_px:
+            cleaned[labels == cc_id] = 0
+    return cleaned
+
+
+def geometry_budgeted_expand(
+    image: ImageArray,
+    bbox: BBox,
+    confirmed_mask: np.ndarray,
+    centers: np.ndarray,
+    top_id: int,
+    bot_id: int,
+    color_radius: float,
+    bg_radius: float,
+    expand_factor: float = 2.0,
+    inside_rejection_credit: float = 1.0,
+    max_budget_fraction: float = 0.50,
+    long_weight: float = 1.0,
+    short_weight: float = 4.0,
+    short_axis_power: float = 1.5,
+    connectivity_dilation_px: int = 3,
+    min_cc_px: int = 10,
+    color_radius_multiplier: float = 1.0,
+    bg_radius_multiplier: float = 1.0,
+    iterations: int = 5,
+    debug: bool = False,
+) -> np.ndarray:
+    """Expand a confirmed mask by spending a geometry budget on outside pixels.
+
+    Pixels are proposed by color matching plus GrabCut in an expanded bbox ROI,
+    but pixels outside the detector bbox are admitted cheapest-first by distance
+    from the bbox. Expansion along the bbox long axis is cheaper than
+    perpendicular swelling.
+    """
+    x, y, w, h = bbox
+    bbox_area = max(w * h, 0)
+    x1, y1, x2, y2 = _expanded_bbox_roi(image.shape[:2], bbox, expand_factor)
+    roi_w = x2 - x1
+    roi_h = y2 - y1
+    if roi_w < 3 or roi_h < 3:
+        return confirmed_mask
+
+    roi = image[y1:y2, x1:x2]
+    roi_flat = roi.reshape(-1, 3).astype(np.float32)[:, [2, 1, 0]]
+    color_radius = float(color_radius) * float(color_radius_multiplier)
+    bg_radius = float(bg_radius) * float(bg_radius_multiplier)
+    d_top = np.sqrt(((roi_flat - centers[top_id]) ** 2).sum(axis=1)).reshape(roi_h, roi_w)
+    d_bot = np.sqrt(((roi_flat - centers[bot_id]) ** 2).sum(axis=1)).reshape(roi_h, roi_w)
+
+    candidate_foreground = d_top <= color_radius
+    definite_background = d_bot <= bg_radius
+
+    gc_init = np.full((roi_h, roi_w), cv2.GC_PR_BGD, dtype=np.uint8)
+    gc_init[definite_background] = cv2.GC_BGD
+    gc_init[candidate_foreground] = cv2.GC_FGD
+
+    bgd_model = np.zeros((1, 65), np.float64)
+    fgd_model = np.zeros((1, 65), np.float64)
+    try:
+        cv2.grabCut(
+            roi,
+            gc_init,
+            None,
+            bgd_model,
+            fgd_model,
+            iterations,
+            cv2.GC_INIT_WITH_MASK,
+        )
+    except cv2.error as e:
+        if debug:
+            logger.warning(f"Budgeted expand GrabCut failed ({e}), returning confirmed_mask")
+        return confirmed_mask
+
+    grabcut_foreground = (gc_init == cv2.GC_FGD) | (gc_init == cv2.GC_PR_FGD)
+
+    bbox_roi_mask = np.zeros((roi_h, roi_w), dtype=bool)
+    bx1 = max(x, x1) - x1
+    by1 = max(y, y1) - y1
+    bx2 = min(x + w, x2) - x1
+    by2 = min(y + h, y2) - y1
+    if bx2 > bx1 and by2 > by1:
+        bbox_roi_mask[by1:by2, bx1:bx2] = True
+
+    inside_color_candidates = candidate_foreground & bbox_roi_mask
+    inside_rejected = inside_color_candidates & ~grabcut_foreground
+    budget = float(np.sum(inside_rejected)) * inside_rejection_credit
+    budget = min(budget, max_budget_fraction * bbox_area)
+    if budget <= 0:
+        return confirmed_mask.copy()
+
+    outside_candidates = grabcut_foreground & candidate_foreground & ~bbox_roi_mask
+    if not np.any(outside_candidates):
+        return confirmed_mask.copy()
+
+    confirmed_roi = confirmed_mask[y1:y2, x1:x2] > 0
+    dilation_size = max(1, int(connectivity_dilation_px))
+    kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilation_size, dilation_size))
+    reachable = cv2.dilate(confirmed_roi.astype(np.uint8) * 255, kern, iterations=1) > 0
+    candidate_u8 = outside_candidates.astype(np.uint8)
+    num_labels, labels, _stats, _ = cv2.connectedComponentsWithStats(candidate_u8, connectivity=8)
+    connected_candidates = np.zeros_like(outside_candidates)
+    for cc_id in range(1, num_labels):
+        cc_mask = labels == cc_id
+        if np.any(cc_mask & reachable):
+            connected_candidates |= cc_mask
+
+    if not np.any(connected_candidates):
+        return confirmed_mask.copy()
+
+    local_yy, local_xx = np.nonzero(connected_candidates)
+    global_yy = local_yy + y1
+    global_xx = local_xx + x1
+    costs = _bbox_geometry_cost(
+        bbox,
+        global_yy,
+        global_xx,
+        long_weight=long_weight,
+        short_weight=short_weight,
+        short_axis_power=short_axis_power,
+    )
+    order = np.argsort(costs, kind="stable")
+    sorted_costs = costs[order]
+    cumulative = np.cumsum(sorted_costs)
+    keep_count = int(np.searchsorted(cumulative, budget, side="right"))
+    if keep_count <= 0:
+        return confirmed_mask.copy()
+
+    selected = np.zeros((roi_h, roi_w), dtype=np.uint8)
+    keep = order[:keep_count]
+    selected[local_yy[keep], local_xx[keep]] = 255
+    selected = _remove_small_components(selected, min_cc_px)
+
+    result = confirmed_mask.copy()
+    result[y1:y2, x1:x2] = cv2.bitwise_or(result[y1:y2, x1:x2], selected)
+    return result
+
+
 def find_mask_by_spatial_tf_idf(
     image: ImageArray,
     bbox: BBox,
@@ -341,6 +543,8 @@ def find_mask_by_spatial_tf_idf(
     # against the 18K watermark/color-cluster experiment set.
     fom_threshold: float = 0.30,
     cc_guard: float = 0.85,
+    cleanup_close_px: int = 11,
+    cleanup_dilate_px: int = 13,
     use_grabcut: bool = False,
     return_cluster_data: bool = False,
 ) -> np.ndarray:
@@ -647,7 +851,11 @@ def find_mask_by_spatial_tf_idf(
         binary_mask = grabcut_refine(bbox_region, binary_mask, debug=debug)
 
     # Apply morphological operations to clean up the mask
-    cleaned_mask = morph_clean_mask(binary_mask, bbox)
+    cleaned_mask = morph_clean_mask(
+        binary_mask,
+        cleanup_close_px=cleanup_close_px,
+        cleanup_dilate_px=cleanup_dilate_px,
+    )
 
     if debug:
         mask_pixels_after_morph = np.sum(cleaned_mask == 255)
