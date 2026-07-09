@@ -11,10 +11,11 @@ README or preserve old completed review notes.
 - [x] **50% coverage guard comment**: Add one sentence explaining why a watermark
   covering more than 50% of the image is treated as spurious. `(orb_matcher.py:252-256)`
 
-- [ ] **LaMa paste-back coordinates**: Replace the redundant `subregion[0] + edge_pad_*`
-  recomputation at paste-back with the already-adjusted `x1, y1, x2, y2` local
-  variables — two sources of truth in a correctness-critical path.
-  `(lama_inpainter.py:292-295)`
+- [x] **LaMa paste-back coordinates**: Extracted `paste_subregion(full_image, patch,
+  x1, y1, x2, y2)` as the single source of truth for paste-back geometry (owns the
+  resize-on-mismatch); the method now passes its existing edge-pad-adjusted
+  `x1,y1,x2,y2`, and the duplicate `subregion[0] + edge_pad_*` recompute is deleted.
+  Guarded by `TestPasteSubregion` (placement + resize). `(lama_inpainter.py)`
 
 - [x] **edge_pad_size empirical label**: Add `# EMPIRICAL` label (or architectural
   derivation) to `edge_pad_size = 32`. `(lama_inpainter.py:193-196)`

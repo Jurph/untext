@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 
 from untextre.telea_inpainter import TeleaInpainter
 import untextre.lama_inpainter as lama_mod
-from untextre.lama_inpainter import select_device, LamaInpainter
+from untextre.lama_inpainter import select_device, LamaInpainter, paste_subregion
 
 def create_test_image(size: Tuple[int, int] = (100, 100), text: str = "Test") -> Tuple[np.ndarray, np.ndarray]:
     """Create a test image with text.
@@ -487,3 +487,34 @@ class TestLamaInpainterProcessing:
         result = inpainter.inpaint(image, mask, subregion=(20, 20, 60, 60))
         # Despite wrong model output, final result should match original image size
         assert result.shape == image.shape
+
+
+# =========================================================================
+# paste_subregion — single-source-of-truth paste-back helper
+# =========================================================================
+
+class TestPasteSubregion:
+    """paste_subregion pastes an inpainted patch back at the given coordinates."""
+
+    def test_pastes_patch_at_exact_coordinates(self) -> None:
+        full = np.zeros((10, 10, 3), dtype=np.uint8)
+        patch = np.full((4, 4, 3), 255, dtype=np.uint8)
+
+        result = paste_subregion(full, patch, 2, 3, 6, 7)
+
+        # Patch lands exactly at [y1:y2, x1:x2] = [3:7, 2:6].
+        assert np.all(result[3:7, 2:6] == 255)
+        # Nothing outside that box is touched.
+        untouched = result.copy()
+        untouched[3:7, 2:6] = 0
+        assert np.all(untouched == 0)
+
+    def test_resizes_patch_when_size_mismatches(self) -> None:
+        full = np.zeros((10, 10, 3), dtype=np.uint8)
+        patch = np.full((2, 2, 3), 200, dtype=np.uint8)  # smaller than the 4x4 target box
+
+        result = paste_subregion(full, patch, 1, 1, 5, 5)
+
+        region = result[1:5, 1:5]
+        assert region.shape == (4, 4, 3)   # patch resized up to fill the target box
+        assert np.all(region == 200)       # a uniform patch stays uniform after resize

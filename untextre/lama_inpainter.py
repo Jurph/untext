@@ -72,6 +72,32 @@ def select_device(device: str = "cuda") -> str:
         return "cpu"
 
 
+def paste_subregion(
+    full_image: np.ndarray,
+    patch: np.ndarray,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+) -> np.ndarray:
+    """Paste an inpainted ``patch`` back into ``full_image`` at ``[y1:y2, x1:x2]``.
+
+    Single source of truth for subregion paste-back geometry: the caller passes
+    the same (already edge-pad-adjusted) coordinates it used to crop the
+    subregion, so the crop and the paste cannot drift apart.
+    """
+    target_h, target_w = y2 - y1, x2 - x1
+    patch_h, patch_w = patch.shape[:2]
+    if (patch_h, patch_w) != (target_h, target_w):
+        logger.warning(
+            "Inpainted patch size %sx%s does not match subregion %sx%s - resizing",
+            patch_w, patch_h, target_w, target_h,
+        )
+        patch = cv2.resize(patch, (target_w, target_h), interpolation=cv2.INTER_AREA)
+    full_image[y1:y2, x1:x2] = patch
+    return full_image
+
+
 class LamaInpainter:  # pylint: disable=too-few-public-methods
     """Thin convenience wrapper around the SAIC-AI LaMa model."""
 
@@ -282,24 +308,9 @@ class LamaInpainter:  # pylint: disable=too-few-public-methods
             if full_image is not None:
                 logger.info("Pasting subregion back into full image")
                 
-                # Use the potentially adjusted coordinates (after edge padding)
-                x1_adj = subregion[0] + edge_pad_left
-                y1_adj = subregion[1] + edge_pad_top
-                x2_adj = subregion[2] + edge_pad_left
-                y2_adj = subregion[3] + edge_pad_top
-                
-                # Ensure LaMa output matches the subregion size
-                target_h = y2_adj - y1_adj
-                target_w = x2_adj - x1_adj
-                out_h, out_w = out_bgr.shape[:2]
-                if (out_h, out_w) != (target_h, target_w):
-                    logger.warning(
-                        "LaMa output size %sx%s does not match subregion %sx%s - resizing",
-                        out_w, out_h, target_w, target_h,
-                    )
-                    out_bgr = cv2.resize(out_bgr, (target_w, target_h), interpolation=cv2.INTER_AREA)
-                full_image[y1_adj:y2_adj, x1_adj:x2_adj] = out_bgr
-                out_bgr = full_image
+                # x1, y1, x2, y2 are the edge-pad-adjusted coordinates already used
+                # to crop this subregion above — the single source of truth for placement.
+                out_bgr = paste_subregion(full_image, out_bgr, x1, y1, x2, y2)
                 
                 # If we padded the image for edge handling, crop back to original dimensions
                 if edge_pad_size > 0:
