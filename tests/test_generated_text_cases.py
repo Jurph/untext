@@ -205,8 +205,8 @@ def test_budgeted_regional_generated_text_fixture_metrics(
             **mask_mode_options("budgeted-regional"),
         )
 
-        predicted = pipeline_result.mask > 0
-        truth = truth_mask > 0
+        predicted = np.squeeze(pipeline_result.mask > 0)
+        truth = np.squeeze(truth_mask > 0)
         intersection = int(np.logical_and(predicted, truth).sum())
         union = int(np.logical_or(predicted, truth).sum())
         predicted_count = int(predicted.sum())
