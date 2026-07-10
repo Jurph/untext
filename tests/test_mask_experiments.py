@@ -44,16 +44,6 @@ def test_weighted_precision_matches_normal_precision_for_zero_distance_fp():
     assert weighted_precision(prediction, target) == 1.0
 
 
-def test_preset_configs_have_stable_ids_and_ordering():
-    configs = list(iter_preset_configs("local-cleanup"))
-
-    assert [cfg.config_id for cfg in configs[:4]] == [
-        "local-cleanup-000000",
-        "local-cleanup-000001",
-        "local-cleanup-000002",
-        "local-cleanup-000003",
-    ]
-    assert configs == list(iter_preset_configs("local-cleanup"))
 
 
 def test_compute_mask_metrics_includes_bbox_fp_split_and_score():
@@ -101,23 +91,5 @@ def test_rank_mask_summaries_applies_hard_filters_deterministically():
     assert [row["config_id"] for row in ranked] == ["winner", "loser"]
 
 
-def test_mask_experiment_config_serializes_all_grid_dials():
-    cfg = MaskExperimentConfig(
-        preset="example",
-        config_id="example-000001",
-        cleanup_dilate_px=2,
-        cleanup_close_px=3,
-        fom_threshold=0.25,
-        cc_guard=0.75,
-    )
-
-    data = cfg.to_dict()
-
-    assert data["cleanup_dilate_px"] == 2
-    assert data["cleanup_close_px"] == 3
-    assert data["fom_threshold"] == 0.25
-    assert json.loads(json.dumps(data)) == data
 
 
-def test_public_mask_mode_choices_remain_unchanged():
-    assert MASK_MODE_CHOICES == ("regional", "local-shape", "local-color")

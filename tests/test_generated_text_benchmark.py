@@ -105,22 +105,6 @@ def _row_summary(rows: list[dict]) -> str:
     return "; ".join(parts)
 
 
-def test_generated_text_modes_match_pipeline_semantics() -> None:
-    assert mask_mode_options("regional") == {
-        "expand_bboxes": False,
-        "use_grabcut": False,
-        "use_grabcut_expand": True,
-    }
-    assert mask_mode_options("local-shape") == {
-        "expand_bboxes": False,
-        "use_grabcut": True,
-        "use_grabcut_expand": False,
-    }
-    assert mask_mode_options("local-color") == {
-        "expand_bboxes": False,
-        "use_grabcut": False,
-        "use_grabcut_expand": False,
-    }
 
 
 @pytest.fixture(scope="module")

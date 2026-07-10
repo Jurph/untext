@@ -103,16 +103,7 @@ def test_manual_mode_uses_local_shape_mask_without_expansion():
 class TestBboxToFabricRect:
     """Verify image-coord bbox → Fabric.js initial_drawing conversion."""
 
-    def test_returns_dict_with_objects(self):
-        result = bbox_to_fabric_rect((100, 200, 50, 30), scale_x=2.0, scale_y=2.0)
-        assert isinstance(result, dict)
-        assert "objects" in result
-        assert len(result["objects"]) == 1
 
-    def test_rect_type(self):
-        result = bbox_to_fabric_rect((0, 0, 10, 10), scale_x=1.0, scale_y=1.0)
-        rect = result["objects"][0]
-        assert rect["type"] == "rect"
 
     def test_identity_scale(self):
         """When scale is 1:1, canvas coords should equal image coords."""

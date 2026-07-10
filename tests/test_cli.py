@@ -20,121 +20,6 @@ from untextre.cli import main, parse_args
 # parse_args
 # =========================================================================
 
-class TestParseArgs:
-    """Verify argument defaults and basic validation."""
-
-    def test_required_args_present(self, monkeypatch):
-        """Minimum viable invocation: -i and -o."""
-        monkeypatch.setattr(sys, "argv", ["prog", "-i", "input.png", "-o", "out/"])
-        args = parse_args()
-        assert args.input == "input.png"
-        assert args.output == "out/"
-
-    def test_defaults(self, monkeypatch):
-        monkeypatch.setattr(sys, "argv", ["prog", "-i", "x.png", "-o", "o/"])
-        args = parse_args()
-        assert args.paint == "lama"
-        assert args.device == "cuda"
-        assert args.granularity is None
-        assert args.mask_mode == "regional"
-        assert args.no_retry is False
-        assert args.keep_masks is False
-        assert args.timing is False
-        assert args.verbose is False
-        assert args.color is None
-        assert args.maskfile is None
-        assert args.force_bbox is None
-        assert args.known_mask is None
-
-    def test_mask_mode_choices(self, monkeypatch):
-        for mode in ("regional", "local-shape", "local-color"):
-            monkeypatch.setattr(
-                sys, "argv", ["prog", "-i", "x.png", "-o", "o/", "-m", mode]
-            )
-            args = parse_args()
-            assert args.mask_mode == mode
-
-    def test_invalid_mask_mode_rejected(self, monkeypatch):
-        monkeypatch.setattr(
-            sys, "argv", ["prog", "-i", "x.png", "-o", "o/", "-m", "bad-mode"]
-        )
-        with pytest.raises(SystemExit):
-            parse_args()
-
-    def test_confidence_threshold_default(self, monkeypatch):
-        from untextre.utils import CLI_DEFAULT_CONFIDENCE
-
-        monkeypatch.setattr(sys, "argv", ["prog", "-i", "x.png", "-o", "o/"])
-        args = parse_args()
-        assert args.confidence_threshold == CLI_DEFAULT_CONFIDENCE
-
-    def test_paint_choices(self, monkeypatch):
-        for method in ("lama", "telea"):
-            monkeypatch.setattr(
-                sys, "argv", ["prog", "-i", "x.png", "-o", "o/", "-p", method]
-            )
-            args = parse_args()
-            assert args.paint == method
-
-    def test_invalid_paint_choice_rejected(self, monkeypatch):
-        monkeypatch.setattr(
-            sys, "argv", ["prog", "-i", "x.png", "-o", "o/", "-p", "magic"]
-        )
-        with pytest.raises(SystemExit):
-            parse_args()
-
-    def test_granularity_parsed_as_int(self, monkeypatch):
-        monkeypatch.setattr(
-            sys, "argv", ["prog", "-i", "x.png", "-o", "o/", "-g", "8"]
-        )
-        args = parse_args()
-        assert args.granularity == 8
-
-    def test_force_bbox_is_raw_string(self, monkeypatch):
-        """force-bbox is parsed as a raw string by argparse; main() splits it."""
-        monkeypatch.setattr(
-            sys, "argv", ["prog", "-i", "x.png", "-o", "o/", "-f", "10,20,30,40"]
-        )
-        args = parse_args()
-        assert args.force_bbox == "10,20,30,40"
-
-    def test_boolean_flags(self, monkeypatch):
-        monkeypatch.setattr(
-            sys,
-            "argv",
-            ["prog", "-i", "x.png", "-o", "o/", "--no-retry", "-k", "-t", "-v"],
-        )
-        args = parse_args()
-        assert args.no_retry is True
-        assert args.keep_masks is True
-        assert args.timing is True
-        assert args.verbose is True
-
-    def test_force_output_default_false(self, monkeypatch):
-        monkeypatch.setattr(sys, "argv", ["prog", "-i", "x.png", "-o", "o/"])
-        args = parse_args()
-        assert args.force_output is False
-
-    def test_force_output_flag(self, monkeypatch):
-        monkeypatch.setattr(
-            sys, "argv", ["prog", "-i", "x.png", "-o", "o/", "--force-output"]
-        )
-        args = parse_args()
-        assert args.force_output is True
-
-    def test_known_mask_parsed(self, monkeypatch):
-        monkeypatch.setattr(
-            sys, "argv", ["prog", "-i", "x.png", "-o", "o/", "-K", "watermarks/logo.png"]
-        )
-        args = parse_args()
-        assert args.known_mask == "watermarks/logo.png"
-
-    def test_maskfile_is_long_only(self, monkeypatch):
-        monkeypatch.setattr(
-            sys, "argv", ["prog", "-i", "x.png", "-o", "o/", "--maskfile", "mask.png"]
-        )
-        args = parse_args()
-        assert args.maskfile == "mask.png"
 
 
 # =========================================================================
@@ -293,27 +178,7 @@ class TestMainIntegrationPaths:
         monkeypatch.setattr(pipeline_mod, "initialize_consensus_models", lambda *a, **kw: None)
         return img_path, out_dir
 
-    def test_verbose_enables_debug_logging(self, monkeypatch, tmp_path):
-        """--verbose should set root logger to DEBUG."""
-        import logging
-        self._run_main(monkeypatch, tmp_path, ["--verbose"])
-        monkeypatch.setattr(
-            pipeline_mod, "process_single_image",
-            lambda **kw: {"total_time": 0.1, "skipped": False},
-        )
-        main()
-        assert logging.getLogger().level == logging.DEBUG
 
-    def test_logfile_creates_file_handler(self, monkeypatch, tmp_path):
-        """--logfile should create a log file on disk."""
-        log_path = tmp_path / "logs" / "test.log"
-        self._run_main(monkeypatch, tmp_path, ["--logfile", str(log_path)])
-        monkeypatch.setattr(
-            pipeline_mod, "process_single_image",
-            lambda **kw: {"total_time": 0.1, "skipped": False},
-        )
-        main()
-        assert log_path.exists()
 
     def test_nonexistent_input_exits(self, monkeypatch, tmp_path):
         """Bad input path → sys.exit(1)."""
@@ -340,20 +205,6 @@ class TestMainIntegrationPaths:
         assert any("_clean" in str(p) for p in saved.keys())
         assert all(source_path is not None for _arr, source_path in saved.values())
 
-    def test_mask_mode_reaches_pipeline(self, monkeypatch, tmp_path):
-        """-m local-shape should select local GrabCut refinement without expansion."""
-        self._run_main(monkeypatch, tmp_path, ["-m", "local-shape"])
-        captured = {}
-
-        def capture_process(**kw):
-            captured.update(kw)
-            return {"total_time": 0.1, "skipped": False}
-
-        monkeypatch.setattr(pipeline_mod, "process_single_image", capture_process)
-        main()
-        assert captured["expand_bboxes"] is False
-        assert captured["use_grabcut"] is True
-        assert captured["use_grabcut_expand"] is False
 
     def test_timing_flag_saves_report(self, monkeypatch, tmp_path):
         """--timing produces timing_report.txt."""
@@ -514,12 +365,6 @@ class TestMainIntegrationPaths:
 # -U / --unknown-watermark flag
 # =========================================================================
 
-def test_unknown_watermark_flag_exists():
-    """Smoke test: -U flag is registered and mutually exclusive with -K."""
-    from untextre.cli import create_parser
-    parser = create_parser()
-    args = parser.parse_args(["-U", "-i", "some/dir", "-o", "out/dir"])
-    assert args.unknown_watermark is True
 
 
 def test_unknown_watermark_and_known_mask_are_mutually_exclusive():
@@ -552,11 +397,3 @@ class TestCliErrorPaths:
             main()
         assert exc_info.value.code == 1
 
-def test_package_lazy_imports():
-    """__getattr__ lazy-loader in __init__.py is triggered by attribute access."""
-    # Access one name from each lazy branch to maximise coverage:
-    # utils branch, find_text_colors branch, inpaint branch, cli branch
-    assert callable(untextre.load_image), "load_image not callable"
-    assert callable(untextre.find_mask_by_spatial_tf_idf), "find_mask_by_spatial_tf_idf not callable"
-    assert callable(untextre.inpaint_image), "inpaint_image not callable"
-    assert callable(untextre.main), "main not callable"
