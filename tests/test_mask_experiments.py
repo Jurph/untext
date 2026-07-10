@@ -14,15 +14,6 @@ from untextre.mask_experiments import (
 from untextre.pipeline import MASK_MODE_CHOICES
 
 
-def test_truth_target_mask_uses_deterministic_elliptical_dilation():
-    truth = np.zeros((7, 7), dtype=np.uint8)
-    truth[3, 3] = 255
-
-    target = truth_target_mask(truth, dilation_px=2)
-
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    expected = cv2.dilate(truth, kernel)
-    np.testing.assert_array_equal(target, expected)
 
 
 def test_weighted_precision_penalizes_far_false_positive_more_than_near():

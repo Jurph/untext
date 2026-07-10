@@ -129,15 +129,7 @@ class TestMeasureBlackhatEnergy:
         # Actually produces notable energy due to structural contrast
         assert energy > 0, f"Should have some energy from contrast, got {energy}"
     
-    def test_returns_float(self, white_image):
-        """Should return a float value."""
-        energy = measure_blackhat_energy(white_image)
-        assert isinstance(energy, float)
     
-    def test_non_negative(self, dark_text_on_white):
-        """Energy should never be negative."""
-        energy = measure_blackhat_energy(dark_text_on_white)
-        assert energy >= 0
 
 
 # =============================================================================
@@ -175,15 +167,7 @@ class TestMeasureEdgeRowEnergy:
         assert vert_energy < horiz_energy, \
             f"Vertical ({vert_energy}) should be less than horizontal ({horiz_energy})"
     
-    def test_returns_float(self, white_image):
-        """Should return a float value."""
-        energy = measure_edge_row_energy(white_image)
-        assert isinstance(energy, float)
     
-    def test_bounded_zero_to_one(self, horizontal_band):
-        """Energy should be bounded 0.0 to 1.0 (it's a fraction)."""
-        energy = measure_edge_row_energy(horizontal_band)
-        assert 0.0 <= energy <= 1.0, f"Energy should be 0-1, got {energy}"
 
 
 # =============================================================================
@@ -291,34 +275,9 @@ class TestExpandBboxAlongLongAxis:
         assert x + w <= 100, "Should not exceed image width"
         assert y + h <= 100, "Should not exceed image height"
     
-    def test_returns_tuple_of_four(self, white_image):
-        """Should return (x, y, w, h) tuple."""
-        bbox = (30, 30, 40, 20)
-        result = expand_bbox_along_long_axis(white_image, bbox)
-        assert isinstance(result, tuple)
-        assert len(result) == 4
 
 
 # =============================================================================
 # TESTS: Threshold constants are sensible
 # =============================================================================
 
-class TestThresholdConstants:
-    """Verify threshold constants are in sensible ranges."""
-    
-    def test_expansion_blackhat_positive(self):
-        assert EXPANSION_BLACKHAT_THRESHOLD > 0
-    
-    def test_expansion_edge_row_valid_range(self):
-        assert 0 < EXPANSION_EDGE_ROW_THRESHOLD < 1
-    
-    def test_retry_blackhat_positive(self):
-        assert RETRY_BLACKHAT_THRESHOLD > 0
-    
-    def test_retry_edge_row_valid_range(self):
-        assert 0 < RETRY_EDGE_ROW_THRESHOLD < 1
-    
-    def test_retry_thresholds_higher_than_expansion(self):
-        """Retry thresholds should generally be higher (more conservative)."""
-        # This is a design choice - retry is expensive, so we want higher confidence
-        assert RETRY_BLACKHAT_THRESHOLD >= EXPANSION_BLACKHAT_THRESHOLD

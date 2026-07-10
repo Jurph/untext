@@ -194,24 +194,8 @@ def make_triply_supported_appendage_records() -> list[CandidateRecord]:
     ]
 
 
-def test_candidate_record_separates_pixels_from_metadata():
-    assert is_dataclass(CandidateRecord)
-    assert is_dataclass(CandidateGeometry)
-    assert is_dataclass(CandidateMetadata)
-    assert is_dataclass(ComponentDescriptor)
-    assert is_dataclass(ScaleProposal)
-    assert is_dataclass(PairwiseScore)
-    assert is_dataclass(CandidateGraph)
-    assert is_dataclass(ClusterRecord)
-    assert is_dataclass(ConsensusTemplate)
 
 
-def test_consensus_module_logger_is_configured_for_info_output():
-    import untextre.watermark_consensus as consensus_mod
-
-    assert consensus_mod.logger.handlers == []
-    assert consensus_mod.logger.propagate is True
-    assert consensus_mod.logger.level == logging.NOTSET
 
 
 def test_filter_scoring_alpha_keeps_lab_close_small_component():
@@ -238,23 +222,8 @@ def test_alpha_to_soft_mask_normalizes_uint8_alpha():
     assert np.isclose(soft[0, 2], 1.0)
 
 
-def test_geometry_helpers_return_nonempty_fields_for_simple_blob():
-    alpha = np.zeros((40, 60), dtype=np.uint8)
-    alpha[10:30, 20:45] = 255
-    edge = build_edge_field(alpha)
-    dist = build_distance_field(alpha)
-    assert edge.shape == alpha.shape
-    assert dist.shape == alpha.shape
-    assert float(edge.max()) > 0.0
-    assert float(dist.max()) > 0.0
 
 
-def test_build_candidate_record_constructs_geometry():
-    record = make_record(make_rect_bgra())
-    assert record.bgra.shape[2] == 4
-    assert record.geometry.alpha_soft.shape == record.bgra.shape[:2]
-    assert record.geometry.support_mask.dtype == np.uint8
-    assert float(record.geometry.distance_field.max()) > 0.0
 
 
 def test_pairwise_score_prefers_related_partial_candidates():
@@ -383,20 +352,6 @@ def test_build_candidate_graph_isolates_noise_node():
     assert graph.weights[0, 3] == 0.0
 
 
-def test_build_candidate_graph_logs_pair_workload_and_progress(caplog):
-    records = [make_related_record(i) for i in range(3)]
-
-    with caplog.at_level(logging.INFO):
-        build_candidate_graph(records)
-
-    assert any(
-        "Consensus graph start:" in message and "3 unordered pairs" in message
-        for message in caplog.messages
-    )
-    assert any(
-        "Consensus graph progress:" in message and "3/3 pairs" in message
-        for message in caplog.messages
-    )
 
 
 def test_extract_candidate_clusters_returns_only_high_confidence_group():

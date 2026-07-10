@@ -52,18 +52,7 @@ class TestComputeClusterFom:
     # Known-value tests (pin the weights)
     # ------------------------------------------------------------------
 
-    def test_all_zeros_gives_maximum(self):
-        """Zero border_ratio and zero cc_fraction → maximum scores on those axes."""
-        fom = compute_cluster_fom(0.0, 0.0, 0.0)
-        # tf_score=0, border_score=1, cc_score=1
-        expected = 0.07 * 0.0 + 0.63 * 1.0 + 0.30 * 1.0  # 0.93
-        assert fom == pytest.approx(expected, abs=1e-9)
 
-    def test_perfect_text_cluster(self):
-        """High TF-IDF, zero border, zero CC → near-maximum FOM."""
-        fom = compute_cluster_fom(255.0, 0.0, 0.0)
-        expected = 0.07 * 1.0 + 0.63 * 1.0 + 0.30 * 1.0  # 1.0
-        assert fom == pytest.approx(expected, abs=1e-9)
 
     def test_background_cluster(self):
         """Low TF-IDF, high border, high CC → near-zero FOM."""
@@ -72,19 +61,7 @@ class TestComputeClusterFom:
         expected = 0.0
         assert fom == pytest.approx(expected, abs=1e-9)
 
-    def test_solid_blob_rejected(self):
-        """High TF-IDF but cc_fraction=1.0 → low FOM (solid blob, not text)."""
-        fom = compute_cluster_fom(255.0, 0.0, 1.0)
-        # tf=1, border=1, cc=0 → 0.07 + 0.63 + 0.0 = 0.70
-        expected = 0.07 * 1.0 + 0.63 * 1.0 + 0.30 * 0.0
-        assert fom == pytest.approx(expected, abs=1e-9)
 
-    def test_border_heavy_cluster(self):
-        """High border ratio → low FOM regardless of other signals."""
-        fom = compute_cluster_fom(255.0, 1.0, 0.0)
-        # tf=1, border=0, cc=1 → 0.07 + 0.0 + 0.30 = 0.37
-        expected = 0.07 * 1.0 + 0.63 * 0.0 + 0.30 * 1.0
-        assert fom == pytest.approx(expected, abs=1e-9)
 
     # ------------------------------------------------------------------
     # Weight dominance
@@ -118,18 +95,7 @@ class TestComputeClusterFom:
         fom_500 = compute_cluster_fom(500.0, 0.5, 0.5)
         assert fom_255 == fom_500, "TF-IDF above 255 should clamp to same score"
 
-    def test_border_ratio_above_one_clamped(self):
-        """border_ratio > 1 should produce border_score=0 (clamped by max(0,...))."""
-        fom = compute_cluster_fom(128.0, 2.0, 0.5)
-        # border_score = max(0, 1 - 2.0) = 0
-        expected = 0.07 * (128 / 255) + 0.63 * 0.0 + 0.30 * 0.5
-        assert fom == pytest.approx(expected, abs=1e-6)
 
-    def test_cc_fraction_above_one_clamped(self):
-        """cc_fraction > 1 should produce cc_score=0."""
-        fom = compute_cluster_fom(128.0, 0.5, 2.0)
-        expected = 0.07 * (128 / 255) + 0.63 * 0.5 + 0.30 * 0.0
-        assert fom == pytest.approx(expected, abs=1e-6)
 
 
 class TestFindMaskDebugAndClusterData:

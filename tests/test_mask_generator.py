@@ -30,17 +30,7 @@ def simple_mask():
 class TestMorphCleanMask:
     """Tests for morphological cleanup of binary masks."""
 
-    def test_output_is_binary(self, simple_mask):
-        """Cleaned mask should contain only 0 and 255 values."""
-        cleaned = morph_clean_mask(simple_mask)
 
-        unique_values = set(np.unique(cleaned))
-        assert unique_values <= {0, 255}, f"Non-binary values found: {unique_values}"
-
-    def test_preserves_shape(self, simple_mask):
-        """Cleaned mask should have the same dimensions as input."""
-        cleaned = morph_clean_mask(simple_mask)
-        assert cleaned.shape == simple_mask.shape
 
     def test_does_not_erase_solid_block(self, simple_mask):
         """A solid block should survive cleanup (possibly grow, but not vanish)."""

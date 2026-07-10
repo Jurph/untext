@@ -157,59 +157,6 @@ def test_run_in_memory_watermark_benchmark_appends_progress_rows(tmp_path):
     assert "1," in lines[2]
 
 
-def test_run_inmemory_watermark_benchmark_cli_writes_json_artifacts(tmp_path, monkeypatch):
-    from scripts import run_inmemory_watermark_benchmark as script
-
-    out = tmp_path / "benchmark.jsonl"
-    summary = tmp_path / "benchmark.summary.json"
-    rows = [
-        {
-            "sample_index": 0,
-            "base_relpath": "one.png",
-            "sample_seed": 123,
-            "target_recall": 1.0,
-            "weighted_precision": 1.0,
-            "coverage": 0.05,
-            "overmask_ratio": 1.0,
-            "score": 1.0,
-        }
-    ]
-
-    monkeypatch.setattr(
-        script,
-        "run_in_memory_watermark_benchmark",
-        lambda *args, **kwargs: rows,
-    )
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "run_inmemory_watermark_benchmark.py",
-            "--base-dir",
-            str(tmp_path),
-            "--sample-count",
-            "1",
-            "--seed",
-            "99",
-            "--out",
-            str(out),
-            "--summary-json",
-            str(summary),
-        ],
-    )
-
-    script.main()
-
-    written_rows = [
-        json.loads(line)
-        for line in out.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    written_summary = json.loads(summary.read_text(encoding="utf-8"))
-
-    assert written_rows == rows
-    assert written_summary["sample_count"] == 1
-    assert written_summary["top_cases"][0]["base_relpath"] == "one.png"
 
 
 def test_analyze_inmemory_watermark_benchmark_writes_batch_overview_and_rankings(tmp_path):

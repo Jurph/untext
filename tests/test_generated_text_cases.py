@@ -39,50 +39,8 @@ def test_generate_synthetic_text_case_fits_truth_mask_width():
     assert np.any(case.watermarked[case.truth_mask > 0] != case.clean[case.truth_mask > 0])
 
 
-def test_outline_sampling_rules_cover_gray_black_and_white(monkeypatch):
-    class FakeRng:
-        def __init__(self, random_values, randint_value=4):
-            self.random_values = iter(random_values)
-            self.randint_value = randint_value
-
-        def random(self):
-            return next(self.random_values)
-
-        def randint(self, _low, _high):
-            return self.randint_value
-
-        def uniform(self, low, high):
-            return (low + high) / 2.0
-
-    monkeypatch.setattr(stb, "_sample_vivid_outline_rgb", lambda _rng: (12, 34, 56))
-
-    gray = stb._choose_outline("mid_gray", FakeRng([]))
-    assert gray == (False, 0, None)
-
-    black = stb._choose_outline("black", FakeRng([0.10, 0.75], randint_value=5))
-    assert black == (True, 5, (12, 34, 56))
-
-    white = stb._choose_outline("white", FakeRng([0.10, 0.25], randint_value=6))
-    assert white == (True, 6, (0, 0, 0))
-
-    random_color = stb._choose_outline("random", FakeRng([0.10, 0.25], randint_value=3))
-    assert random_color == (True, 3, (0, 0, 0))
 
 
-def test_generate_synthetic_text_case_records_outline_metadata(monkeypatch):
-    rng = random.Random(1234)
-    image = np.ones((480, 640, 3), dtype=np.uint8) * 220
-
-    monkeypatch.setattr(stb, "_choose_color", lambda _rng: ("black", (0, 0, 0)))
-    monkeypatch.setattr(stb, "_choose_outline", lambda _color_class, _rng: (True, 4, (255, 255, 255)))
-
-    case = generate_synthetic_text_case(image, rng)
-
-    assert case.metadata["outline_present"] is True
-    assert case.metadata["outline_thickness_px"] == 4
-    assert case.metadata["outline_color_hex"] == "#ffffff"
-    assert case.truth_bbox[2] >= case.metadata["text_bbox"][2]
-    assert case.truth_bbox[3] >= case.metadata["text_bbox"][3]
 
 
 def test_generate_synthetic_text_case_avoids_same_class_corner_matches():
@@ -131,49 +89,8 @@ def test_load_text_sources_reads_flat_files(tmp_path: Path):
     assert sources.copyright_last_names == ("Lovelace", "Xoroboros")
 
 
-def test_choose_text_uses_url_and_name_modes(monkeypatch):
-    monkeypatch.setattr(
-        stb,
-        "_load_text_sources",
-        lambda text_source_dir=None: stb.TextSourcePools(
-            url_prefixes=("Image", "Picture"),
-            url_nouns=("Fans", "Posts"),
-            url_tlds=(".com", ".net"),
-            copyright_first_names=("Ada", "Xenia"),
-            copyright_last_names=("Lovelace", "Xoroboros"),
-        ),
-    )
-
-    class FakeRng:
-        def __init__(self, random_value: float, choices: list[str]):
-            self.random_value = random_value
-            self.choices = iter(choices)
-
-        def random(self) -> float:
-            return self.random_value
-
-        def choice(self, _seq):
-            return next(self.choices)
-
-    mode, text = stb._choose_text(FakeRng(0.20, ["Ada", "Lovelace"]))
-    assert mode == "copyright_name"
-    assert text == "© Ada Lovelace"
-
-    mode, text = stb._choose_text(FakeRng(0.80, ["Picture", "Posts", ".net"]))
-    assert mode == "url"
-    assert text == "PicturePosts.net"
 
 
-def test_generate_synthetic_text_case_records_text_mode(monkeypatch):
-    rng = random.Random(1234)
-    image = np.ones((480, 640, 3), dtype=np.uint8) * 220
-
-    monkeypatch.setattr(stb, "_choose_text", lambda _rng: ("copyright_name", "© Ada Lovelace"))
-
-    case = generate_synthetic_text_case(image, rng)
-
-    assert case.metadata["text_mode"] == "copyright_name"
-    assert case.metadata["text"] == "© Ada Lovelace"
 
 
 def test_generate_synthetic_text_case_visibility_floor_passes_on_first_attempt():

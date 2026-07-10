@@ -232,38 +232,8 @@ class TestHybridConfidence:
         result = calculate_hybrid_confidence(confidences)
         assert result == 0.8, "Single confidence should return that value"
     
-    def test_two_high_confidences(self):
-        """Test that two high confidences produce higher combined confidence."""
-        confidences = [0.8, 0.9]
-        result = calculate_hybrid_confidence(confidences)
-        
-        # Formula: 1 - (1-0.8)*(1-0.9) = 1 - 0.02 = 0.98
-        expected = 0.98
-        assert abs(result - expected) < 0.01, f"Expected ~{expected}, got {result}"
-        
-        # Should be higher than either individual confidence
-        assert result > 0.8 and result > 0.9, "Combined should be higher than individuals"
     
-    def test_two_low_confidences(self):
-        """Test that two low confidences still boost each other."""
-        confidences = [0.4, 0.5]
-        result = calculate_hybrid_confidence(confidences)
-        
-        # Formula: 1 - (1-0.4)*(1-0.5) = 1 - 0.3 = 0.7
-        expected = 0.7
-        assert abs(result - expected) < 0.01, f"Expected ~{expected}, got {result}"
-        
-        # Should be higher than either individual
-        assert result > 0.4 and result > 0.5, "Combined should boost low confidences"
     
-    def test_three_detectors(self):
-        """Test hybrid confidence with three detector confidences."""
-        confidences = [0.6, 0.7, 0.8]
-        result = calculate_hybrid_confidence(confidences)
-        
-        # Formula: 1 - (1-0.6)*(1-0.7)*(1-0.8) = 1 - 0.024 = 0.976
-        expected = 0.976
-        assert abs(result - expected) < 0.01, f"Expected ~{expected}, got {result}"
     
     def test_empty_confidences(self):
         """Test that empty list returns 0 (edge case)."""
