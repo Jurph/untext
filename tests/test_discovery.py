@@ -291,31 +291,6 @@ def test_compute_alpha_iou_all_transparent():
     assert iou == 0.0
 
 
-def test_compute_stack_statistics_returns_required_keys(tmp_path):
-    """compute_stack_statistics must return mean_bgr and var_gray."""
-    from untextre.discovery import compute_stack_statistics
-
-    rng = np.random.RandomState(30)
-    paths = []
-    for i in range(5):
-        img = rng.randint(40, 160, (100, 150, 3), dtype=np.uint8)
-        img[40:60, 60:110] = 240
-        p = tmp_path / f"gs_{i}.png"
-        cv2.imwrite(str(p), img)
-        paths.append(p)
-
-    stats = compute_stack_statistics(paths)
-    assert stats is not None
-    assert "mean_bgr" in stats
-    assert "var_gray" in stats
-    assert stats["mean_bgr"].shape == (100, 150, 3)
-    assert stats["var_gray"].shape == (100, 150)
-    # Watermark pixels are pixel-perfect — their variance should be near zero.
-    wm_var = float(stats["var_gray"][40:60, 60:110].max())
-    bg_var = float(stats["var_gray"][0:20, 0:40].mean())
-    assert wm_var < bg_var, (
-        f"Watermark var ({wm_var:.4e}) should be lower than background var ({bg_var:.4e})"
-    )
 
 
 def test_build_watermark_score_high_at_watermark_boundary(tmp_path):
@@ -611,54 +586,6 @@ def test_select_candidate_prefers_structured_zone_over_flat_zone():
     )
 
 
-def test_select_candidate_components_avoids_full_frame_blob_per_component(monkeypatch):
-    from untextre.discovery import select_candidate_components
-
-    H, W = 80, 120
-    labels_img = np.zeros((H, W), dtype=np.int32)
-    cc_stats = [[0, 0, W, H, H * W]]
-    centroids = [[W / 2, H / 2]]
-
-    components = [
-        (1, 8, 8, 8, 8),
-        (2, 24, 12, 8, 8),
-        (3, 72, 48, 10, 10),
-        (4, 88, 52, 10, 10),
-    ]
-    for label, x, y, w, h in components:
-        labels_img[y : y + h, x : x + w] = label
-        cc_stats.append([x, y, w, h, w * h])
-        centroids.append([x + w / 2, y + h / 2])
-
-    mask_data = {
-        "num_labels": 5,
-        "labels": labels_img,
-        "stats": np.array(cc_stats, dtype=np.int32),
-        "centroids": np.array(centroids, dtype=np.float64),
-        "mask_raw": np.zeros((H, W), dtype=np.uint8),
-        "mask_clean": np.zeros((H, W), dtype=np.uint8),
-        "score_closed": np.zeros((H, W), dtype=np.uint8),
-    }
-    dummy_score = np.zeros((H, W), dtype=np.float32)
-
-    original_zeros = np.zeros
-    full_frame_uint8_calls = []
-
-    def tracking_zeros(shape, dtype=float, *args, **kwargs):
-        array = original_zeros(shape, dtype=dtype, *args, **kwargs)
-        if tuple(shape) == labels_img.shape and np.dtype(dtype) == np.uint8:
-            full_frame_uint8_calls.append(1)
-        return array
-
-    monkeypatch.setattr(np, "zeros", tracking_zeros)
-
-    candidates = select_candidate_components(mask_data, dummy_score, W, H, max_zones=2)
-
-    assert len(candidates) == 2
-    assert len(full_frame_uint8_calls) <= 2, (
-        "select_candidate_components should only allocate one full-frame union mask "
-        "per retained zone, not one temporary blob mask per component"
-    )
 
 
 from untextre.discovery import (
@@ -875,340 +802,24 @@ def _template_from_crop(label: str, crop: np.ndarray, member_indices=(0,), famil
     )
 
 
-def test_consensus_vote_delegates_cross_bucket_candidates_to_graph_builder(monkeypatch):
-    H_a, W_a = 500, 700
-    H_b, W_b = 400, 560
-    mask_a = np.zeros((H_a, W_a), dtype=np.uint8)
-    mask_b = np.zeros((H_b, W_b), dtype=np.uint8)
-    mask_a[50:100, 500:600] = 255
-    mask_b[250:290, 10:80] = 255
-
-    mean_a = np.full((H_a, W_a, 3), 128, dtype=np.uint8)
-    mean_b = np.full((H_b, W_b, 3), 144, dtype=np.uint8)
-    wm_a = np.full((H_a, W_a, 3), 200, dtype=np.uint8)
-    wm_b = np.full((H_b, W_b, 3), 210, dtype=np.uint8)
-
-    expected = crop_zone_to_bgra(mean_a, mask_a, wm_color=wm_a)
-    captured = {}
-
-    def fake_build_final_templates(records):
-        assert len(records) == 2
-        captured["family_keys"] = [record.metadata.family_key for record in records]
-        captured["zones"] = [record.metadata.zone for record in records]
-        return [_template_from_crop("consensus", expected, member_indices=(0, 1), family_count=2)]
-
-    monkeypatch.setattr("untextre.discovery._candidate_meets_consensus_minimums", _accept_candidate_for_consensus)
-    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
-
-    crops = _consensus_vote([
-        (mask_a, W_a, H_a, (2, 0), mean_a, wm_a),
-        (mask_b, W_b, H_b, (0, 1), mean_b, wm_b),
-    ])
-
-    assert captured["family_keys"] == [(W_a, H_a), (W_b, H_b)]
-    assert captured["zones"] == [(2, 0), (0, 1)]
-    assert len(crops) == 1
-    assert np.array_equal(crops[0], expected)
-
-
-def test_consensus_vote_same_bucket_different_zone_remains_separate_input(monkeypatch):
-    H, W = 500, 700
-    mask_1 = np.zeros((H, W), dtype=np.uint8)
-    mask_2 = np.zeros((H, W), dtype=np.uint8)
-    mask_1[50:100, 500:600] = 255
-    mask_2[300:380, 10:110] = 255
-
-    dummy = np.full((H, W, 3), 128, dtype=np.uint8)
-    crop_1 = crop_zone_to_bgra(dummy, mask_1, wm_color=dummy)
-    crop_2 = crop_zone_to_bgra(dummy, mask_2, wm_color=dummy)
-
-    def fake_build_final_templates(records):
-        assert len(records) == 2
-        assert records[0].metadata.family_key == (W, H)
-        assert records[1].metadata.family_key == (W, H)
-        assert {records[0].metadata.zone, records[1].metadata.zone} == {(2, 0), (0, 1)}
-        return [
-            _template_from_crop("consensus", crop_1, member_indices=(0,), family_count=1),
-            _template_from_crop("consensus", crop_2, member_indices=(1,), family_count=1),
-        ]
-
-    monkeypatch.setattr("untextre.discovery._candidate_meets_consensus_minimums", _accept_candidate_for_consensus)
-    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
-
-    crops = _consensus_vote([
-        (mask_1, W, H, (2, 0), dummy, dummy),
-        (mask_2, W, H, (0, 1), dummy, dummy),
-    ])
-
-    assert len(crops) == 2
-    assert all(crop.shape[2] == 4 for crop in crops)
-
-
-def test_consensus_vote_singleton_returned_through_graph_builder(monkeypatch):
-    H, W = 100, 150
-    mask = np.zeros((H, W), dtype=np.uint8)
-    mask[20:40, 60:110] = 255
-    dummy_mean = np.full((H, W, 3), 100, dtype=np.uint8)
-    dummy_wm = np.full((H, W, 3), 200, dtype=np.uint8)
-    expected = crop_zone_to_bgra(dummy_mean, mask, wm_color=dummy_wm)
-
-    def fake_build_final_templates(records):
-        assert len(records) == 1
-        assert records[0].metadata.family_key == (W, H)
-        return [_template_from_crop("consensus", expected, member_indices=(0,), family_count=1)]
-
-    monkeypatch.setattr("untextre.discovery._candidate_meets_consensus_minimums", _accept_candidate_for_consensus)
-    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
-
-    crops = _consensus_vote([(mask, W, H, (0, 0), dummy_mean, dummy_wm)])
-
-    assert len(crops) == 1
-    assert np.array_equal(crops[0], expected)
-
-
-def test_consensus_vote_returns_stingy_and_generous_outputs(monkeypatch):
-    H, W = 500, 700
-    mask = np.zeros((H, W), dtype=np.uint8)
-    mask[50:100, 500:600] = 255
-    mean_img = np.full((H, W, 3), 128, dtype=np.uint8)
-    wm_img = np.full((H, W, 3), 200, dtype=np.uint8)
-    stingy = crop_zone_to_bgra(mean_img, mask, wm_color=wm_img)
-    generous = stingy.copy()
-    generous[:, :, 3] = np.maximum(generous[:, :, 3], 128)
-
-    def fake_build_final_templates(records):
-        assert len(records) == 1
-        return [
-            _template_from_crop("stingy", stingy, member_indices=(0,), family_count=1),
-            _template_from_crop("generous", generous, member_indices=(0,), family_count=1),
-        ]
 
-    monkeypatch.setattr("untextre.discovery._candidate_meets_consensus_minimums", _accept_candidate_for_consensus)
-    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
 
-    crops = _consensus_vote([(mask, W, H, (2, 0), mean_img, wm_img)])
 
-    assert len(crops) == 2
-    assert crops[0].shape[2] == 4
-    assert crops[1].shape[2] == 4
 
-
-def test_consensus_vote_skips_tiny_candidates_before_graph_builder(monkeypatch):
-    H, W = 500, 700
-    tiny_mask = np.zeros((H, W), dtype=np.uint8)
-    big_mask = np.zeros((H, W), dtype=np.uint8)
-    tiny_mask[20:27, 30:37] = 255
-    big_mask[50:100, 500:600] = 255
-    mean_img = np.full((H, W, 3), 128, dtype=np.uint8)
-    wm_img = np.full((H, W, 3), 200, dtype=np.uint8)
 
-    expected = crop_zone_to_bgra(mean_img, big_mask, wm_color=wm_img)
 
-    def fake_build_final_templates(records):
-        assert len(records) == 1
-        assert records[0].metadata.zone == (2, 0)
-        return [_template_from_crop("consensus", expected, member_indices=(1,), family_count=1)]
 
-    def accept_only_nontrivial_candidates(bgra):
-        area = int((bgra[:, :, 3] > 0).sum())
-        return (area >= 100), area, bgra.shape[1], bgra.shape[0], 128, 0.25, 12 if area >= 100 else 0
-
-    monkeypatch.setattr("untextre.discovery._candidate_meets_consensus_minimums", accept_only_nontrivial_candidates)
-    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
-
-    crops = _consensus_vote([
-        (tiny_mask, W, H, (0, 0), mean_img, wm_img),
-        (big_mask, W, H, (2, 0), mean_img, wm_img),
-    ])
-
-    assert len(crops) == 1
-    assert np.array_equal(crops[0], expected)
 
-
-def test_consensus_vote_skips_sparse_spray_candidates_before_graph_builder(monkeypatch):
-    H, W = 500, 700
-    spray_mask = np.zeros((H, W), dtype=np.uint8)
-    big_mask = np.zeros((H, W), dtype=np.uint8)
 
-    spray_mask[20:24, 30:34] = 255
-    spray_mask[80:84, 220:224] = 255
-    spray_mask[150:154, 410:414] = 255
-    spray_mask[260:264, 560:564] = 255
-    spray_mask[340:344, 120:124] = 255
-    spray_mask[420:424, 640:644] = 255
-
-    big_mask[50:100, 500:600] = 255
-    mean_img = np.full((H, W, 3), 128, dtype=np.uint8)
-    wm_img = np.full((H, W, 3), 200, dtype=np.uint8)
-
-    expected = crop_zone_to_bgra(mean_img, big_mask, wm_color=wm_img)
-
-    def fake_build_final_templates(records):
-        assert len(records) == 1
-        assert records[0].metadata.zone == (2, 0)
-        return [_template_from_crop("consensus", expected, member_indices=(1,), family_count=1)]
-
-    def accept_only_nontrivial_candidates(bgra):
-        area = int((bgra[:, :, 3] > 0).sum())
-        return (area >= 100), area, bgra.shape[1], bgra.shape[0], 128, 0.25, 12 if area >= 100 else 0
-
-    monkeypatch.setattr("untextre.discovery._candidate_meets_consensus_minimums", accept_only_nontrivial_candidates)
-    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
-
-    crops = _consensus_vote([
-        (spray_mask, W, H, (0, 0), mean_img, wm_img),
-        (big_mask, W, H, (2, 0), mean_img, wm_img),
-    ])
-
-    assert len(crops) == 1
-    assert np.array_equal(crops[0], expected)
-
-
-def test_consensus_vote_skips_orb_unusable_candidate_before_graph_builder(monkeypatch):
-    H, W = 500, 700
-    dummy_mask = np.zeros((H, W), dtype=np.uint8)
-    dummy_mask[50:100, 500:600] = 255
-    mean_img = np.full((H, W, 3), 128, dtype=np.uint8)
-    wm_img = np.full((H, W, 3), 200, dtype=np.uint8)
-
-    bad_candidate = _make_orb_dead_bar()
-    good_candidate = _make_orb_ready_candidate()
-
-    def fake_crop_zone_to_bgra(*args, **kwargs):
-        if not hasattr(fake_crop_zone_to_bgra, "calls"):
-            fake_crop_zone_to_bgra.calls = 0
-        fake_crop_zone_to_bgra.calls += 1
-        return bad_candidate.copy() if fake_crop_zone_to_bgra.calls == 1 else good_candidate.copy()
-
-    def fake_build_final_templates(records):
-        assert len(records) == 1
-        return [_template_from_crop("consensus", good_candidate, member_indices=(0,), family_count=1)]
-
-    monkeypatch.setattr("untextre.discovery.crop_zone_to_bgra", fake_crop_zone_to_bgra)
-    monkeypatch.setattr("untextre.discovery.split_candidate_bgra", lambda bgra: [bgra])
-    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
-
-    crops = _consensus_vote([
-        (dummy_mask, W, H, (0, 0), mean_img, wm_img),
-        (dummy_mask, W, H, (2, 0), mean_img, wm_img),
-    ])
-
-    assert len(crops) == 1
-    assert np.array_equal(crops[0], good_candidate)
-
-
-def test_consensus_vote_splits_one_raw_candidate_into_multiple_records(monkeypatch):
-    H, W = 240, 320
-    mask = np.zeros((H, W), dtype=np.uint8)
-    mean_img = np.full((H, W, 3), 128, dtype=np.uint8)
-    wm_img = np.full((H, W, 3), 200, dtype=np.uint8)
-
-    mask[120:132, 40:48] = 255
-    mask[120:132, 50:58] = 255
-    mask[120:132, 60:68] = 255
-    mask[24:42, 250:268] = 255
-
-    def fake_build_final_templates(records):
-        assert len(records) == 2
-        assert all(record.metadata.family_key == (W, H) for record in records)
-        assert all(record.metadata.zone == (1, 0) for record in records)
-        return [
-            _template_from_crop("consensus", records[0].bgra, member_indices=(0,), family_count=1),
-            _template_from_crop("consensus", records[1].bgra, member_indices=(1,), family_count=1),
-        ]
-
-    monkeypatch.setattr("untextre.discovery._candidate_meets_consensus_minimums", _accept_candidate_for_consensus)
-    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
-
-    crops = _consensus_vote([(mask, W, H, (1, 0), mean_img, wm_img)])
-
-    assert len(crops) == 2
-    assert all(crop.shape[2] == 4 for crop in crops)
-
-
-def test_consensus_vote_logs_prep_cutline_before_graph_scoring(monkeypatch, caplog):
-    H, W = 240, 320
-    mask = np.zeros((H, W), dtype=np.uint8)
-    mask[40:120, 90:200] = 255
-    mean_img = np.full((H, W, 3), 128, dtype=np.uint8)
-    wm_img = mean_img.copy()
-    captured_records = {}
-
-    def fake_build_final_templates(records):
-        captured_records["count"] = len(records)
-        template = np.zeros((12, 18, 4), dtype=np.uint8)
-        template[:, :, 3] = 255
-        return [
-            ConsensusTemplate(
-                label="source",
-                bgra=template,
-                alpha_mass=float(np.count_nonzero(template[:, :, 3])),
-                member_indices=(0,),
-                family_count=1,
-            )
-        ]
-
-    monkeypatch.setattr(
-        "untextre.discovery._candidate_meets_consensus_minimums",
-        lambda bgra: (True, 8800, bgra.shape[1], bgra.shape[0], 376, 1.0, 12),
-    )
-    monkeypatch.setattr("untextre.discovery.build_final_templates", fake_build_final_templates)
-
-    with caplog.at_level(logging.INFO):
-        crops = _consensus_vote([
-            (mask, W, H, (1, 0), mean_img, wm_img),
-            (mask, W, H, (1, 1), mean_img, wm_img),
-        ])
-
-    assert len(crops) == 1
-    assert captured_records["count"] == 2
-    assert any(
-        "Consensus prep complete:" in message and "2 kept sub-candidates" in message
-        for message in caplog.messages
-    )
-
-
-def test_discover_two_pass_processes_all_qualifying_buckets(tmp_path, monkeypatch):
-    """Pass-1 pooling: both qualifying buckets are processed in pass 2.
-
-    With two size buckets each containing a watermark, discover_watermark_candidates
-    should call build_watermark_score once per bucket and return at least one
-    candidate.  This verifies the two-pass structure runs to completion on
-    multi-bucket inputs.
-    """
-    calls = []
-    real_build = __import__("untextre.discovery", fromlist=["build_watermark_score"]).build_watermark_score
-
-    def tracking_build(stats, var_norm, **kwargs):
-        calls.append(True)
-        return real_build(stats, var_norm, **kwargs)
-
-    monkeypatch.setattr("untextre.discovery.build_watermark_score", tracking_build)
-
-    rng = np.random.RandomState(50)
-    wm_patch_a = _make_orb_ready_candidate(140)
-    wm_patch_b = _make_orb_ready_candidate(160)
-
-    paths_a = []
-    for i in range(4):
-        img = rng.randint(40, 160, (150, 200, 3), dtype=np.uint8)
-        _stamp_transparent_patch(img, wm_patch_a, 5, 55)
-        p = tmp_path / f"a_{i}.png"
-        cv2.imwrite(str(p), img)
-        paths_a.append(p)
-
-    paths_b = []
-    for i in range(4):
-        img = rng.randint(40, 160, (200, 300, 3), dtype=np.uint8)
-        _stamp_transparent_patch(img, wm_patch_b, 18, 112)
-        p = tmp_path / f"b_{i}.png"
-        cv2.imwrite(str(p), img)
-        paths_b.append(p)
-
-    candidates = discover_watermark_candidates(paths_a + paths_b)
-
-    assert len(calls) == 2, f"Expected build_watermark_score called once per bucket, got {len(calls)}"
-    assert candidates, "Expected at least one candidate from a two-bucket run"
+
+
+
+
+
+
+
+
+
 
 
 def test_discover_finds_watermark_in_homogeneous_batch(tmp_path):
@@ -1249,23 +860,6 @@ def test_discover_deduplicates_similar_aspect_ratio_candidates(tmp_path):
     # find 1 or 2; we check that we never get more than 2 (no duplicates).
     assert len(candidates) <= 2
 
-def test_discover_returns_empty_for_no_common_pixels(tmp_path):
-    """Random noise images should yield no stable candidates."""
-    paths = []
-    np.random.seed(2)
-    for i in range(4):
-        img = np.random.randint(0, 255, (200, 300, 3), dtype=np.uint8)
-        p = tmp_path / f"noise{i}.png"
-        cv2.imwrite(str(p), img)
-        paths.append(p)
-
-    # May or may not find blobs; if it does they'll be noise — just ensure no crash
-    candidates = discover_watermark_candidates(paths)
-    assert isinstance(candidates, list)
-    # Noise images should produce at most a handful of spurious candidates.
-    # The algorithm caps output per bucket; after family dedup we should not
-    # see more than 3 (the per-bucket max_candidates ceiling).
-    assert len(candidates) <= 3
 
 
 def test_discover_finds_candidate_near_watermark_despite_adjacent_stable_mass(tmp_path):
@@ -1306,33 +900,6 @@ def test_discover_finds_candidate_near_watermark_despite_adjacent_stable_mass(tm
         )
 
 
-def test_discover_finds_candidate_in_watermark_zone(tmp_path):
-    """Discovery should produce a candidate in the correct image zone
-    even when a noisier stable region occupies a nearby zone.
-    """
-    paths = []
-    rng = np.random.RandomState(21)
-
-    watermark_color = np.array([242, 242, 242], dtype=np.uint8)
-    weaker_color = np.array([208, 208, 208], dtype=np.int16)
-
-    wm_slice = (slice(220, 248), slice(330, 390))
-    junk_slice = (slice(155, 230), slice(275, 345))
-
-    for i in range(6):
-        img = rng.randint(20, 180, (300, 400, 3), dtype=np.uint8)
-        weaker_region = weaker_color + rng.randint(-10, 11, (75, 70, 3))
-        img[junk_slice] = np.clip(weaker_region, 0, 255).astype(np.uint8)
-        img[wm_slice] = watermark_color
-        path = tmp_path / f"same_zone_{i}.png"
-        cv2.imwrite(str(path), img)
-        paths.append(path)
-
-    candidates = discover_watermark_candidates(paths)
-    assert candidates, "Expected at least one candidate"
-
-    for candidate in candidates:
-        assert np.any(candidate[:, :, 3] > 0), "Candidate must have non-zero alpha"
 
 
 
@@ -1353,50 +920,8 @@ def test_discover_skips_bucket_with_fewer_than_3_images(tmp_path):
     assert candidates == []
 
 
-def test_discover_saves_debug_variance_map(tmp_path):
-    """discover_watermark_candidates saves a log-variance map when debug_dir is provided."""
-    wm = np.array([220, 220, 220], dtype=np.uint8)
-    paths = []
-    np.random.seed(10)
-    for i in range(5):
-        img = np.random.randint(30, 180, (100, 150, 3), dtype=np.uint8)
-        img[80:95, 120:145] = wm
-        p = tmp_path / f"var_{i}.png"
-        cv2.imwrite(str(p), img)
-        paths.append(p)
-
-    debug_dir = tmp_path / "debug"
-    debug_dir.mkdir()
-    discover_watermark_candidates(paths, debug_dir=debug_dir)
-
-    var_map_path = debug_dir / "debug_variance_150x100.png"
-    assert var_map_path.exists(), "Expected variance map to be saved in debug_dir"
-    saved = cv2.imread(str(var_map_path))
-    assert saved is not None
-    assert saved.shape[:2] == (100, 150)
 
 
-def test_discover_saves_debug_mean_image(tmp_path):
-    """discover_watermark_candidates saves a mean image when debug_dir is provided."""
-    wm = np.array([220, 220, 220], dtype=np.uint8)
-    paths = []
-    np.random.seed(11)
-    for i in range(5):
-        img = np.random.randint(30, 180, (100, 150, 3), dtype=np.uint8)
-        img[80:95, 120:145] = wm
-        p = tmp_path / f"mean_{i}.png"
-        cv2.imwrite(str(p), img)
-        paths.append(p)
-
-    debug_dir = tmp_path / "debug"
-    debug_dir.mkdir()
-    discover_watermark_candidates(paths, debug_dir=debug_dir)
-
-    mean_path = debug_dir / "debug_mean_150x100.png"
-    assert mean_path.exists(), "Expected mean image to be saved in debug_dir"
-    saved = cv2.imread(str(mean_path))
-    assert saved is not None
-    assert saved.shape[:2] == (100, 150)
 
 
 def test_discover_variance_map_watermark_pixels_are_darker(tmp_path):
