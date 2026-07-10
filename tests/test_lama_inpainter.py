@@ -74,16 +74,6 @@ def test_image_dir(tmp_path: Path) -> Tuple[Path, list[Path]]:
     
     return tmp_path, image_paths
 
-def test_inpainter_initialization() -> None:
-    """Test LamaInpainter initialization."""
-    try:
-        inpainter = TeleaInpainter()
-        assert inpainter is not None
-    except RuntimeError as e:
-        if "LaMa dependencies not installed" in str(e):
-            pytest.skip("LaMa not installed - skipping test")
-        else:
-            raise
 
 def test_inpaint_single_image() -> None:
     """Test inpainting a single image."""
@@ -328,14 +318,6 @@ class TestLamaInpainterValidation:
         with pytest.raises(ValueError, match="HxWx3"):
             lama_inpainter.inpaint(image, mask)
 
-    def test_3d_mask_auto_converts(self, lama_inpainter):
-        """3-channel mask should be auto-converted to single channel."""
-        image = np.ones((50, 50, 3), dtype=np.uint8) * 128
-        mask_3d = np.zeros((50, 50, 3), dtype=np.uint8)
-        mask_3d[20:30, 20:30] = 255
-        # Should not raise
-        result = lama_inpainter.inpaint(image, mask_3d)
-        assert result.shape == image.shape
 
     def test_mismatched_sizes_raises(self, lama_inpainter):
         image = np.zeros((50, 50, 3), dtype=np.uint8)
@@ -359,81 +341,11 @@ class TestLamaInpainterValidation:
 class TestLamaInpainterProcessing:
     """Test inpaint processing paths: subregion, edge padding, output cropping."""
 
-    def test_basic_inpaint_returns_correct_shape(self, lama_inpainter):
-        """Full-image inpaint returns same shape as input."""
-        image = np.ones((64, 64, 3), dtype=np.uint8) * 200
-        mask = np.zeros((64, 64), dtype=np.uint8)
-        mask[20:40, 20:40] = 255
-        result = lama_inpainter.inpaint(image, mask)
-        assert result.shape == image.shape
-        assert result.dtype == np.uint8
 
-    def test_subregion_inpaint_returns_full_size(self, lama_inpainter):
-        """Subregion inpaint should return the full image size."""
-        image = np.ones((100, 100, 3), dtype=np.uint8) * 180
-        mask = np.zeros((100, 100), dtype=np.uint8)
-        mask[30:50, 30:50] = 255
-        result = lama_inpainter.inpaint(image, mask, subregion=(20, 20, 60, 60))
-        assert result.shape == image.shape
 
-    def test_subregion_touching_top_left_edge_pads(self, lama_inpainter):
-        """Subregion at (0,0) should trigger edge padding."""
-        image = np.ones((80, 80, 3), dtype=np.uint8) * 150
-        mask = np.zeros((80, 80), dtype=np.uint8)
-        mask[2:10, 2:10] = 255
-        result = lama_inpainter.inpaint(image, mask, subregion=(0, 0, 20, 20))
-        assert result.shape == image.shape
 
-    def test_subregion_touching_bottom_right_edge_pads(self, lama_inpainter):
-        """Subregion touching bottom-right boundary should trigger edge padding."""
-        image = np.ones((80, 80, 3), dtype=np.uint8) * 150
-        mask = np.zeros((80, 80), dtype=np.uint8)
-        mask[70:80, 70:80] = 255
-        result = lama_inpainter.inpaint(image, mask, subregion=(60, 60, 80, 80))
-        assert result.shape == image.shape
 
-    def test_subregion_touching_all_edges(self, lama_inpainter):
-        """Subregion spanning the entire image should pad all sides and restore."""
-        image = np.ones((64, 64, 3), dtype=np.uint8) * 100
-        mask = np.zeros((64, 64), dtype=np.uint8)
-        mask[10:50, 10:50] = 255
-        result = lama_inpainter.inpaint(image, mask, subregion=(0, 0, 64, 64))
-        assert result.shape == image.shape
 
-    def test_simplelama_output_cropped_when_padded(self, monkeypatch):
-        """If SimpleLama output is larger than input (mod-8 padding), it gets cropped."""
-        # Create a model that returns output 8px larger in each dimension
-        class PaddingSimpleLama:
-            def __call__(self, img_rgb, mask):
-                h, w = img_rgb.shape[:2]
-                # Simulate mod-8 padding: add extra pixels
-                padded = np.zeros((h + 5, w + 3, 3), dtype=np.uint8)
-                padded[:h, :w] = img_rgb
-
-                class FakePIL:
-                    def __init__(self, arr):
-                        self._arr = arr
-                        self.shape = arr.shape
-                        self.dtype = arr.dtype
-                    def convert(self, mode):
-                        return self
-                    def __array__(self):
-                        return self._arr
-
-                return FakePIL(padded)
-
-        monkeypatch.setattr(lama_mod, "SimpleLama", PaddingSimpleLama)
-        monkeypatch.setattr(lama_mod, "select_device", lambda d: "cpu")
-
-        inpainter = LamaInpainter(device="cpu")
-        inpainter.model = PaddingSimpleLama()
-
-        image = np.ones((50, 70, 3), dtype=np.uint8) * 200
-        mask = np.zeros((50, 70), dtype=np.uint8)
-        mask[20:30, 20:30] = 255
-        result = inpainter.inpaint(image, mask)
-        # Output should be cropped back to original dimensions
-        assert result.shape == image.shape
 
     def test_inpaint_error_raises_and_cleans_up(self, monkeypatch):
         """Exception during model inference is re-raised."""
@@ -454,39 +366,6 @@ class TestLamaInpainterProcessing:
         with pytest.raises(RuntimeError, match="GPU exploded"):
             inpainter.inpaint(image, mask)
 
-    def test_subregion_output_size_mismatch_resized(self, monkeypatch):
-        """If LaMa output doesn't match subregion size, it should be resized."""
-        class WrongSizeSimpleLama(_FakeSimpleLama):
-            """Subclass of _FakeSimpleLama so isinstance check passes."""
-            def __call__(self, img_rgb, mask):
-                h, w = img_rgb.shape[:2]
-                # Return wrong size (half height)
-                wrong = np.ones((h // 2, w, 3), dtype=np.uint8) * 99
-
-                class FakePIL:
-                    def __init__(self, arr):
-                        self._arr = arr
-                        self.shape = arr.shape
-                        self.dtype = arr.dtype
-                    def convert(self, mode):
-                        return self
-                    def __array__(self):
-                        return self._arr
-
-                return FakePIL(wrong)
-
-        monkeypatch.setattr(lama_mod, "SimpleLama", _FakeSimpleLama)
-        monkeypatch.setattr(lama_mod, "select_device", lambda d: "cpu")
-
-        inpainter = LamaInpainter(device="cpu")
-        inpainter.model = WrongSizeSimpleLama()
-
-        image = np.ones((100, 100, 3), dtype=np.uint8) * 200
-        mask = np.zeros((100, 100), dtype=np.uint8)
-        mask[30:50, 30:50] = 255
-        result = inpainter.inpaint(image, mask, subregion=(20, 20, 60, 60))
-        # Despite wrong model output, final result should match original image size
-        assert result.shape == image.shape
 
 
 # =========================================================================

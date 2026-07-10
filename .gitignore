@@ -239,6 +239,7 @@ tests/images/archived/
 
 # Superpowers session working documents — agent scratchpad, not product artifacts.
 .superpowers/
+.worktrees/
 
 # Experiment corpora and harvested data.
 # These directories are under tests/images/ for historical reasons but are NOT
