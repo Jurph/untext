@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import lru_cache
 import time
 
 import cv2
@@ -550,8 +549,15 @@ def _build_alignment_canvas_shape(
     )
 
 
-@lru_cache(maxsize=128)
 def _get_hann_window(canvas_shape: tuple[int, int]) -> np.ndarray:
+    """Build the per-canvas Hann window used by phase correlation.
+
+    Do not cache these globally. The fallback scale ladder can visit dozens of
+    distinct canvas shapes per candidate pair, and a candidate graph visits many
+    pairs; an LRU cache here retains large float32 arrays whose total size can
+    dominate the process RSS and OOM otherwise-viable runs. The window is cheap
+    to rebuild relative to the pairwise alignment work around it.
+    """
     canvas_h, canvas_w = canvas_shape
     return cv2.createHanningWindow((canvas_w, canvas_h), cv2.CV_32F)
 
