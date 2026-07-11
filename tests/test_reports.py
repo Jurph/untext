@@ -4,6 +4,7 @@ import cv2
 import numpy as np
 
 from untextre.reports import (
+    TimingReportConfig,
     _save_clean_timing_report,
     _save_discovered_watermark_candidates,
 )
@@ -69,8 +70,8 @@ class TestSaveCleanTimingReport:
         out_file = tmp_path / "report.txt"
         _save_clean_timing_report(
             [timing], total_time=2.5, avg_time=2.5,
-            timing_file=out_file, method="lama",
-            confidence_threshold=0.3, target_color=None, forced_bbox=None,
+            timing_file=out_file,
+            config=TimingReportConfig(method="lama", confidence_threshold=0.3),
         )
         text = out_file.read_text()
 
@@ -86,8 +87,8 @@ class TestSaveCleanTimingReport:
         out_file = tmp_path / "report.txt"
         _save_clean_timing_report(
             timings, total_time=6.0, avg_time=3.0,
-            timing_file=out_file, method="telea",
-            confidence_threshold=0.3, target_color=None, forced_bbox=None,
+            timing_file=out_file,
+            config=TimingReportConfig(method="telea", confidence_threshold=0.3),
         )
         text = out_file.read_text()
 
@@ -105,8 +106,8 @@ class TestSaveCleanTimingReport:
         out_file = tmp_path / "report.txt"
         _save_clean_timing_report(
             timings, total_time=10.0, avg_time=2.0,
-            timing_file=out_file, method="lama",
-            confidence_threshold=0.3, target_color=None, forced_bbox=None,
+            timing_file=out_file,
+            config=TimingReportConfig(method="lama", confidence_threshold=0.3),
         )
         text = out_file.read_text()
 
@@ -126,8 +127,8 @@ class TestSaveCleanTimingReport:
         out_file = tmp_path / "report.txt"
         _save_clean_timing_report(
             [timing], total_time=1.0, avg_time=1.0,
-            timing_file=out_file, method="lama",
-            confidence_threshold=0.3, target_color=None, forced_bbox=None,
+            timing_file=out_file,
+            config=TimingReportConfig(method="lama", confidence_threshold=0.3),
         )
         text = out_file.read_text()
         assert "N/A" in text
@@ -137,10 +138,13 @@ class TestSaveCleanTimingReport:
         out_file = tmp_path / "report.txt"
         _save_clean_timing_report(
             [timing], total_time=1.0, avg_time=1.0,
-            timing_file=out_file, method="lama",
-            confidence_threshold=0.3,
-            target_color=(128, 128, 128),
-            forced_bbox=(10, 20, 100, 50),
+            timing_file=out_file,
+            config=TimingReportConfig(
+                method="lama",
+                confidence_threshold=0.3,
+                target_color=(128, 128, 128),
+                forced_bbox=(10, 20, 100, 50),
+            ),
         )
         text = out_file.read_text()
         assert "Target color: (128, 128, 128)" in text
@@ -154,8 +158,8 @@ class TestSaveCleanTimingReport:
         out_file = tmp_path / "report.txt"
         _save_clean_timing_report(
             timings, total_time=5.0, avg_time=2.5,
-            timing_file=out_file, method="lama",
-            confidence_threshold=0.3, target_color=None, forced_bbox=None,
+            timing_file=out_file,
+            config=TimingReportConfig(method="lama", confidence_threshold=0.3),
         )
         text = out_file.read_text()
         assert "retried with g=8: 1" in text
@@ -171,8 +175,8 @@ class TestSaveCleanTimingReport:
         out_file = tmp_path / "report.txt"
         _save_clean_timing_report(
             [template_only], total_time=1.0, avg_time=1.0,
-            timing_file=out_file, method="lama",
-            confidence_threshold=0.3, target_color=None, forced_bbox=None,
+            timing_file=out_file,
+            config=TimingReportConfig(method="lama", confidence_threshold=0.3),
         )
         text = out_file.read_text()
         assert "watermarked_photo.jpg" in text or "watermarked_photo" in text
@@ -190,8 +194,8 @@ class TestSaveCleanTimingReport:
         out_file = tmp_path / "report.txt"
         _save_clean_timing_report(
             [consensus, template_only], total_time=2.5, avg_time=1.25,
-            timing_file=out_file, method="telea",
-            confidence_threshold=0.3, target_color=None, forced_bbox=None,
+            timing_file=out_file,
+            config=TimingReportConfig(method="telea", confidence_threshold=0.3),
         )
         text = out_file.read_text()
         assert "consensus.png" in text
