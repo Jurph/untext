@@ -275,15 +275,21 @@ def main() -> None:
     
     # Detailed timing report if requested
     if args.timing and detailed_timings:
+        timing_config = reports.TimingReportConfig(
+            method=args.paint,
+            confidence_threshold=args.confidence_threshold,
+            target_color=target_color,
+            forced_bbox=forced_bbox,
+        )
         # Always save timing report to a clean file
         timing_file = output_path / "timing_report.txt"
-        reports._save_clean_timing_report(detailed_timings, total_time, avg_time, timing_file, args.paint, args.confidence_threshold, target_color, forced_bbox)
+        reports._save_clean_timing_report(detailed_timings, total_time, avg_time, timing_file, timing_config)
         logger.info(f"Timing report saved to: {timing_file}")
         
         # Also save to logfile location if specified
         if args.logfile:
             log_timing_file = Path(args.logfile).with_suffix('.timing.txt')
-            reports._save_clean_timing_report(detailed_timings, total_time, avg_time, log_timing_file, args.paint, args.confidence_threshold, target_color, forced_bbox)
+            reports._save_clean_timing_report(detailed_timings, total_time, avg_time, log_timing_file, timing_config)
             logger.info(f"Timing report also saved to: {log_timing_file}")
 
 

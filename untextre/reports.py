@@ -1,6 +1,7 @@
 """Reporting helpers for CLI and watermark discovery outputs."""
 
 import statistics
+from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
@@ -48,19 +49,35 @@ def _save_discovered_watermark_candidates(
     return watermark_templates
 
 
-def _save_clean_timing_report(detailed_timings: list, total_time: float, avg_time: float, timing_file: Path, method: str, confidence_threshold: float, target_color: Optional[tuple], forced_bbox: Optional[tuple]) -> None:
+@dataclass(frozen=True)
+class TimingReportConfig:
+    """Per-run metadata for a timing report; optional fields are display-only."""
+
+    method: str
+    confidence_threshold: float
+    target_color: Optional[tuple] = None
+    forced_bbox: Optional[tuple] = None
+
+
+def _save_clean_timing_report(
+    detailed_timings: list,
+    total_time: float,
+    avg_time: float,
+    timing_file: Path,
+    config: TimingReportConfig,
+) -> None:
     """Save a clean timing report to file without duplicate logging."""
     with open(timing_file, 'w') as f:
         f.write("=" * 74 + "\n")
         f.write("CONSENSUS DETECTION + SPATIAL TF-IDF TIMING REPORT\n")
         f.write("=" * 74 + "\n")
-        f.write(f"Confidence threshold: {confidence_threshold}\n")
+        f.write(f"Confidence threshold: {config.confidence_threshold}\n")
         f.write("TF-IDF granularity: g=4 (auto-retry with g=8 if needed)\n")
-        f.write(f"Inpainting method: {method}\n")
-        if target_color:
-            f.write(f"Target color: {target_color}\n")
-        if forced_bbox:
-            f.write(f"Forced bbox: {forced_bbox}\n")
+        f.write(f"Inpainting method: {config.method}\n")
+        if config.target_color:
+            f.write(f"Target color: {config.target_color}\n")
+        if config.forced_bbox:
+            f.write(f"Forced bbox: {config.forced_bbox}\n")
         
         # Count retries and expansions
         retried_count = sum(1 for t in detailed_timings if t.get('retried_with_g8', False))
