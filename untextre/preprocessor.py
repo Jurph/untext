@@ -1,7 +1,7 @@
 """Image preprocessing for consensus text detection.
 
 This module provides image preprocessing functions optimized through grid search
-testing for the shared EAST, DocTR, and EasyOCR consensus path.
+testing for the shared EAST, EasyOCR, and YOLO11x consensus path.
 
 The main preprocessing pipeline includes:
 - CLAHE contrast enhancement (clip_limit=2.0, tile_size=(4,4))

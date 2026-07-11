@@ -16,48 +16,6 @@ from .detector import cleanup_vram
 logger = setup_logger(__name__)
 
 
-def detect_with_doctr(image: np.ndarray, confidence_threshold: float = CLI_DEFAULT_CONFIDENCE) -> List[Tuple[int, int, int, int, float]]:
-    """Run DocTR detection with configurable confidence threshold.
-    
-    Args:
-        image: Input image as H×W×3 BGR numpy array
-        confidence_threshold: Minimum confidence for detections (0.0-1.0)
-        
-    Returns:
-        List of (x, y, width, height, confidence_pct) tuples
-    """
-    try:
-        # Use MODEL_CONFIDENCE_FLOOR so the model captures everything;
-        # the caller's confidence_threshold is applied as a post-filter.
-        doctr_detector = detector_mod.get_doctr_detector(
-            confidence_threshold=MODEL_CONFIDENCE_FLOOR,
-            min_text_size=3,
-        )
-        
-        detections = doctr_detector.detect(image)
-        # Apply confidence threshold as post-filter
-        detections = [d for d in detections if d.get('confidence', 0) >= confidence_threshold]
-        
-        results = []
-        for detection in detections:
-            geometry = detection['geometry']
-            x_coords = geometry[:, 0]
-            y_coords = geometry[:, 1]
-            x_min, x_max = np.min(x_coords), np.max(x_coords)
-            y_min, y_max = np.min(y_coords), np.max(y_coords)
-            
-            x, y = int(x_min), int(y_min)
-            w, h = int(x_max - x_min), int(y_max - y_min)
-            confidence = detection.get('confidence', 0.5) * 100
-            
-            results.append((x, y, w, h, confidence))
-            
-        return results
-        
-    except Exception as e:
-        logger.warning(f"DocTR detection failed: {e}")
-        return []
-
 
 def detect_with_easyocr(image: np.ndarray, confidence_threshold: float = CLI_DEFAULT_CONFIDENCE) -> List[Tuple[int, int, int, int, float]]:
     """Run EasyOCR detection with configurable confidence threshold.

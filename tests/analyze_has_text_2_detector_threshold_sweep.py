@@ -43,8 +43,8 @@ def main() -> None:
         rows = rows[: args.limit]
 
     policies = []
-    for east, doctr, easyocr in product(args.thresholds, repeat=3):
-        policies.append(score_policy(rows, args.input_dir, {"east": east, "doctr": doctr, "easyocr": easyocr}))
+    for east, yolo11x, easyocr in product(args.thresholds, repeat=3):
+        policies.append(score_policy(rows, args.input_dir, {"east": east, "yolo11x": yolo11x, "easyocr": easyocr}))
 
     policies.sort(
         key=lambda row: (
@@ -53,7 +53,7 @@ def main() -> None:
             row["width_ge_050_count"],
             row["coverage_ge_006_count"],
             row["east_threshold"],
-            row["doctr_threshold"],
+            row["yolo11x_threshold"],
             row["easyocr_threshold"],
         )
     )
@@ -136,7 +136,7 @@ def score_policy(rows: list[dict], input_dir: Path, thresholds: dict[str, float]
     image_count = max(len(rows), 1)
     return {
         "east_threshold": thresholds["east"],
-        "doctr_threshold": thresholds["doctr"],
+        "yolo11x_threshold": thresholds["yolo11x"],
         "easyocr_threshold": thresholds["easyocr"],
         "image_count": len(rows),
         "bbox_image_count": bbox_rows,

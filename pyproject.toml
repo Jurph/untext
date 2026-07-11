@@ -25,7 +25,6 @@ dependencies = [
     "numpy>=1.24.0",
     "opencv-python>=4.8.0",
     "pillow>=9.5.0",
-    "python-doctr>=0.6.0",
     "scikit-image>=0.21.0",
     "simple-lama-inpainting==0.1.2",
     "torch==2.6.0",
@@ -97,6 +96,27 @@ markers = [
     "very_slow: marks heavyweight benchmark-style tests that can run hundreds of generated cases",
 ]
 
+[tool.basedpyright]
+include = ["untextre", "scripts", "tests"]
+exclude = [
+    ".codex-tmp",
+    ".uv-cache",
+    ".venv",
+    "background",
+    "build",
+    "cleaned-4",
+    "docs",
+    "experiments",
+    "scratch",
+    "untextre.egg-info",
+    "venv",
+]
+venvPath = "."
+venv = ".venv"
+pythonVersion = "3.10"
+typeCheckingMode = "basic"
+reportMissingTypeStubs = "none"
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
@@ -119,3 +139,8 @@ ignore = ["E501"]
 "tests/test_detection.py" = ["E402"]
 "tests/test_detector_unit.py" = ["E402"]
 "tests/test_discovery.py" = ["E402"]
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.39.9",
+]

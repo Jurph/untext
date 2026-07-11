@@ -32,7 +32,7 @@ def main() -> None:
         type=float,
         nargs="+",
         default=DEFAULT_THRESHOLDS,
-        help="Detector thresholds to replay across east/doctr/easyocr.",
+        help="Detector thresholds to replay across east/yolo11x/easyocr.",
     )
     parser.add_argument(
         "--out-dir",
@@ -56,13 +56,13 @@ def main() -> None:
 
     combos = list(itertools.product(args.thresholds, repeat=3))
     evaluations = []
-    for east_threshold, doctr_threshold, easyocr_threshold in combos:
+    for east_threshold, yolo11x_threshold, easyocr_threshold in combos:
         evaluations.append(
             evaluate_combo(
                 rows,
                 image_cache=image_cache,
                 east_threshold=east_threshold,
-                doctr_threshold=doctr_threshold,
+                yolo11x_threshold=yolo11x_threshold,
                 easyocr_threshold=easyocr_threshold,
             )
         )
@@ -74,7 +74,7 @@ def main() -> None:
             row["coverage_ge_006_rate"],
             row["width_ge_050_rate"],
             row["east_threshold"],
-            row["doctr_threshold"],
+            row["yolo11x_threshold"],
             row["easyocr_threshold"],
         )
     )
@@ -131,7 +131,7 @@ def evaluate_combo(
     *,
     image_cache: dict[str, np.ndarray],
     east_threshold: float,
-    doctr_threshold: float,
+    yolo11x_threshold: float,
     easyocr_threshold: float,
 ) -> dict:
     geometry_image_count = 0
@@ -158,9 +158,9 @@ def evaluate_combo(
 
     for row in rows:
         cell_east = row["thresholds"].get(threshold_id(east_threshold))
-        cell_doctr = row["thresholds"].get(threshold_id(doctr_threshold))
+        cell_yolo11x = row["thresholds"].get(threshold_id(yolo11x_threshold))
         cell_easyocr = row["thresholds"].get(threshold_id(easyocr_threshold))
-        if cell_east is None or cell_doctr is None or cell_easyocr is None:
+        if cell_east is None or cell_yolo11x is None or cell_easyocr is None:
             continue
         width = row.get("width")
         height = row.get("height")
@@ -170,7 +170,7 @@ def evaluate_combo(
         geometry_image_count += 1
         detections = {
             "east": [tuple(box["bbox"] + [box["confidence"]]) for box in cell_east["detectors"].get("east", []) if box["confidence"] >= east_threshold * 100.0],
-            "doctr": [tuple(box["bbox"] + [box["confidence"]]) for box in cell_doctr["detectors"].get("doctr", []) if box["confidence"] >= doctr_threshold * 100.0],
+            "yolo11x": [tuple(box["bbox"] + [box["confidence"]]) for box in cell_yolo11x["detectors"].get("yolo11x", []) if box["confidence"] >= yolo11x_threshold * 100.0],
             "easyocr": [tuple(box["bbox"] + [box["confidence"]]) for box in cell_easyocr["detectors"].get("easyocr", []) if box["confidence"] >= easyocr_threshold * 100.0],
         }
         consensus = find_consensus_boxes(detections, overlap_threshold=0.1)
@@ -261,7 +261,7 @@ def evaluate_combo(
 
     return {
         "east_threshold": east_threshold,
-        "doctr_threshold": doctr_threshold,
+        "yolo11x_threshold": yolo11x_threshold,
         "easyocr_threshold": easyocr_threshold,
         "image_count": geometry_image_count,
         "valid_rows": geometry_image_count,
@@ -334,12 +334,12 @@ def load_exact_image(row: dict) -> tuple[np.ndarray | None, str | None]:
     return image, None
 
 
-def find_combo(rows: list[dict], east_threshold: float, doctr_threshold: float, easyocr_threshold: float) -> dict | None:
-    key = (round(east_threshold, 3), round(doctr_threshold, 3), round(easyocr_threshold, 3))
+def find_combo(rows: list[dict], east_threshold: float, yolo11x_threshold: float, easyocr_threshold: float) -> dict | None:
+    key = (round(east_threshold, 3), round(yolo11x_threshold, 3), round(easyocr_threshold, 3))
     for row in rows:
         if (
             round(row["east_threshold"], 3),
-            round(row["doctr_threshold"], 3),
+            round(row["yolo11x_threshold"], 3),
             round(row["easyocr_threshold"], 3),
         ) == key:
             return row

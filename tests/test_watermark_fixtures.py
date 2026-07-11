@@ -226,7 +226,7 @@ class TestConsensusDetectionE2E:
         - test3-without-text.png (clean reference)
 
     Runs process_single_image through the *actual* detection path (EAST,
-    DocTR, EasyOCR consensus) with TELEA inpainting.  Compares the cleaned
+    YOLO11x, EasyOCR consensus) with TELEA inpainting.  Compares the cleaned
     output to the clean reference via SSIM.
 
     Calibrated 2026-02-16: SSIM was 0.9956 with telea, 4 consensus boxes,

@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 
 import untextre.consensus as consensus_mod
-import untextre.detector as detector_mod
 from harvest_has_text_2_pipeline_bboxes import empty_review, run_one, safe_id, write_summary
 from untextre.utils import IMAGE_EXTENSIONS
 
@@ -85,7 +84,7 @@ def run_supervisor(args: argparse.Namespace) -> None:
         "started_at_epoch": time.time(),
         "notes": [
             "Each threshold is a full production-style bbox-of-record pass.",
-            "DocTR wrapper floor is lowered inside worker processes only.",
+            "Detector wrapper floor is lowered inside worker processes only.",
             "Use records for later human/multimodal precision-recall review.",
         ],
     }
@@ -153,7 +152,7 @@ def run_chunked_supervisor(args: argparse.Namespace) -> None:
         "notes": [
             "Chunked mode launches fresh worker processes to bound native/GPU memory retention.",
             "Nonzero chunk exits are retried, then isolated to single images with crash records.",
-            "DocTR wrapper floor is lowered inside worker processes only.",
+            "Detector wrapper floor is lowered inside worker processes only.",
         ],
     }
     (args.out_root / "manifest.json").write_text(
@@ -282,8 +281,7 @@ def run_worker(args: argparse.Namespace) -> None:
 
     # This is experiment-only lowering. The imported production defaults are not edited.
     consensus_mod.MODEL_CONFIDENCE_FLOOR = min(consensus_mod.MODEL_CONFIDENCE_FLOOR, threshold)
-    detector_mod._doctr_detector = None
-
+    
     image_paths = get_image_paths(args.input_dir, args.limit)
     if args.start_index:
         image_paths = image_paths[args.start_index:]
@@ -304,7 +302,7 @@ def run_worker(args: argparse.Namespace) -> None:
         print(f"[{index}/{len(image_paths)}] threshold={threshold:.3f} detect {ascii(image_path.name)}", flush=True)
         row = run_one(image_path, args.input_dir, threshold, args.color_sensitivity)
         row["sweep_threshold"] = threshold
-        row["doctr_floor"] = consensus_mod.MODEL_CONFIDENCE_FLOOR
+        row["detector_floor"] = consensus_mod.MODEL_CONFIDENCE_FLOOR
         row["elapsed_sec"] = time.time() - start
         record_path.write_text(json.dumps(row, indent=2, sort_keys=True), encoding="utf-8")
         rows.append(row)
@@ -392,7 +390,7 @@ def summary_record(threshold: float, summary: dict, rows: list[dict]) -> dict:
         if any(box.get("growth_ratio", 0.0) >= 4.0 for box in row.get("bbox_records", []))
     ]
     high_coverage_rows = [row for row in rows if row.get("total_area_fraction", 0.0) >= 0.06]
-    detector_counts = {"east": 0, "doctr": 0, "easyocr": 0}
+    detector_counts = {"east": 0, "yolo11x": 0, "easyocr": 0}
     consensus_stage_hits = {"normal": 0, "rotation": 0, "gray_enhancement": 0, "white_enhancement": 0}
     for row in rows:
         for stage in row.get("stages", []):
@@ -425,7 +423,7 @@ def summary_record(threshold: float, summary: dict, rows: list[dict]) -> dict:
         "gray_consensus_hits": consensus_stage_hits["gray_enhancement"],
         "white_consensus_hits": consensus_stage_hits["white_enhancement"],
         "east_stage_hits": detector_counts.get("east", 0),
-        "doctr_stage_hits": detector_counts.get("doctr", 0),
+        "yolo11x_stage_hits": detector_counts.get("yolo11x", 0),
         "easyocr_stage_hits": detector_counts.get("easyocr", 0),
     }
 

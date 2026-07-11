@@ -119,11 +119,11 @@ def load_threshold_rows(threshold_dir: Path) -> dict[str, dict]:
 def first_stage(row: dict) -> dict[str, list]:
     stages = row.get("stages", [])
     if not stages:
-        return {"east": [], "doctr": [], "easyocr": []}
+        return {"east": [], "yolo11x": [], "easyocr": []}
     detectors = stages[0].get("detectors", {})
     return {
         "east": detectors.get("east", []),
-        "doctr": detectors.get("doctr", []),
+        "yolo11x": detectors.get("yolo11x", []),
         "easyocr": detectors.get("easyocr", []),
     }
 

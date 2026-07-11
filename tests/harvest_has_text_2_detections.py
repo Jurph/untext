@@ -8,7 +8,7 @@ from pathlib import Path
 import cv2
 
 from untextre.consensus import (
-    detect_with_doctr,
+    detect_with_yolo11x,
     detect_with_east,
     detect_with_easyocr,
     find_consensus_boxes,
@@ -93,7 +93,7 @@ def run_one(image_path: Path, input_dir: Path, confidence: float) -> dict:
 
     detections = {
         "east": detect_with_east(preprocessed, confidence),
-        "doctr": detect_with_doctr(preprocessed, confidence),
+        "yolo11x": detect_with_yolo11x(preprocessed, confidence),
         "easyocr": detect_with_easyocr(preprocessed, confidence),
     }
     consensus = find_consensus_boxes(detections, overlap_threshold=0.1)

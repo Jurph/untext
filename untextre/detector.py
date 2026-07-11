@@ -1,4 +1,4 @@
-"""Text detector loaders and adapters for DocTR, EasyOCR, and EAST.
+"""Text detector loaders and adapters for EAST, EasyOCR, and YOLO11x.
 
 This module owns shared model instances, normalizes detector outputs into the
 project's detection shape, and exposes single-detector entry points used by the
@@ -12,10 +12,7 @@ import numpy as np
 import torch
 import urllib.request
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
-from doctr.models import detection
-from doctr.models.detection.predictor import DetectionPredictor
-from doctr.models.preprocessor.pytorch import PreProcessor
+from typing import Any, Dict, List, Optional, Tuple
 
 from .utils import ImageArray, BBox, setup_logger, CLI_DEFAULT_CONFIDENCE
 
@@ -25,12 +22,11 @@ warnings.filterwarnings("ignore", message="defusedxml.cElementTree is deprecated
 logger = setup_logger(__name__)
 
 # Type alias for detection results
-Detection = Dict[str, np.ndarray]  # {'geometry': points, 'confidence': score}
+Detection = Dict[str, Any]  # {'geometry': points, 'confidence': score}
 
 # Module-level model instances for persistent loading
-_doctr_detector: Optional['TextDetector'] = None
 _easyocr_reader: Optional[object] = None
-_east_net: Optional[cv2.dnn_Net] = None
+_east_net: Optional[Any] = None
 _yolo11x_model: Optional[object] = None
 
 EAST_MODEL_URL = "https://github.com/oyyd/frozen_east_text_detection.pb/raw/master/frozen_east_text_detection.pb"
@@ -44,29 +40,6 @@ YOLO11X_DOWNLOAD_TIMEOUT_SECONDS = 120
 YOLO11X_MODEL_MIN_BYTES = 50 * 1024 * 1024
 
 
-def get_doctr_detector(
-    confidence_threshold: float = CLI_DEFAULT_CONFIDENCE,
-    min_text_size: int = 10,
-) -> 'TextDetector':
-    """Return the shared DocTR detector, upgrading to a more permissive config if needed."""
-    global _doctr_detector
-
-    needs_init = _doctr_detector is None
-    if _doctr_detector is not None:
-        needs_init = (
-            _doctr_detector.confidence_threshold > confidence_threshold
-            or _doctr_detector.min_text_size > min_text_size
-        )
-
-    if needs_init:
-        logger.info("Initializing DocTR model...")
-        _doctr_detector = TextDetector(
-            confidence_threshold=confidence_threshold,
-            min_text_size=min_text_size,
-        )
-        logger.info("DocTR model ready")
-
-    return _doctr_detector
 
 
 def get_easyocr_reader() -> object:
@@ -82,7 +55,7 @@ def get_easyocr_reader() -> object:
     return _easyocr_reader
 
 
-def get_east_net() -> cv2.dnn_Net:
+def get_east_net() -> Any:
     """Return the shared EAST text detector network."""
     global _east_net
 
@@ -119,7 +92,7 @@ def cleanup_vram() -> None:
 
 def detect_text_regions(
     image: ImageArray,
-    method: str = "doctr",
+    method: str = "east",
     confidence_threshold: float = CLI_DEFAULT_CONFIDENCE,
 ) -> List[BBox]:
     """Detect text regions in an image and return bounding boxes.
@@ -129,7 +102,7 @@ def detect_text_regions(
     
     Args:
         image: Input image as H×W×3 BGR uint8 numpy array
-        method: Detection method to use ("doctr", "easyocr", or "east")
+        method: Detection method to use ("east", "easyocr", or "yolo11x")
         confidence_threshold: Minimum confidence threshold for detections (0.0-1.0, default: 0.3)
         
     Returns:
@@ -139,18 +112,15 @@ def detect_text_regions(
         ValueError: If image is invalid or method is unsupported
         RuntimeError: If detection fails
     """
-    if method == "doctr":
-        detector = get_doctr_detector()
-        # Reuse global detector - confidence threshold is applied as post-filter
-        detections = detector.detect(image)
-        # Filter by confidence threshold
-        detections = [d for d in detections if d.get('confidence', 0) >= confidence_threshold]
+    if method == "east":
+        net = get_east_net()
+        detections = _detect_with_east(image, net, min_confidence=confidence_threshold)
     elif method == "easyocr":
         reader = get_easyocr_reader()
         detections = _detect_with_easyocr(image, reader, confidence_threshold=confidence_threshold)
-    elif method == "east":
-        net = get_east_net()
-        detections = _detect_with_east(image, net, min_confidence=confidence_threshold)
+    elif method == "yolo11x":
+        model = get_yolo11x_model()
+        detections = _detect_with_yolo11x(image, model, confidence_threshold=confidence_threshold)
     else:
         raise ValueError(f"Unsupported detection method: {method}")
     
@@ -174,7 +144,7 @@ def detect_text_regions(
     
     return bboxes
 
-def _detect_with_easyocr(image: ImageArray, reader: object, confidence_threshold: float = CLI_DEFAULT_CONFIDENCE) -> List[Detection]:
+def _detect_with_easyocr(image: ImageArray, reader: Any, confidence_threshold: float = CLI_DEFAULT_CONFIDENCE) -> List[Detection]:
     """Detect text regions using EasyOCR with pre-initialized reader.
     
     Args:
@@ -183,7 +153,7 @@ def _detect_with_easyocr(image: ImageArray, reader: object, confidence_threshold
         confidence_threshold: Minimum confidence threshold for detections (0.0-1.0, default: 0.3)
         
     Returns:
-        List of detection dictionaries in the same format as DocTR
+        List of detection dictionaries in the shared geometry/confidence format
         
     Raises:
         RuntimeError: If detection fails
@@ -218,6 +188,44 @@ def _detect_with_easyocr(image: ImageArray, reader: object, confidence_threshold
     except Exception as e:
         logger.error(f"EasyOCR detection failed: {e}")
         raise RuntimeError("EasyOCR detection failed") from e
+
+def _detect_with_yolo11x(
+    image: ImageArray,
+    model: Any,
+    confidence_threshold: float = CLI_DEFAULT_CONFIDENCE,
+) -> List[Detection]:
+    """Detect watermark regions using a YOLO11x model with pre-loaded weights."""
+    try:
+        results = model.predict(image, conf=confidence_threshold, verbose=False)
+        detections: List[Detection] = []
+        for result in results:
+            boxes = getattr(result, "boxes", [])
+            if boxes is None:
+                continue
+
+            for box in boxes:
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                confidence = float(box.conf[0])
+                points = np.array(
+                    [
+                        [x1, y1],
+                        [x2, y1],
+                        [x2, y2],
+                        [x1, y2],
+                    ],
+                    dtype=np.float32,
+                )
+                detections.append(
+                    {
+                        "geometry": points,
+                        "confidence": confidence,
+                    }
+                )
+        logger.debug(f"YOLO11x found {len(detections)} watermark regions")
+        return detections
+    except Exception as e:
+        logger.error(f"YOLO11x detection failed: {e}")
+        raise RuntimeError("YOLO11x detection failed") from e
 
 def _get_east_model_path() -> Path:
     """Return the persistent cache path for the EAST model."""
@@ -272,7 +280,7 @@ def _download_east_model(
         ) from exc
 
 
-def _load_east_model() -> cv2.dnn_Net:
+def _load_east_model() -> Any:
     """Load the EAST text detection model.
     
     This function attempts to download the EAST model if it doesn't exist locally.
@@ -403,7 +411,7 @@ def _load_yolo11x_model() -> object:
         ) from e
 
 
-def _detect_with_east(image: ImageArray, net: cv2.dnn_Net, 
+def _detect_with_east(image: ImageArray, net: Any,
                      min_confidence: float = 0.3, 
                      nms_threshold: float = 0.4,
                      width: int = 640, 
@@ -423,7 +431,7 @@ def _detect_with_east(image: ImageArray, net: cv2.dnn_Net,
         height: Network input height (must be multiple of 32)
         
     Returns:
-        List of detection dictionaries in the same format as DocTR
+        List of detection dictionaries in the shared geometry/confidence format
         
     Raises:
         RuntimeError: If detection fails
@@ -639,204 +647,3 @@ def _geometry_to_bbox(geometry: np.ndarray) -> BBox:
     
     return (int(x_min), int(y_min), int(x_max - x_min), int(y_max - y_min))
 
-class TextDetector:
-    """DocTR DBNet detector wrapper with output parsing and filtering."""
-    
-    def __init__(
-        self, 
-        confidence_threshold: float = CLI_DEFAULT_CONFIDENCE, 
-        min_text_size: int = 10
-    ) -> None:
-        """Initialize the TextDetector with a pre-trained model.
-        
-        Args:
-            confidence_threshold: Minimum confidence score for detections (0-1)
-            min_text_size: Minimum size of text regions to detect
-        """
-        if not 0 <= confidence_threshold <= 1:
-            raise ValueError("confidence_threshold must be between 0 and 1")
-        if min_text_size <= 0:
-            raise ValueError("min_text_size must be positive")
-            
-        self.confidence_threshold = confidence_threshold
-        self.min_text_size = min_text_size
-        
-        try:
-            # Initialize detection model
-            self.model = detection.db_resnet50(pretrained=True)
-            self.pre_processor = PreProcessor(
-                output_size=(1024, 1024),
-                batch_size=1,
-                mean=(0.798, 0.785, 0.772),
-                std=(0.264, 0.2749, 0.287)
-            )
-            self.predictor = DetectionPredictor(
-                pre_processor=self.pre_processor,
-                model=self.model
-            )
-            logger.info("Initialized TextDetector with DB ResNet50 model")
-        except Exception as e:
-            logger.error(f"Failed to initialize TextDetector: {e}")
-            raise RuntimeError("Failed to initialize TextDetector") from e
-    
-    @torch.no_grad()
-    def detect(self, image: ImageArray) -> List[Detection]:
-        """Detect text regions in an image.
-        
-        Args:
-            image: Input image as H×W×3 BGR uint8 numpy array
-            
-        Returns:
-            List of detection dictionaries, each containing:
-                - 'geometry': numpy array of polygon points
-                - 'confidence': confidence score
-        
-        Raises:
-            ValueError: If image is invalid
-            RuntimeError: If detection fails
-        """
-        if not isinstance(image, np.ndarray):
-            raise ValueError("Image must be a numpy array")
-        
-        if image.ndim != 3 or image.shape[2] != 3:
-            raise ValueError("Image must be HxWx3 BGR")
-        
-        try:
-            # Use the image as provided; callers own any project-level preprocessing.
-            logger.debug("Running DocTR detection")
-            
-            # Run detection (torch.no_grad context prevents gradient accumulation).
-            # KNOWN QUIRK: the BGR array goes in as-is even though DocTR was trained
-            # on RGB. A/B tested 2026-07-06 (vivid synthetic text + real flagged
-            # photos): detection deltas were within noise, and changing the input
-            # would perturb the frozen zero-corpus FP baseline. See TODO.md
-            # "DocTR receives BGR input" before "fixing" this.
-            raw = self.predictor([image])
-            if not isinstance(raw, list) or len(raw) == 0:
-                logger.warning("No text detected")
-                return []
-            
-            # Convert DocTR output to our format
-            detections = self._parse_doctr_output(raw[0], image.shape[:2])
-            
-            # Filter detections
-            detections = self._filter_detections(detections, image.shape[:2])
-            
-            logger.info(f"DocTR detected {len(detections)} text region(s)")
-            return detections
-            
-        except Exception as e:
-            logger.error(f"Text detection failed: {e}")
-            raise RuntimeError("Text detection failed") from e
-
-    def _parse_doctr_output(self, page: Dict, image_shape: Tuple[int, int]) -> List[Detection]:
-        """Convert DocTR output to our detection format.
-        
-        Args:
-            page: Dictionary from DocTR containing predictions
-            image_shape: Shape of the image (height, width)
-            
-        Returns:
-            List of detection dictionaries in our format
-        """
-        if not isinstance(page, dict):
-            logger.warning("Invalid page format from DocTR")
-            return []
-            
-        detections = []
-        # DocTR has returned both ndarray rows and dict-of-word records across
-        # versions. Parse both so format drift cannot silently become 0 detections.
-        words = page.get('words')
-        if isinstance(words, np.ndarray):
-            for pred in words:
-                if len(pred) >= 5:  # Ensure we have at least x1,y1,x2,y2,conf
-                    x1, y1, x2, y2, conf = pred[:5]
-                    detection = self._detection_from_normalized_box(x1, y1, x2, y2, conf, image_shape)
-                    if detection is not None:
-                        detections.append(detection)
-        elif isinstance(words, dict):
-            for word in words.values():
-                if not isinstance(word, dict):
-                    continue
-                geometry = word.get("geometry")
-                conf = word.get("confidence", word.get("objectness_score"))
-                if geometry is None or conf is None:
-                    continue
-                try:
-                    (x1, y1), (x2, y2) = geometry
-                except (TypeError, ValueError):
-                    continue
-                detection = self._detection_from_normalized_box(x1, y1, x2, y2, conf, image_shape)
-                if detection is not None:
-                    detections.append(detection)
-        elif words is None:
-            logger.warning("DocTR page did not include words")
-        else:
-            logger.warning(f"Unsupported DocTR words format: {type(words).__name__}")
-                
-        return detections
-
-    def _detection_from_normalized_box(
-        self,
-        x1: float,
-        y1: float,
-        x2: float,
-        y2: float,
-        confidence: float,
-        image_shape: Tuple[int, int],
-    ) -> Optional[Detection]:
-        """Convert one normalized DocTR box to a detection record."""
-        conf = float(confidence)
-        if conf < self.confidence_threshold:
-            return None
-
-        h, w = image_shape
-        points = np.array([
-            [float(x1) * w, float(y1) * h],
-            [float(x2) * w, float(y1) * h],
-            [float(x2) * w, float(y2) * h],
-            [float(x1) * w, float(y2) * h],
-        ], dtype=np.float32)
-
-        return {
-            'geometry': points,
-            'confidence': conf,
-        }
-
-    def _filter_detections(self, detections: List[Dict], image_shape: Tuple[int, int]) -> List[Dict]:
-        """Filter detections based on size and position.
-        
-        Args:
-            detections: List of detection dictionaries
-            image_shape: Shape of the image (height, width)
-            
-        Returns:
-            Filtered list of detections
-        """
-        if not isinstance(image_shape, tuple) or len(image_shape) != 2:
-            raise ValueError("image_shape must be a tuple of two integers")
-            
-        filtered = []
-        for det in detections:
-            if not isinstance(det, dict) or 'geometry' not in det:
-                continue
-                
-            geometry = det['geometry']
-            if not isinstance(geometry, np.ndarray) or geometry.shape[0] < 3:
-                continue
-                
-            # Calculate width and height
-            x_coords = geometry[:, 0]
-            y_coords = geometry[:, 1]
-            width = np.max(x_coords) - np.min(x_coords)
-            height = np.max(y_coords) - np.min(y_coords)
-            
-            # Check size
-            if width < self.min_text_size or height < self.min_text_size:
-                continue
-                
-            # TODO: Add smarter position-based filtering (corner preference)
-            
-            filtered.append(det)
-            
-        return filtered 

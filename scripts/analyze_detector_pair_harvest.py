@@ -13,7 +13,7 @@ from untextre.detector_pair_harvest import (
     summarize_detector_rows,
 )
 
-DEFAULT_DETECTORS = ["east", "doctr", "easyocr", "yolo11x"]
+DEFAULT_DETECTORS = ["east", "easyocr", "yolo11x"]
 
 
 def write_csv(path: Path, rows: list[dict]) -> None:

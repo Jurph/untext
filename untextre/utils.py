@@ -25,12 +25,10 @@ IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'}
 # intentionally different and serve different purposes.
 #
 # MODEL_CONFIDENCE_FLOOR (0.1):
-#     The internal threshold baked into the DocTR model at initialization.
-#     Set deliberately low so that ALL plausible detections survive the
-#     model's own filtering.  The *real* user-facing threshold is applied
-#     as a post-filter at detection time -- this lets users adjust the
-#     slider without re-initializing the model (which wastes VRAM and
-#     takes 30+ seconds).
+#     The internal threshold used when detector wrappers need a permissive
+#     first pass before applying the user-facing confidence as a post-filter.
+#     This keeps interactive threshold changes from forcing expensive model
+#     reloads and preserves low-confidence candidates for downstream replay.
 #
 # CLI_DEFAULT_CONFIDENCE (0.3):
 #     Conservative default for CLI / batch processing where there is no

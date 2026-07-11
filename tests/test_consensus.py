@@ -99,22 +99,20 @@ def test_detect_with_yolo11x_returns_empty_on_model_failure(monkeypatch):
     assert results == []
 
 
-def test_run_consensus_detection_uses_yolo11x_detector_key(monkeypatch):
-    """Production consensus must use east+easyocr+yolo11x, not DocTR as a fourth detector."""
+def test_run_consensus_detection_uses_production_detector_keys(monkeypatch):
+    """Production consensus uses EAST, EasyOCR, and YOLO11x only."""
     image = np.zeros((100, 100, 3), dtype=np.uint8)
     find_consensus = Mock(return_value=[])
-    doctr_detector = Mock(return_value=[(20, 20, 10, 10, 80.0)])
     yolo_detector = Mock(return_value=[(20, 20, 10, 10, 80.0)])
     monkeypatch.setattr(consensus_mod, "detect_with_east", Mock(return_value=[(10, 10, 10, 10, 90.0)]))
     monkeypatch.setattr(consensus_mod, "detect_with_easyocr", Mock(return_value=[(10, 10, 10, 10, 90.0)]))
-    monkeypatch.setattr(consensus_mod, "detect_with_doctr", doctr_detector)
     monkeypatch.setattr(consensus_mod, "detect_with_yolo11x", yolo_detector, raising=False)
     monkeypatch.setattr(consensus_mod, "find_consensus_boxes", find_consensus)
     monkeypatch.setattr(consensus_mod, "cleanup_vram", Mock())
 
+    assert not hasattr(consensus_mod, "detect_with_doctr")
     assert consensus_mod.run_consensus_detection(image, confidence_threshold=0.42) == []
 
-    assert doctr_detector.call_count == 0
     yolo_detector.assert_called_once_with(image, 0.42)
     detections = find_consensus.call_args[0][0]
     assert set(detections) == {"east", "easyocr", "yolo11x"}
@@ -260,22 +258,22 @@ class TestFindConsensusBoxes:
     def test_two_detector_agreement(self):
         """Test finding consensus when exactly 2 detectors agree."""
         detections = {
-            "doctr": [(100, 100, 50, 50, 0.8)],
-            "easyocr": [(105, 105, 45, 45, 0.9)],  # Overlaps with doctr
+            "yolo11x": [(100, 100, 50, 50, 0.8)],
+            "easyocr": [(105, 105, 45, 45, 0.9)],  # Overlaps with yolo11x
             "east": []
         }
         
         consensus = find_consensus_boxes(detections, overlap_threshold=0.1)
         
         assert len(consensus) == 1, "Should find one consensus region"
-        assert set(consensus[0]["detectors"]) == {"doctr", "easyocr"}, \
+        assert set(consensus[0]["detectors"]) == {"yolo11x", "easyocr"}, \
             "Consensus should include both agreeing detectors"
         assert consensus[0]["detector_count"] == 2
     
     def test_three_detector_agreement(self):
         """Test finding consensus when all 3 detectors agree."""
         detections = {
-            "doctr": [(100, 100, 50, 50, 0.8)],
+            "yolo11x": [(100, 100, 50, 50, 0.8)],
             "easyocr": [(105, 105, 45, 45, 0.9)],
             "east": [(98, 98, 52, 52, 0.7)]  # All overlap
         }
@@ -292,7 +290,7 @@ class TestFindConsensusBoxes:
     def test_no_consensus(self):
         """Test when no detectors agree (detections are far apart)."""
         detections = {
-            "doctr": [(0, 0, 50, 50, 0.8)],
+            "yolo11x": [(0, 0, 50, 50, 0.8)],
             "easyocr": [(200, 200, 50, 50, 0.9)],
             "east": [(400, 400, 50, 50, 0.7)]
         }
@@ -304,7 +302,7 @@ class TestFindConsensusBoxes:
     def test_multiple_consensus_regions(self):
         """Test finding multiple separate consensus regions."""
         detections = {
-            "doctr": [
+            "yolo11x": [
                 (100, 100, 50, 50, 0.8),  # Region 1
                 (300, 300, 50, 50, 0.7)   # Region 2
             ],
@@ -322,9 +320,9 @@ class TestFindConsensusBoxes:
     def test_same_detector_no_consensus(self):
         """Test that same detector's multiple detections don't create consensus."""
         detections = {
-            "doctr": [
+            "yolo11x": [
                 (100, 100, 50, 50, 0.8),
-                (105, 105, 45, 45, 0.9)  # Overlaps with previous doctr detection
+                (105, 105, 45, 45, 0.9)  # Overlaps with previous yolo11x detection
             ],
             "easyocr": [],
             "east": []
@@ -337,7 +335,7 @@ class TestFindConsensusBoxes:
     def test_overlap_threshold_filtering(self):
         """Test that overlap threshold uses IoU to filter weak overlaps."""
         detections = {
-            "doctr": [(100, 100, 100, 100, 0.8)],     # Large box
+            "yolo11x": [(100, 100, 100, 100, 0.8)],     # Large box
             "easyocr": [(180, 180, 25, 25, 0.9)],     # Small box, minimal overlap
             "east": []
         }
@@ -352,7 +350,7 @@ class TestFindConsensusBoxes:
     def test_tiny_contained_box_does_not_create_consensus(self):
         """Test that a tiny blip inside a broad detection is not agreement."""
         detections = {
-            "doctr": [(382, 1044, 4, 6, 0.8)],
+            "yolo11x": [(382, 1044, 4, 6, 0.8)],
             "easyocr": [(336, 1024, 470, 52, 0.9)],
             "east": []
         }
@@ -364,7 +362,7 @@ class TestFindConsensusBoxes:
     def test_consensus_bbox_is_union(self):
         """Test that consensus bbox is the union of overlapping detections."""
         detections = {
-            "doctr": [(10, 10, 30, 30, 0.8)],     # x: 10-40, y: 10-40
+            "yolo11x": [(10, 10, 30, 30, 0.8)],     # x: 10-40, y: 10-40
             "easyocr": [(25, 25, 30, 30, 0.9)],   # x: 25-55, y: 25-55
             "east": []
         }
@@ -380,7 +378,7 @@ class TestFindConsensusBoxes:
     def test_empty_detections(self):
         """Test with no detections (edge case)."""
         detections = {
-            "doctr": [],
+            "yolo11x": [],
             "easyocr": [],
             "east": []
         }
@@ -391,7 +389,7 @@ class TestFindConsensusBoxes:
     def test_confidence_propagation(self):
         """Test that original confidences are preserved in consensus."""
         detections = {
-            "doctr": [(100, 100, 50, 50, 0.6)],
+            "yolo11x": [(100, 100, 50, 50, 0.6)],
             "easyocr": [(105, 105, 45, 45, 0.7)],
             "east": []
         }
@@ -451,7 +449,7 @@ class TestConsensusIntegration:
         # Simulate watermark in bottom-right corner detected by all 3 detectors
         # with slight variations in bbox due to different detection algorithms
         detections = {
-            "doctr": [(450, 450, 100, 30, 0.75)],      # Slightly smaller
+            "yolo11x": [(450, 450, 100, 30, 0.75)],      # Slightly smaller
             "easyocr": [(445, 448, 110, 35, 0.82)],    # Slightly larger, offset
             "east": [(448, 447, 105, 32, 0.68)]        # Middle ground
         }
@@ -476,28 +474,28 @@ class TestConsensusIntegration:
     def test_false_positive_filtered(self):
         """Test consensus behavior with multiple detection groups."""
         detections = {
-            "doctr": [
+            "yolo11x": [
                 (100, 100, 50, 50, 0.8),   # Strong detection region 1
                 (500, 500, 20, 20, 0.4)    # Weak isolated detection region 2
             ],
             "easyocr": [
-                (105, 105, 45, 45, 0.9),   # Agrees with strong doctr in region 1
+                (105, 105, 45, 45, 0.9),   # Agrees with strong yolo11x in region 1
             ],
             "east": [
-                (505, 505, 15, 15, 0.35)   # Overlaps with weak doctr in region 2
+                (505, 505, 15, 15, 0.35)   # Overlaps with weak yolo11x in region 2
             ]
         }
         
         consensus = find_consensus_boxes(detections, overlap_threshold=0.1)
         
         # Algorithm finds consensus wherever 2+ detectors overlap
-        # Region 1: doctr + easyocr (strong)
-        # Region 2: doctr + east (weak overlap exists)
+        # Region 1: yolo11x + easyocr (strong)
+        # Region 2: yolo11x + east (weak overlap exists)
         assert len(consensus) == 2, "Algorithm finds consensus for both overlapping groups"
         
         # Verify the strong consensus is first (or find it)
-        strong_consensus = [c for c in consensus if set(c["detectors"]) == {"doctr", "easyocr"}]
-        assert len(strong_consensus) == 1, "Should have strong doctr+easyocr consensus"
+        strong_consensus = [c for c in consensus if set(c["detectors"]) == {"yolo11x", "easyocr"}]
+        assert len(strong_consensus) == 1, "Should have strong yolo11x+easyocr consensus"
         assert strong_consensus[0]["confidence"] > 0.95, "Strong consensus should have high confidence"
 
 

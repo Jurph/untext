@@ -285,7 +285,7 @@ def initialize_models():
         progress_placeholder.info("🚀 Starting UnTextre... Initializing AI models (this may take 30-60 seconds on first run)")
         
         # Initialize consensus detection models
-        with st.spinner("📥 Loading detection models (EAST, DocTR, EasyOCR)..."):
+        with st.spinner("📥 Loading detection models (EAST, EasyOCR, YOLO11x)..."):
             initialize_consensus_models(device="cuda")
         
         progress_placeholder.success("✅ Detection models loaded successfully")
@@ -343,32 +343,32 @@ def run_detections_cached(image_bytes, confidence_threshold=WEB_DEFAULT_CONFIDEN
             return []
         
         # Run all detectors with progress feedback
-        from untextre.consensus import detect_with_doctr, detect_with_easyocr, detect_with_east
-        
+        from untextre.consensus import detect_with_east, detect_with_easyocr, detect_with_yolo11x
+
         if len(preprocessed.shape) == 2:
             image_bgr = cv2.cvtColor(preprocessed, cv2.COLOR_GRAY2BGR)
         else:
             image_bgr = preprocessed
-        
+
         # Progress updates
         progress = st.empty()
-        
+
         progress.text("🔍 Running EAST detector (1/3)...")
         east_dets = detect_with_east(image_bgr, confidence_threshold)
-        
-        progress.text(f"🔍 EAST: {len(east_dets)} | Running DocTR (2/3)...")
-        doctr_dets = detect_with_doctr(image_bgr, confidence_threshold)
-        
-        progress.text(f"🔍 EAST: {len(east_dets)} | DocTR: {len(doctr_dets)} | Running EasyOCR (3/3)...")
+
+        progress.text(f"🔍 EAST: {len(east_dets)} | Running EasyOCR (2/3)...")
         easyocr_dets = detect_with_easyocr(image_bgr, confidence_threshold)
-        
+
+        progress.text(f"🔍 EAST: {len(east_dets)} | EasyOCR: {len(easyocr_dets)} | Running YOLO11x (3/3)...")
+        yolo11x_dets = detect_with_yolo11x(image_bgr, confidence_threshold)
+
         progress.text("✅ All detectors complete | Finding consensus regions...")
-        
+
         # Get detailed detections
         detections = {
             'east': east_dets,
-            'doctr': doctr_dets,
-            'easyocr': easyocr_dets
+            'easyocr': easyocr_dets,
+            'yolo11x': yolo11x_dets
         }
         
         # Find consensus with full metadata
@@ -1552,7 +1552,7 @@ def main():
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666;'>
-        <p>Built with ❤️ using Streamlit • Powered by LaMa, DocTR, EasyOCR, and EAST</p>
+        <p>Built with Streamlit • Powered by LaMa, EAST, EasyOCR, YOLO11x, and ORB</p>
     </div>
     """, unsafe_allow_html=True)
 

@@ -9,7 +9,7 @@ from pathlib import Path
 import cv2
 
 from untextre.consensus import (
-    detect_with_doctr,
+    detect_with_yolo11x,
     detect_with_east,
     detect_with_easyocr,
     find_consensus_boxes,
@@ -200,7 +200,7 @@ def run_color_enhanced_stage(
 def run_detection_stage(stage_name: str, detector_image, original_shape: tuple[int, int], confidence: float) -> dict:
     detections = {
         "east": detect_with_east(detector_image, confidence),
-        "doctr": detect_with_doctr(detector_image, confidence),
+        "yolo11x": detect_with_yolo11x(detector_image, confidence),
         "easyocr": detect_with_easyocr(detector_image, confidence),
     }
     consensus = find_consensus_boxes(detections, overlap_threshold=0.1)

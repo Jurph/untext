@@ -1,92 +1,111 @@
-"""Direct unit tests for untextre.detector module.
+"""Unit tests for untextre.detector public seams.
 
-The consensus tests exercise detectors *through* the consensus API,
-but these tests pin the detector module's own public surface directly:
-    - ``TextDetector``  – initialization, parameter validation, detect() return format
-    - ``detect_text_regions()``  – module-level entry point
-    - ``cleanup_vram()``  – should not crash regardless of GPU availability
-
-Heavy model-loading happens once via the autouse fixture.
+These tests keep detector.py free of optional heavyweight imports at module
+import time and pin the supported single-detector adapters after DocTR removal.
 """
 
+from unittest.mock import Mock
+
 import numpy as np
-import cv2
 import pytest
 
-# Every test in this module loads ML models (DocTR).
-pytestmark = pytest.mark.slow
-
-from untextre.detector import (
-    TextDetector,
-)
+from untextre import detector as detector_mod
+from untextre.detector import cleanup_vram, detect_text_regions
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="module")
-def detector():
-    """Create a TextDetector once for all tests in this module."""
-    return TextDetector(confidence_threshold=0.1, min_text_size=3)
+def test_doctr_detector_is_not_public_api():
+    assert not hasattr(detector_mod, "TextDetector")
+    assert not hasattr(detector_mod, "get_doctr_detector")
 
 
-@pytest.fixture
-def image_with_text():
-    """200×300 white image with large black text (detectable by DocTR)."""
-    image = np.ones((200, 300, 3), dtype=np.uint8) * 255
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    cv2.putText(image, "HELLO WORLD", (10, 130), font, 1.5, (0, 0, 0), 3)
-    return image
+def test_detect_text_regions_rejects_removed_doctr_method():
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="Unsupported detection method: doctr"):
+        detect_text_regions(image, method="doctr")
 
 
-@pytest.fixture
-def blank_image():
-    """200×200 white image with no text."""
-    return np.ones((200, 200, 3), dtype=np.uint8) * 255
+def test_detect_text_regions_uses_east_adapter(monkeypatch):
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+    net = object()
+    monkeypatch.setattr(detector_mod, "get_east_net", Mock(return_value=net))
+    monkeypatch.setattr(
+        detector_mod,
+        "_detect_with_east",
+        Mock(
+            return_value=[
+                {
+                    "geometry": np.array(
+                        [[1, 2], [5, 2], [5, 8], [1, 8]],
+                        dtype=np.float32,
+                    ),
+                    "confidence": 0.9,
+                }
+            ]
+        ),
+    )
+
+    assert detect_text_regions(image, method="east", confidence_threshold=0.4) == [(1, 2, 4, 6)]
+    detector_mod._detect_with_east.assert_called_once_with(image, net, min_confidence=0.4)
 
 
-# =========================================================================
-# TextDetector.__init__
-# =========================================================================
+def test_detect_text_regions_uses_easyocr_adapter(monkeypatch):
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+    reader = object()
+    monkeypatch.setattr(detector_mod, "get_easyocr_reader", Mock(return_value=reader))
+    monkeypatch.setattr(
+        detector_mod,
+        "_detect_with_easyocr",
+        Mock(
+            return_value=[
+                {
+                    "geometry": np.array(
+                        [[3, 4], [13, 4], [13, 9], [3, 9]],
+                        dtype=np.float32,
+                    ),
+                    "confidence": 0.8,
+                }
+            ]
+        ),
+    )
 
-class TestTextDetectorInit:
-    """Verify constructor validation and basic properties."""
-
-
-    def test_confidence_out_of_range_raises(self):
-        with pytest.raises(ValueError, match="confidence_threshold"):
-            TextDetector(confidence_threshold=1.5)
-
-    def test_negative_confidence_raises(self):
-        with pytest.raises(ValueError, match="confidence_threshold"):
-            TextDetector(confidence_threshold=-0.1)
-
-    def test_non_positive_min_text_size_raises(self):
-        with pytest.raises(ValueError, match="min_text_size"):
-            TextDetector(min_text_size=0)
-
-
-# =========================================================================
-# TextDetector.detect
-# =========================================================================
-
-
-
-
+    assert detect_text_regions(image, method="easyocr", confidence_threshold=0.25) == [(3, 4, 10, 5)]
+    detector_mod._detect_with_easyocr.assert_called_once_with(
+        image,
+        reader,
+        confidence_threshold=0.25,
+    )
 
 
+def test_detect_text_regions_uses_yolo11x_adapter(monkeypatch):
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+    model = object()
+    monkeypatch.setattr(detector_mod, "get_yolo11x_model", Mock(return_value=model))
+    monkeypatch.setattr(
+        detector_mod,
+        "_detect_with_yolo11x",
+        Mock(
+            return_value=[
+                {
+                    "geometry": np.array(
+                        [[2, 3], [12, 3], [12, 11], [2, 11]],
+                        dtype=np.float32,
+                    ),
+                    "confidence": 0.7,
+                }
+            ]
+        ),
+    )
 
-# =========================================================================
-# detect_text_regions  (module-level entry point)
-# =========================================================================
+    assert detect_text_regions(image, method="yolo11x", confidence_threshold=0.5) == [(2, 3, 10, 8)]
+    detector_mod._detect_with_yolo11x.assert_called_once_with(
+        image,
+        model,
+        confidence_threshold=0.5,
+    )
 
 
+def test_cleanup_vram_does_not_crash_on_cpu_only(monkeypatch):
+    monkeypatch.setattr(detector_mod.torch.cuda, "is_available", Mock(return_value=False))
 
-
-
-# =========================================================================
-# cleanup_vram
-# =========================================================================
-
-
+    cleanup_vram()

@@ -1,6 +1,6 @@
 """Tests for consensus text detection functionality.
 
-This module tests the three text detectors (EAST, DocTR, EasyOCR) and the consensus
+This module tests the three text detectors (EAST, YOLO11x, EasyOCR) and the consensus
 detection system that combines their results to find high-confidence text regions.
 
 These tests verify that:
@@ -16,12 +16,12 @@ import cv2
 import pytest
 from pathlib import Path
 
-# Every test in this module loads ML models (DocTR, EasyOCR, EAST).
+# Every test in this module loads ML models (YOLO11x).
 pytestmark = pytest.mark.slow
 
 # Import consensus detection functions
 from untextre.consensus import (
-    detect_with_doctr,
+    detect_with_yolo11x,
 )
 from untextre.pipeline import (
     initialize_consensus_models as init_all_models,
@@ -198,12 +198,12 @@ def test_detection_confidence_thresholds(test_images):
     image_name, image = next(iter(test_images.items()))
     
     # Test with high confidence threshold - should get fewer detections
-    high_threshold_detections = detect_with_doctr(image, confidence_threshold=0.8)
+    high_threshold_detections = detect_with_yolo11x(image, confidence_threshold=0.8)
     
     # Test with low confidence threshold - should get more detections  
-    low_threshold_detections = detect_with_doctr(image, confidence_threshold=0.1)
+    low_threshold_detections = detect_with_yolo11x(image, confidence_threshold=0.1)
     
-    print(f"\nDocTR on {image_name}:")
+    print(f"\nYOLO11x on {image_name}:")
     print(f"High threshold (0.8): {len(high_threshold_detections)} detections")
     print(f"Low threshold (0.1): {len(low_threshold_detections)} detections")
     
@@ -225,9 +225,9 @@ def test_detector_consistency_across_runs(test_images):
     # Test with first available image
     image_name, image = next(iter(test_images.items()))
     
-    # Run DocTR detector twice
-    detections1 = detect_with_doctr(image, confidence_threshold=0.3)
-    detections2 = detect_with_doctr(image, confidence_threshold=0.3) 
+    # Run YOLO11x detector twice
+    detections1 = detect_with_yolo11x(image, confidence_threshold=0.3)
+    detections2 = detect_with_yolo11x(image, confidence_threshold=0.3) 
     
     # Should get same number of detections
     assert len(detections1) == len(detections2), \

@@ -7,16 +7,10 @@
 # pins below: Windows uses CUDA 12.4 wheels; Linux uses CPU wheels.
 --extra-index-url https://download.pytorch.org/whl/cu124
 --extra-index-url https://download.pytorch.org/whl/cpu
-
 altair==6.2.2
     # via streamlit
-annotated-doc==0.0.4
-    # via typer
-anyascii==0.3.3
-    # via python-doctr
 anyio==4.14.0
     # via
-    #   httpx
     #   starlette
     #   streamlit
 attrs==26.1.0
@@ -28,10 +22,7 @@ blinker==1.9.0
 cachetools==7.1.4
     # via streamlit
 certifi==2026.6.17
-    # via
-    #   httpcore
-    #   httpx
-    #   requests
+    # via requests
 charset-normalizer==3.4.7
     # via requests
 click==8.2.1
@@ -39,58 +30,36 @@ click==8.2.1
     #   streamlit
     #   uvicorn
 colorama==0.4.6 ; sys_platform == 'win32'
-    # via
-    #   click
-    #   tqdm
-    #   typer
+    # via click
 contourpy==1.3.2 ; python_full_version < '3.11'
     # via matplotlib
 contourpy==1.3.3 ; python_full_version >= '3.11'
     # via matplotlib
 cycler==0.12.1
     # via matplotlib
-defusedxml==0.7.1
-    # via python-doctr
 easyocr==1.7.2
     # via untextre
 exceptiongroup==1.3.1 ; python_full_version < '3.11'
     # via anyio
 filelock==3.29.4
-    # via
-    #   huggingface-hub
-    #   torch
+    # via torch
 fire==0.5.0
     # via simple-lama-inpainting
 fonttools==4.63.0
     # via matplotlib
 fsspec==2026.6.0
-    # via
-    #   huggingface-hub
-    #   torch
+    # via torch
 gitdb==4.0.12
     # via gitpython
 gitpython==3.1.50
     # via streamlit
 h11==0.16.0
-    # via
-    #   httpcore
-    #   uvicorn
-h5py==3.16.0
-    # via python-doctr
-hf-xet==1.5.1 ; platform_machine == 'AMD64' or platform_machine == 'aarch64' or platform_machine == 'amd64' or platform_machine == 'arm64' or platform_machine == 'x86_64'
-    # via huggingface-hub
-httpcore==1.0.9
-    # via httpx
+    # via uvicorn
 httptools==0.8.0
     # via streamlit
-httpx==0.28.1
-    # via huggingface-hub
-huggingface-hub==1.16.1
-    # via python-doctr
 idna==3.18
     # via
     #   anyio
-    #   httpx
     #   requests
 imageio==2.37.3
     # via scikit-image
@@ -107,22 +76,18 @@ jsonschema-specifications==2025.9.1
     # via jsonschema
 kiwisolver==1.5.0
     # via matplotlib
-langdetect==1.0.9
-    # via python-doctr
 lazy-loader==0.5
     # via scikit-image
-markdown-it-py==4.2.0
-    # via rich
 markupsafe==3.0.3
     # via jinja2
 matplotlib==3.10.9 ; python_full_version < '3.11'
-    # via streamlit-image-annotation
+    # via
+    #   streamlit-image-annotation
+    #   ultralytics
 matplotlib==3.11.0 ; python_full_version >= '3.11'
-    # via streamlit-image-annotation
-mdurl==0.1.2
-    # via markdown-it-py
-ml-dtypes==0.5.4
-    # via onnx
+    # via
+    #   streamlit-image-annotation
+    #   ultralytics
 mpmath==1.3.0
     # via sympy
 narwhals==2.22.1
@@ -141,16 +106,12 @@ numpy==1.26.4
     # via
     #   contourpy
     #   easyocr
-    #   h5py
     #   imageio
     #   matplotlib
-    #   ml-dtypes
-    #   onnx
     #   opencv-python
     #   opencv-python-headless
     #   pandas
     #   pydeck
-    #   python-doctr
     #   scikit-image
     #   scipy
     #   shapely
@@ -159,20 +120,21 @@ numpy==1.26.4
     #   streamlit-drawable-canvas-fix
     #   tifffile
     #   torchvision
+    #   ultralytics
+    #   ultralytics-thop
     #   untextre
-onnx==1.22.0
-    # via python-doctr
+nvidia-ml-py==13.610.43
+    # via ultralytics
 opencv-python==4.11.0.86
     # via
-    #   python-doctr
     #   simple-lama-inpainting
+    #   ultralytics
     #   untextre
 opencv-python-headless==4.11.0.86
     # via easyocr
 packaging==26.2
     # via
     #   altair
-    #   huggingface-hub
     #   lazy-loader
     #   matplotlib
     #   scikit-image
@@ -186,39 +148,35 @@ pillow==9.5.0
     #   easyocr
     #   imageio
     #   matplotlib
-    #   python-doctr
     #   scikit-image
     #   simple-lama-inpainting
     #   streamlit
     #   streamlit-drawable-canvas-fix
     #   torchvision
+    #   ultralytics
     #   untextre
+polars==1.42.1
+    # via ultralytics
+polars-runtime-32==1.42.1
+    # via polars
 protobuf==7.35.1
-    # via
-    #   onnx
-    #   streamlit
+    # via streamlit
+psutil==7.2.2
+    # via ultralytics
 pyarrow==24.0.0
     # via streamlit
 pyclipper==1.4.0
-    # via
-    #   easyocr
-    #   python-doctr
+    # via easyocr
 pydeck==0.9.2
     # via streamlit
-pygments==2.20.0
-    # via rich
 pyparsing==3.3.2
     # via matplotlib
-pypdfium2==5.10.1
-    # via python-doctr
 python-bidi==0.6.10
     # via easyocr
 python-dateutil==2.9.0.post0
     # via
     #   matplotlib
     #   pandas
-python-doctr==1.0.1
-    # via untextre
 python-multipart==0.0.32
     # via streamlit
 pytz==2026.2 ; python_full_version < '3.11'
@@ -226,17 +184,15 @@ pytz==2026.2 ; python_full_version < '3.11'
 pyyaml==6.0.3
     # via
     #   easyocr
-    #   huggingface-hub
-rapidfuzz==3.14.5
-    # via python-doctr
+    #   ultralytics
 referencing==0.37.0
     # via
     #   jsonschema
     #   jsonschema-specifications
 requests==2.34.2
-    # via streamlit
-rich==15.0.0
-    # via typer
+    # via
+    #   streamlit
+    #   ultralytics
 rpds-py==0.30.0 ; python_full_version < '3.11'
     # via
     #   jsonschema
@@ -252,27 +208,20 @@ scikit-image==0.24.0
 scipy==1.15.3 ; python_full_version < '3.11'
     # via
     #   easyocr
-    #   python-doctr
     #   scikit-image
 scipy==1.17.1 ; python_full_version >= '3.11'
     # via
     #   easyocr
-    #   python-doctr
     #   scikit-image
 setuptools==82.0.1 ; python_full_version >= '3.12'
     # via torch
 shapely==2.1.2
-    # via
-    #   easyocr
-    #   python-doctr
-shellingham==1.5.4
-    # via typer
+    # via easyocr
 simple-lama-inpainting==0.1.2
     # via untextre
 six==1.17.0
     # via
     #   fire
-    #   langdetect
     #   python-dateutil
 smmap==5.0.3
     # via gitdb
@@ -305,55 +254,50 @@ toml==0.10.2
 torch==2.6.0 ; sys_platform == 'darwin'
     # via
     #   easyocr
-    #   python-doctr
     #   simple-lama-inpainting
     #   torchvision
+    #   ultralytics
+    #   ultralytics-thop
     #   untextre
 torch==2.6.0+cpu ; sys_platform != 'darwin' and sys_platform != 'win32'
     # via
     #   easyocr
-    #   python-doctr
     #   simple-lama-inpainting
     #   torchvision
+    #   ultralytics
+    #   ultralytics-thop
     #   untextre
 torch==2.6.0+cu124 ; sys_platform == 'win32'
     # via
     #   easyocr
-    #   python-doctr
     #   simple-lama-inpainting
     #   torchvision
+    #   ultralytics
+    #   ultralytics-thop
     #   untextre
 torchvision==0.21.0 ; (platform_machine == 'aarch64' and platform_python_implementation == 'CPython' and sys_platform == 'linux') or sys_platform == 'darwin'
     # via
     #   easyocr
-    #   python-doctr
     #   simple-lama-inpainting
+    #   ultralytics
     #   untextre
 torchvision==0.21.0+cpu ; (platform_machine != 'aarch64' and sys_platform == 'linux') or (platform_python_implementation != 'CPython' and sys_platform == 'linux') or (sys_platform != 'darwin' and sys_platform != 'linux' and sys_platform != 'win32')
     # via
     #   easyocr
-    #   python-doctr
     #   simple-lama-inpainting
+    #   ultralytics
     #   untextre
 torchvision==0.21.0+cu124 ; sys_platform == 'win32'
     # via
     #   easyocr
-    #   python-doctr
     #   simple-lama-inpainting
+    #   ultralytics
     #   untextre
-tqdm==4.68.3
-    # via
-    #   huggingface-hub
-    #   python-doctr
-typer==0.26.7
-    # via huggingface-hub
 typing-extensions==4.15.0
     # via
     #   altair
     #   anyio
     #   exceptiongroup
-    #   huggingface-hub
-    #   onnx
     #   referencing
     #   starlette
     #   streamlit
@@ -361,12 +305,14 @@ typing-extensions==4.15.0
     #   uvicorn
 tzdata==2026.2 ; python_full_version < '3.11' or sys_platform == 'emscripten' or sys_platform == 'win32'
     # via pandas
+ultralytics==8.4.90
+    # via untextre
+ultralytics-thop==2.0.20
+    # via ultralytics
 urllib3==2.7.0
     # via requests
 uvicorn==0.49.0
     # via streamlit
-validators==0.35.0
-    # via python-doctr
 watchdog==6.0.0 ; sys_platform != 'darwin'
     # via streamlit
 websockets==16.0

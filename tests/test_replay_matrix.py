@@ -19,7 +19,7 @@ def test_first_stage_extracts_detector_lists() -> None:
             {
                 "detectors": {
                     "east": [{"bbox": [1, 2, 3, 4], "confidence": 91.0}],
-                    "doctr": [{"bbox": [5, 6, 7, 8], "confidence": 88.0}],
+                    "yolo11x": [{"bbox": [5, 6, 7, 8], "confidence": 88.0}],
                     "easyocr": [],
                 }
             }
@@ -27,14 +27,14 @@ def test_first_stage_extracts_detector_lists() -> None:
     }
     detectors = first_stage(row)
     assert detectors["east"][0]["bbox"] == [1, 2, 3, 4]
-    assert detectors["doctr"][0]["bbox"] == [5, 6, 7, 8]
+    assert detectors["yolo11x"][0]["bbox"] == [5, 6, 7, 8]
     assert detectors["easyocr"] == []
 
 
 def test_find_combo_matches_threshold_triplet() -> None:
     rows = [
-        {"east_threshold": 0.3, "doctr_threshold": 0.1, "easyocr_threshold": 0.05, "recall": 0.5},
-        {"east_threshold": 0.025, "doctr_threshold": 0.025, "easyocr_threshold": 0.025, "recall": 0.6},
+        {"east_threshold": 0.3, "yolo11x_threshold": 0.1, "easyocr_threshold": 0.05, "recall": 0.5},
+        {"east_threshold": 0.025, "yolo11x_threshold": 0.025, "easyocr_threshold": 0.025, "recall": 0.6},
     ]
     assert find_combo(rows, 0.025, 0.025, 0.025)["recall"] == 0.6
     assert find_combo(rows, 0.3, 0.1, 0.05)["recall"] == 0.5

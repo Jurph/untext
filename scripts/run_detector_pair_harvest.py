@@ -10,7 +10,7 @@ import cv2
 from untextre.detector_pair_harvest import append_jsonl, load_jsonl, normalize_detection_box
 from untextre.utils import load_image
 
-DEFAULT_DETECTORS = ["east", "doctr", "easyocr", "yolo11x"]
+DEFAULT_DETECTORS = ["east", "easyocr", "yolo11x"]
 SUPPORTED_DETECTORS = [*DEFAULT_DETECTORS, "fake"]
 
 
@@ -30,21 +30,6 @@ def serializable_geometry(geometry: Any) -> Any:
     return geometry.tolist() if hasattr(geometry, "tolist") else geometry
 
 
-def run_doctr(image_bgr, floor: float) -> list[dict]:
-    from untextre.detector import get_doctr_detector
-
-    detector = get_doctr_detector(confidence_threshold=floor)
-    rows = []
-    for det in detector.detect(image_bgr):
-        rows.append(
-            normalize_detection_box(
-                geometry_to_xywh(det["geometry"]),
-                det.get("confidence", 0.0),
-                "text",
-                {"geometry": serializable_geometry(det["geometry"])},
-            )
-        )
-    return rows
 
 
 def run_easyocr(image_bgr, floor: float) -> list[dict]:
@@ -138,8 +123,6 @@ def detector_boxes(detector: str, image_path: Path, image_bgr, yolo_model, floor
         return run_yolo11x(image_path, yolo_model, floor)
     if detector == "east":
         return run_east(image_bgr, floor)
-    if detector == "doctr":
-        return run_doctr(image_bgr, floor)
     if detector == "easyocr":
         return run_easyocr(image_bgr, floor)
     if detector == "fake":

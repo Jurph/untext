@@ -306,7 +306,7 @@ def initialize_consensus_models(device: str = "cuda") -> None:
 
     logger.info("Pre-loading all detection and inpainting models...")
     
-    # Initialize consensus detection models (EAST, DocTR, EasyOCR)
+    # Initialize consensus detection models (EAST, EasyOCR, YOLO11x)
     init_consensus_models_base()
     
     # Initialize LaMa inpainting model
