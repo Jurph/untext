@@ -765,10 +765,10 @@ def _evaluate_pairwise_scale(
     if np.max(mov_dist_canvas) < 1e-6:
         return None
 
-    hann = _get_hann_window(canvas_shape)
-    (tx, ty), response = cv2.phaseCorrelate(
-        (ref_dist_canvas * hann).astype(np.float64), (mov_dist_canvas * hann).astype(np.float64)
-    )
+    hann = _get_hann_window(canvas_shape).astype(np.float32, copy=False)
+    ref_phase = np.multiply(ref_dist_canvas, hann, dtype=np.float32)
+    mov_phase = np.multiply(mov_dist_canvas, hann, dtype=np.float32)
+    (tx, ty), response = cv2.phaseCorrelate(ref_phase, mov_phase)
     aligned_support = _translate_image(mov_support_canvas, tx, ty, binary=True)
     aligned_alpha = _translate_image(mov_alpha_canvas, tx, ty, binary=False)
 
