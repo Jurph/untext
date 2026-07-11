@@ -6,9 +6,9 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from skimage.color import deltaE_ciede2000
 from skimage.metrics import structural_similarity
 
+from untextre.color_metrics import delta_e
 from untextre.inpaint import inpaint_image
 from untextre.mask_experiments import DEFAULT_MANIFEST, load_manifest_cases, truth_target_mask
 
@@ -52,8 +52,8 @@ def evaluate_case(case: dict, config_id: str, method: str) -> dict:
 
     before_ssim = _ssim(before, target)
     after_ssim = _ssim(after, target)
-    before_de = _delta_e(before, target)
-    after_de  = _delta_e(after, target)
+    before_de = delta_e(before, target)
+    after_de  = delta_e(after, target)
     return {
         "case_id": case["id"],
         "config_id": config_id,
@@ -85,20 +85,6 @@ def _ssim(a: np.ndarray, b: np.ndarray) -> float:
     if win_size < 3:
         return 1.0 if np.array_equal(a, b) else 0.0
     return float(structural_similarity(a, b, channel_axis=2, win_size=win_size))
-
-
-def _bgr_to_lab_cie(img: np.ndarray) -> np.ndarray:
-    """Convert uint8 BGR to CIE L*a*b* in standard ranges (L*∈[0,100], a*/b*∈[-128,127])."""
-    raw = cv2.cvtColor(img, cv2.COLOR_BGR2LAB).astype(np.float32)
-    raw[..., 0] *= 100.0 / 255.0   # L: OpenCV [0,255] → CIE [0,100]
-    raw[..., 1] -= 128.0            # a: OpenCV [0,255] → CIE [-128,127]
-    raw[..., 2] -= 128.0            # b: OpenCV [0,255] → CIE [-128,127]
-    return raw
-
-
-def _delta_e(a: np.ndarray, b: np.ndarray) -> float:
-    """Mean per-pixel CIE ΔE₀₀ between two uint8 BGR images."""
-    return float(np.mean(deltaE_ciede2000(_bgr_to_lab_cie(a), _bgr_to_lab_cie(b))))
 
 
 def _gain_ratio(gain: float, possible: float) -> float:
