@@ -88,6 +88,7 @@ class TestTryWatermarkCascade:
             min_matches=6,
             dilation_pixels=7,
             prepared_variants=None,
+            prepared_target=None,
         ):
             calls.append((min_matches, dilation_pixels))
             if len(calls) == 1:
@@ -96,13 +97,16 @@ class TestTryWatermarkCascade:
                 return mask_b, bbox_b, 5  # b: weak match
             if len(calls) == 3:
                 return mask_c, bbox_c, 10 # c: stronger match — should win
-
+        monkeypatch.setattr(
+            orb_matcher_mod,
+            "prepare_target_orb_features",
+            lambda _image: (tuple(), np.ones((1, 32), dtype=np.uint8)),
+        )
         monkeypatch.setattr(
             orb_matcher_mod,
             "find_known_mask_in_image",
             fake_find_known_mask_in_image,
         )
-
         result = try_watermark_cascade(image, templates, min_matches=9, dilation_pixels=5)
 
         assert result is not None
@@ -112,6 +116,48 @@ class TestTryWatermarkCascade:
         assert bbox == bbox_c
         assert len(calls) == 3, "All three templates must be tried"
         assert calls == [(9, 5), (9, 5), (9, 5)]
+ 
+    def test_target_orb_extracted_once_for_multi_template_input(self, monkeypatch):
+        image = np.zeros((60, 60, 3), dtype=np.uint8)
+        templates = [
+            WatermarkTemplate("a.png", np.zeros((8, 8, 4), dtype=np.uint8), ()),
+            WatermarkTemplate("b.png", np.zeros((8, 8, 4), dtype=np.uint8), ()),
+            WatermarkTemplate("c.png", np.zeros((8, 8, 4), dtype=np.uint8), ()),
+        ]
+        prepared_target = (tuple(), np.ones((1, 32), dtype=np.uint8))
+        prepare_calls = []
+        find_calls = []
+ 
+        def fake_prepare_target_orb_features(_image):
+            prepare_calls.append("called")
+            return prepared_target
+ 
+        def fake_find_known_mask_in_image(
+            _image,
+            _tmpl,
+            min_matches=6,
+            dilation_pixels=15,
+            prepared_variants=None,
+            prepared_target=None,
+        ):
+            find_calls.append(prepared_target)
+            return None
+ 
+        monkeypatch.setattr(
+            orb_matcher_mod,
+            "prepare_target_orb_features",
+            fake_prepare_target_orb_features,
+        )
+        monkeypatch.setattr(
+            orb_matcher_mod,
+            "find_known_mask_in_image",
+            fake_find_known_mask_in_image,
+        )
+ 
+        assert try_watermark_cascade(image, templates) is None
+        assert prepare_calls == ["called"]
+        assert len(find_calls) == 3
+        assert all(call is prepared_target for call in find_calls)
 
 
 class TestFindKnownMaskValidation:

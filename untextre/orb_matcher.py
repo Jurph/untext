@@ -23,6 +23,22 @@ class WatermarkTemplate:
     orb_variants: tuple[CandidateOrbVariant, ...]
 
 
+
+PreparedTargetOrb = Tuple[tuple[cv2.KeyPoint, ...], np.ndarray]
+
+
+def prepare_target_orb_features(target_image: np.ndarray) -> Optional[PreparedTargetOrb]:
+    """Extract ORB features for one target image once, for reuse across templates."""
+    target_gray = cv2.cvtColor(target_image, cv2.COLOR_BGR2GRAY)
+    orb = create_orb_detector()
+    target_keypoints, target_descriptors = orb.detectAndCompute(
+        target_gray, np.full(target_gray.shape, 255, dtype=np.uint8)
+    )
+    if target_descriptors is None or target_keypoints is None:
+        logger.warning("Could not compute target ORB descriptors")
+        return None
+    return tuple(target_keypoints), target_descriptors
+
 def _make_watermark_template(name: str, rgba: np.ndarray) -> WatermarkTemplate:
     return WatermarkTemplate(name, rgba, tuple(build_candidate_orb_variants(rgba)))
 
@@ -78,6 +94,7 @@ def find_known_mask_in_image(
     min_matches: int = 6,
     dilation_pixels: int = 15,
     prepared_variants: Optional[tuple[CandidateOrbVariant, ...]] = None,
+    prepared_target: Optional[PreparedTargetOrb] = None,
 ) -> Optional[Tuple[np.ndarray, Tuple[int, int, int, int], int]]:
     """Find a known watermark/logo by trying precomputed ORB reference variants."""
     if known_mask_rgba.shape[2] != 4:
@@ -88,15 +105,11 @@ def find_known_mask_in_image(
         logger.warning("No ORB variants available for known mask")
         return None
 
-    target_gray = cv2.cvtColor(target_image, cv2.COLOR_BGR2GRAY)
-    orb = create_orb_detector()
-    target_keypoints, target_descriptors = orb.detectAndCompute(
-        target_gray, np.full(target_gray.shape, 255, dtype=np.uint8)
-    )
-
-    if target_descriptors is None or target_keypoints is None:
-        logger.warning("Could not compute target ORB descriptors")
+    prepared_target = prepared_target or prepare_target_orb_features(target_image)
+    if prepared_target is None:
         return None
+
+    target_keypoints, target_descriptors = prepared_target
 
     if len(target_keypoints) < min_matches:
         logger.warning(
@@ -285,6 +298,14 @@ def try_watermark_cascade(
     best: Optional[Tuple[np.ndarray, Tuple[int, int, int, int], str]] = None
     best_inliers = -1
 
+    if not templates:
+        logger.info("No template matched (tried 0)")
+        return None
+
+    prepared_target = prepare_target_orb_features(image)
+    if prepared_target is None:
+        return None
+
     for template in templates:
         tmpl_name = template.name
         logger.info(f"Trying template: {tmpl_name}")
@@ -293,6 +314,7 @@ def try_watermark_cascade(
             min_matches=min_matches,
             dilation_pixels=dilation_pixels,
             prepared_variants=template.orb_variants,
+            prepared_target=prepared_target,
         )
         if result is not None:
             mask, bbox, inliers = result
