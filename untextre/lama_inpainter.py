@@ -18,7 +18,6 @@ import numpy as np
 import cv2  # OpenCV for colour space conversions
 
 logger = logging.getLogger(__name__)
-
 try:
     import torch  # type: ignore
 except ImportError as _torch_err:  # pragma: no cover
@@ -27,20 +26,39 @@ except ImportError as _torch_err:  # pragma: no cover
 else:
     _IMPORT_ERROR = None
 
-# Prefer the lightweight wheel; if it's available we do not require the heavy original repo
-try:
-    from simple_lama_inpainting import SimpleLama  # type: ignore
-except ImportError:  # pragma: no cover
-    SimpleLama = None  # type: ignore
 
-# Only try to import the original LaMa repo if SimpleLama is missing
-if SimpleLama is None:
+SimpleLama = None  # type: ignore
+load_checkpoint = None  # type: ignore
+_BACKENDS_LOADED = False
+
+
+def _ensure_lama_backends_loaded() -> None:
+    """Import LaMa runtime backends on first model construction.
+
+    Importing ``simple_lama_inpainting`` pulls in heavyweight PyTorch model
+    code. Keep that backend import out of module import so Streamlit can finish
+    booting and serving frontend assets before model backends initialize.
+    """
+    global SimpleLama, load_checkpoint, _BACKENDS_LOADED
+
+    if _BACKENDS_LOADED:
+        return
+
     try:
-        from saicinpainting.training.trainers import load_checkpoint  # type: ignore
-    except ImportError:
-        load_checkpoint = None  # type: ignore
-else:
-    load_checkpoint = None  # type: ignore
+        from simple_lama_inpainting import SimpleLama as simple_lama_cls  # type: ignore
+    except ImportError:  # pragma: no cover
+        simple_lama_cls = None  # type: ignore
+
+    SimpleLama = simple_lama_cls  # type: ignore
+
+    if SimpleLama is None:
+        try:
+            from saicinpainting.training.trainers import load_checkpoint as lama_load_checkpoint  # type: ignore
+        except ImportError:
+            lama_load_checkpoint = None  # type: ignore
+        load_checkpoint = lama_load_checkpoint  # type: ignore
+
+    _BACKENDS_LOADED = True
 
 
 def select_device(device: str = "cuda") -> str:
@@ -115,6 +133,8 @@ class LamaInpainter:  # pylint: disable=too-few-public-methods
             raise RuntimeError(
                 "PyTorch is required for LaMa. Install with `pip install torch torchvision`"
             ) from _IMPORT_ERROR
+
+        _ensure_lama_backends_loaded()
 
         if SimpleLama is None and load_checkpoint is None:
             raise RuntimeError(

@@ -7,6 +7,9 @@ Covers:
       subregion edge-padding, SimpleLama output cropping, error handling
 """
 
+import json
+import subprocess
+import sys
 import cv2
 import numpy as np
 import pytest
@@ -233,6 +236,44 @@ class TestSelectDevice:
 
 
 # =========================================================================
+# LaMa backend import timing
+# =========================================================================
+def test_importing_lama_module_does_not_import_runtime_backend():
+    """Module import must not load the heavyweight LaMa runtime backend."""
+    project_root = Path(__file__).resolve().parents[1]
+    probe = r'''
+import builtins
+import json
+
+seen = []
+real_import = builtins.__import__
+
+
+def recording_import(name, globals=None, locals=None, fromlist=(), level=0):
+    top_name = name.split(".", 1)[0]
+    if top_name == "simple_lama_inpainting":
+        seen.append(name)
+    return real_import(name, globals, locals, fromlist, level)
+
+
+builtins.__import__ = recording_import
+import untextre.lama_inpainter  # noqa: F401
+print(json.dumps(seen))
+'''
+
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        cwd=project_root,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=True,
+    )
+
+    assert json.loads(result.stdout.strip().splitlines()[-1]) == []
+
+
 # LamaInpainter — constructor guards
 # =========================================================================
 
@@ -250,6 +291,7 @@ class TestLamaInpainterConstructor:
         """Neither SimpleLama nor load_checkpoint → RuntimeError."""
         monkeypatch.setattr(lama_mod, "SimpleLama", None)
         monkeypatch.setattr(lama_mod, "load_checkpoint", None)
+        monkeypatch.setattr(lama_mod, "_BACKENDS_LOADED", True)
         with pytest.raises(RuntimeError, match="Neither simple-lama-inpainting"):
             LamaInpainter()
 
@@ -286,6 +328,7 @@ def lama_inpainter(monkeypatch):
     """Construct a LamaInpainter with a mocked SimpleLama backend."""
     fake = _FakeSimpleLama()
     monkeypatch.setattr(lama_mod, "SimpleLama", _FakeSimpleLama)
+    monkeypatch.setattr(lama_mod, "_BACKENDS_LOADED", True)
     monkeypatch.setattr(lama_mod, "select_device", lambda d: "cpu")
 
     inpainter = LamaInpainter(device="cpu")

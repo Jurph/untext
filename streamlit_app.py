@@ -9,10 +9,6 @@ Usage:
     streamlit run streamlit_app.py
 """
 
-# Workaround for PyTorch/Streamlit compatibility issue
-import os
-os.environ["STREAMLIT_SERVER_FILE_WATCHER_TYPE"] = "none"
-
 import streamlit as st
 import cv2
 import tempfile
