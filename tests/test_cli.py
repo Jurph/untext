@@ -204,6 +204,39 @@ class TestMainIntegrationPaths:
         assert any("_clean" in str(p) for p in saved.keys())
         assert all(source_path is not None for _arr, source_path in saved.values())
 
+    def test_force_output_reuses_already_loaded_image(self, monkeypatch, tmp_path):
+        """force_output must not reload the image when the template cascade already loaded it (#10)."""
+        img_path, out_dir = self._run_main(monkeypatch, tmp_path, ["--force-output"])
+
+        fake_template = orb_matcher_mod.WatermarkTemplate(
+            "fake.png", np.zeros((4, 4, 4), dtype=np.uint8), ()
+        )
+        monkeypatch.setattr(
+            orb_matcher_mod, "load_watermark_templates",
+            lambda *_a, **_kw: [fake_template],
+        )
+        monkeypatch.setattr(orb_matcher_mod, "try_watermark_cascade", lambda *_a, **_kw: None)
+        monkeypatch.setattr(
+            pipeline_mod, "process_single_image",
+            lambda **kw: {"total_time": 0.1, "skipped": True},
+        )
+        monkeypatch.setattr(cli_mod, "save_image", lambda *_a, **_kw: None)
+
+        load_calls = []
+        real_load_image = cli_mod.load_image
+
+        def tracking_load_image(path):
+            load_calls.append(path)
+            return real_load_image(path)
+
+        monkeypatch.setattr(cli_mod, "load_image", tracking_load_image)
+
+        main()
+
+        # The template cascade already loaded the image (line ~187); force_output
+        # must reuse that array instead of calling load_image a second time.
+        assert load_calls == [img_path]
+
 
     def test_timing_flag_saves_report(self, monkeypatch, tmp_path):
         """--timing produces timing_report.txt."""
