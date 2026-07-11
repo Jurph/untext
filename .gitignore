@@ -250,7 +250,6 @@ tests/images/detector_pair_harvest/
 tests/images/generated_text_watermarks/images/
 tests/images/generated_text_watermarks/masks/
 tests/images/has_text_2_*/
-tests/images/text_sources/
 tests/images/zero/
 tests/images/zero_detector_fp_baseline/
 tests/images/zero_synthetic_watermark_benchmark/
