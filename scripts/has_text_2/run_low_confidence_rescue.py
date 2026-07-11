@@ -5,7 +5,7 @@ import json
 import time
 from pathlib import Path
 
-from harvest_has_text_2_pipeline_bboxes import draw_overlay, empty_review, run_one, safe_id, write_summary
+from harvest_pipeline_bboxes import draw_overlay, empty_review, run_one, safe_id, write_summary
 from untextre.utils import load_image
 
 

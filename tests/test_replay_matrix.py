@@ -3,8 +3,8 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from tests.build_has_text_2_replay_matrix import first_stage, threshold_id
-from tests.evaluate_has_text_2_replay_policy import build_image_cache, find_combo, load_exact_image
+from scripts.has_text_2.build_replay_matrix import first_stage, threshold_id
+from scripts.has_text_2.evaluate_replay_policy import build_image_cache, find_combo, load_exact_image
 
 
 def test_threshold_id_is_stable() -> None:

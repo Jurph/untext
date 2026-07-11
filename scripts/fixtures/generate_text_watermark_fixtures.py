@@ -14,7 +14,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 SOURCE_DIR = ROOT / "tests" / "images" / "originals"
 OUTPUT_DIR = ROOT / "tests" / "images" / "generated_text_watermarks"
 

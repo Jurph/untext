@@ -5,9 +5,9 @@ import json
 from pathlib import Path
 
 try:
-    from harvest_has_text_2_pipeline_bboxes import safe_id
+    from harvest_pipeline_bboxes import safe_id
 except ModuleNotFoundError:  # pragma: no cover - import path differs under pytest
-    from tests.harvest_has_text_2_pipeline_bboxes import safe_id
+    from scripts.has_text_2.harvest_pipeline_bboxes import safe_id
 from untextre.utils import IMAGE_EXTENSIONS
 
 
