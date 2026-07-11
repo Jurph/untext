@@ -6,7 +6,7 @@ import json
 from itertools import product
 from pathlib import Path
 
-from harvest_has_text_2_pipeline_bboxes import area, is_ambiguous, pad_consensus_bbox
+from harvest_pipeline_bboxes import area, is_ambiguous, pad_consensus_bbox
 from untextre.consensus import find_consensus_boxes
 from untextre.metrics import expand_bbox_along_long_axis
 from untextre.utils import load_image, pad_bbox_to_multiple

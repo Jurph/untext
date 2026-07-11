@@ -40,7 +40,7 @@ if (Test-Path $RecordsDir) {
 
 # Is any sweep process (supervisor or chunk worker) still alive?
 $alive = Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
-    Where-Object { $_.CommandLine -match "run_has_text_2_detector_threshold_sweep" }
+    Where-Object { $_.CommandLine -match "run_detector_threshold_sweep" }
 
 if ($alive) {
     $alivePids = ($alive | ForEach-Object { $_.ProcessId }) -join ","
@@ -51,7 +51,7 @@ if ($alive) {
 if ($recordCount -lt $ExpectedRecords) {
     Log "relaunch records=$recordCount/$ExpectedRecords"
     $sweepArgs = @(
-        "tests\run_has_text_2_detector_threshold_sweep.py",
+        "scripts\has_text_2\run_detector_threshold_sweep.py",
         "tests\images\zero",
         "--out-root", "tests\images\zero_detector_fp_baseline",
         "--thresholds", "0.025",
@@ -72,7 +72,7 @@ Log "records complete ($recordCount). post-processing"
 $SummaryJson = Join-Path $OutRoot "threshold_025\summary.json"
 if (-not (Test-Path $SummaryJson)) {
     # Final supervisor pass resumes all records, writes summaries, then exits.
-    & $VenvPython "tests\run_has_text_2_detector_threshold_sweep.py" "tests\images\zero" `
+    & $VenvPython "scripts\has_text_2\run_detector_threshold_sweep.py" "tests\images\zero" `
         --out-root "tests\images\zero_detector_fp_baseline" --thresholds 0.025 `
         --chunk-size 20 --max-retries 1 --resume 2>&1 |
         Add-Content -Path $LogFile
@@ -83,7 +83,7 @@ if (-not (Test-Path $SummaryJson)) {
     Add-Content -Path $LogFile
 Log "overlays exit=$LASTEXITCODE"
 
-& $VenvPython "tests\analyze_has_text_2_detector_threshold_sweep.py" "tests\images\zero_detector_fp_baseline" `
+& $VenvPython "scripts\has_text_2\analyze_detector_threshold_sweep.py" "tests\images\zero_detector_fp_baseline" `
     --input-dir "tests\images\zero" --source-threshold 0.025 `
     --thresholds 0.30 0.15 0.10 0.05 0.025 2>&1 |
     Add-Content -Path $LogFile

@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 import untextre.consensus as consensus_mod
-from harvest_has_text_2_pipeline_bboxes import empty_review, run_one, safe_id, write_summary
+from harvest_pipeline_bboxes import empty_review, run_one, safe_id, write_summary
 from untextre.utils import IMAGE_EXTENSIONS
 
 
@@ -121,7 +121,7 @@ def run_supervisor(args: argparse.Namespace) -> None:
                 command.append("--no-summary")
             if args.resume:
                 command.append("--resume")
-            process = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1], stdout=stdout, stderr=stderr)
+            process = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[2], stdout=stdout, stderr=stderr)
             processes.append((threshold, process))
             print(f"started {threshold_id(threshold)} pid={process.pid} out={out_dir}", flush=True)
 
@@ -228,7 +228,7 @@ def run_chunk(args: argparse.Namespace, threshold: float, start: int, count: int
     with stdout_path.open("a", encoding="utf-8") as stdout, stderr_path.open("a", encoding="utf-8") as stderr:
         process = subprocess.Popen(
             command,
-            cwd=Path(__file__).resolve().parents[1],
+            cwd=Path(__file__).resolve().parents[2],
             stdout=stdout,
             stderr=stderr,
         )

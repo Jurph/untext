@@ -10,9 +10,9 @@ from pathlib import Path
 import numpy as np
 
 try:
-    from harvest_has_text_2_pipeline_bboxes import area, area as bbox_area, is_ambiguous, pad_consensus_bbox
+    from harvest_pipeline_bboxes import area, area as bbox_area, is_ambiguous, pad_consensus_bbox
 except ModuleNotFoundError:  # pragma: no cover - import path differs under pytest
-    from tests.harvest_has_text_2_pipeline_bboxes import area, area as bbox_area, is_ambiguous, pad_consensus_bbox
+    from scripts.has_text_2.harvest_pipeline_bboxes import area, area as bbox_area, is_ambiguous, pad_consensus_bbox
 from untextre.consensus import find_consensus_boxes
 from untextre.metrics import expand_bbox_along_long_axis
 from untextre.utils import load_image, pad_bbox_to_multiple
