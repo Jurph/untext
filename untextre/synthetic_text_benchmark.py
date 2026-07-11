@@ -46,12 +46,14 @@ _FONT_CANDIDATES = {
         "corbeli.ttf",
         "arial.ttf",
         "calibri.ttf",
+        "DejaVuSans.ttf",
     ],
     "serif": [
         "javatext.ttf",
         "Renda.ttf",
         "times.ttf",
         "georgia.ttf",
+        "DejaVuSerif.ttf",
     ],
 }
 
