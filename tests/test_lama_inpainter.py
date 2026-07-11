@@ -366,6 +366,33 @@ class TestLamaInpainterProcessing:
         with pytest.raises(RuntimeError, match="GPU exploded"):
             inpainter.inpaint(image, mask)
 
+    def test_inpaint_empties_cache_but_does_not_synchronize_on_cuda(self, monkeypatch):
+        """Success path reclaims GPU memory without an extra blocking sync.
+
+        `.cpu()`/PIL conversion already forces the CUDA work for this call to
+        finish before `out_bgr` exists, so a manual `torch.cuda.synchronize()`
+        here only adds a redundant full-pipeline stall (see #12). No real GPU
+        is needed: `torch.device("cuda")` just builds a device descriptor, and
+        the SimpleLama fake path never launches a real kernel.
+        """
+        monkeypatch.setattr(lama_mod, "SimpleLama", _FakeSimpleLama)
+        monkeypatch.setattr(lama_mod, "select_device", lambda d: "cuda")
+        monkeypatch.setattr(lama_mod.torch.cuda, "is_available", lambda: True)
+        empty_cache = MagicMock()
+        synchronize = MagicMock()
+        monkeypatch.setattr(lama_mod.torch.cuda, "empty_cache", empty_cache)
+        monkeypatch.setattr(lama_mod.torch.cuda, "synchronize", synchronize)
+
+        inpainter = LamaInpainter(device="cuda")
+        inpainter.model = _FakeSimpleLama()
+
+        image, mask = create_test_image()
+        result = inpainter.inpaint(image, mask)
+
+        assert result is not None
+        empty_cache.assert_called_once()
+        synchronize.assert_not_called()
+
 
 
 # =========================================================================

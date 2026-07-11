@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from untextre import detector as detector_mod
-from untextre.detector import cleanup_vram, detect_text_regions
+from untextre.detector import _decode_east_predictions, cleanup_vram, detect_text_regions
 
 
 def test_doctr_detector_is_not_public_api():
@@ -109,3 +109,45 @@ def test_cleanup_vram_does_not_crash_on_cpu_only(monkeypatch):
     monkeypatch.setattr(detector_mod.torch.cuda, "is_available", Mock(return_value=False))
 
     cleanup_vram()
+
+
+def test_decode_east_predictions_computes_rotation_aware_bbox():
+    """Single passing cell, zero rotation: exact geometry math, no trig surprises."""
+    scores = np.full((1, 1, 2, 3), 0.1, dtype=np.float32)
+    scores[0, 0, 1, 2] = 0.8
+    geometry = np.zeros((1, 5, 2, 3), dtype=np.float32)
+    # top, right, bottom, left distances + angle=0 at the passing cell (y=1, x=2)
+    geometry[0, 0, 1, 2] = 5.0
+    geometry[0, 1, 1, 2] = 7.0
+    geometry[0, 2, 1, 2] = 6.0
+    geometry[0, 3, 1, 2] = 4.0
+    geometry[0, 4, 1, 2] = 0.0
+
+    rectangles, confidences = _decode_east_predictions(scores, geometry, min_confidence=0.5)
+
+    assert rectangles == [(4, -1, 11, 11)]
+    assert confidences == pytest.approx([0.8])
+
+
+def test_decode_east_predictions_filters_below_threshold():
+    scores = np.full((1, 1, 3, 3), 0.2, dtype=np.float32)
+    geometry = np.zeros((1, 5, 3, 3), dtype=np.float32)
+
+    rectangles, confidences = _decode_east_predictions(scores, geometry, min_confidence=0.5)
+
+    assert rectangles == []
+    assert confidences == []
+
+
+def test_decode_east_predictions_preserves_row_major_order():
+    """Multiple passing cells come back in (y, then x) order, matching the
+    row-outer/col-inner scan this function replaced."""
+    scores = np.zeros((1, 1, 2, 2), dtype=np.float32)
+    scores[0, 0, 0, 1] = 0.9  # y=0, x=1
+    scores[0, 0, 1, 0] = 0.7  # y=1, x=0
+    scores[0, 0, 1, 1] = 0.6  # y=1, x=1
+    geometry = np.zeros((1, 5, 2, 2), dtype=np.float32)
+
+    _, confidences = _decode_east_predictions(scores, geometry, min_confidence=0.5)
+
+    assert confidences == pytest.approx([0.9, 0.7, 0.6])
