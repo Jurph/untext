@@ -25,9 +25,9 @@ logger = setup_logger(__name__)
 Detection = Dict[str, Any]  # {'geometry': points, 'confidence': score}
 
 # Module-level model instances for persistent loading
-_easyocr_reader: Optional[object] = None
+_easyocr_reader: Optional[Any] = None
 _east_net: Optional[Any] = None
-_yolo11x_model: Optional[object] = None
+_yolo11x_model: Optional[Any] = None
 
 EAST_MODEL_URL = "https://github.com/oyyd/frozen_east_text_detection.pb/raw/master/frozen_east_text_detection.pb"
 EAST_MODEL_DOCS = "docs/detector-models.md"
@@ -42,7 +42,7 @@ YOLO11X_MODEL_MIN_BYTES = 50 * 1024 * 1024
 
 
 
-def get_easyocr_reader() -> object:
+def get_easyocr_reader() -> Any:
     """Return the shared EasyOCR reader."""
     global _easyocr_reader
 
@@ -66,7 +66,7 @@ def get_east_net() -> Any:
 
     return _east_net
 
-def get_yolo11x_model() -> object:
+def get_yolo11x_model() -> Any:
     """Return the shared YOLO11x watermark detector."""
     global _yolo11x_model
 

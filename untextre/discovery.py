@@ -7,7 +7,7 @@ images and returns BGRA crop(s) suitable for the -K / ORB pipeline.
 import cv2
 import numpy as np
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from .utils import load_image, setup_logger
 from .watermark_consensus import (
@@ -298,7 +298,7 @@ def _normalize_01(arr: np.ndarray) -> np.ndarray:
     return (a - lo) / (hi - lo)
 
 
-def compute_stack_statistics(paths: List[Path]) -> Optional[Dict[str, np.ndarray]]:
+def compute_stack_statistics(paths: List[Path]) -> Optional[Dict[str, Any]]:
     """Compute per-pixel statistics across a set of same-size images.
 
     Uses Welford's online algorithm so memory scales with image size, not
@@ -335,6 +335,10 @@ def compute_stack_statistics(paths: List[Path]) -> Optional[Dict[str, np.ndarray
             gray_M2 = np.zeros_like(gray)
             bgr_mean = bgr.copy()
         else:
+            # gray_M2 and bgr_mean are always set together with gray_mean
+            # (all three assigned in the `if` branch above); this narrows
+            # them from Optional for the type checker.
+            assert gray_M2 is not None and bgr_mean is not None
             delta = gray - gray_mean
             gray_mean += delta / n
             gray_M2 += delta * (gray - gray_mean)
@@ -342,6 +346,9 @@ def compute_stack_statistics(paths: List[Path]) -> Optional[Dict[str, np.ndarray
 
     if n < 3:  # EMPIRICAL — minimum n for Welford variance; broader validation pending
         return None
+
+    # n >= 3 guarantees the loop set all three at least once.
+    assert gray_M2 is not None and bgr_mean is not None
 
     mean_bgr = bgr_mean.astype(np.uint8)
     var_gray = (gray_M2 / (n - 1)).astype(np.float32) if n > 1 else np.zeros_like(gray_M2, dtype=np.float32)
@@ -577,7 +584,7 @@ def score_to_mask(
     score: np.ndarray,
     var_norm: np.ndarray,
     precision_outlier_mask: Optional[np.ndarray] = None,
-) -> Dict[str, np.ndarray]:
+) -> Dict[str, Any]:
     """Produce the candidate mask from the composite score and stable-pixel region.
 
     The function has two responsibilities:
@@ -810,7 +817,7 @@ def extract_watermark_colors(
     log_max = float(log_var.max())
 
     if log_max - log_min > 1e-6:
-        log_var_u8 = cv2.normalize(log_var, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+        log_var_u8 = cv2.normalize(log_var, np.empty_like(log_var, dtype=np.uint8), 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
     else:
         log_var_u8 = np.zeros_like(log_var, dtype=np.uint8)
 
@@ -970,7 +977,7 @@ def discover_watermark_candidates(
 
         var_gray = stats["var_gray"]
         log_var = np.log10(var_gray.astype(np.float64) + 1e-8)
-        var_norm = cv2.normalize(log_var, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+        var_norm = cv2.normalize(log_var, np.empty_like(log_var, dtype=np.uint8), 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
 
         bucket_data[(img_w, img_h)] = (paths, stats, var_norm)
         all_log_prec.append(-log_var.flatten())
@@ -1070,7 +1077,7 @@ def discover_watermark_candidates(
             # Stable mask overlay debug image
             cv2.imwrite(str(debug_dir / f"debug_stable_mask_{stem}.png"), precision_mask)
             # Score with NORM_MINMAX so max always maps to 255 regardless of amplitude
-            score_vis = cv2.normalize(score, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+            score_vis = cv2.normalize(score, np.empty_like(score, dtype=np.uint8), 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
             cv2.imwrite(str(debug_dir / f"debug_score_{stem}.png"), score_vis)
             cv2.imwrite(str(debug_dir / f"debug_mask_raw_{stem}.png"), mask_data["mask_raw"])
             cv2.imwrite(str(debug_dir / f"debug_mask_clean_{stem}.png"), mask_data["mask_clean"])

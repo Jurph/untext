@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 import cv2  # OpenCV for colour space conversions
@@ -101,6 +101,11 @@ def paste_subregion(
 class LamaInpainter:  # pylint: disable=too-few-public-methods
     """Thin convenience wrapper around the SAIC-AI LaMa model."""
 
+    # Genuinely dynamic: either a SimpleLama instance (typed) or an
+    # original-LaMa-repo model object from the unstubbed `saicinpainting`
+    # package. No shared interface exists to type this more precisely.
+    model: Any
+
     def __init__(
         self,
         checkpoint_path: Optional[Path | str] = None,
@@ -134,6 +139,10 @@ class LamaInpainter:  # pylint: disable=too-few-public-methods
             self.model = SimpleLama()
         else:
             logger.info("Falling back to original LaMa repo loader on %s", self.device)
+            if load_checkpoint is None:
+                raise RuntimeError(
+                    "Neither simple-lama-inpainting nor the original LaMa repo is available."
+                )
             self.model = load_checkpoint(checkpoint_path, map_location=self.device)
             self.model.freeze()
             self.model.to(self.device)
@@ -267,10 +276,12 @@ class LamaInpainter:  # pylint: disable=too-few-public-methods
                 logger.debug(f"Input mask type: {type(mask)}, shape: {mask.shape}, dtype: {mask.dtype}")
                 out_rgb = self.model(img_rgb, mask)
                 logger.debug(f"SimpleLama output type: {type(out_rgb)}")
-                # SimpleLama returns PIL Image - convert to numpy array to maintain our API contract
-                if hasattr(out_rgb, 'convert'):  # Check if it's a PIL Image
-                    logger.debug("Converting PIL Image to numpy array")
-                    out_rgb = np.array(out_rgb)
+                # SimpleLama always returns a PIL Image (Image.fromarray(...) in its
+                # source); np.asarray() converts it to a real ndarray. Using asarray
+                # (not a conditional + np.array) also accepts any PIL-like duck type
+                # (anything implementing __array__, e.g. test doubles) without a
+                # brittle isinstance/hasattr check, and is a no-op if already ndarray.
+                out_rgb = np.asarray(out_rgb)
                 logger.debug(f"Final output type: {type(out_rgb)}, shape: {out_rgb.shape}, dtype: {out_rgb.dtype}")
                 
                 # CRITICAL: SimpleLama pads to mod-8, output is padded size

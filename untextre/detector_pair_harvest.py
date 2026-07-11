@@ -107,6 +107,8 @@ def summarize_detector_rows(detector: str, pairs: dict[str, dict], rows: list[di
 
     for row in clean_rows:
         pair_id = row.get("pair_id")
+        if pair_id is None:
+            continue
         boxes = row.get("boxes") or []
         if not boxes:
             continue
@@ -115,6 +117,8 @@ def summarize_detector_rows(detector: str, pairs: dict[str, dict], rows: list[di
 
     for row in twin_rows:
         pair_id = row.get("pair_id")
+        if pair_id is None:
+            continue
         boxes = row.get("boxes") or []
         if boxes:
             twin_fires.add(pair_id)

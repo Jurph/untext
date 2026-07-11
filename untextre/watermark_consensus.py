@@ -6,7 +6,7 @@ import time
 
 import cv2
 import numpy as np
-from .utils import setup_logger
+from .utils import image_hw, setup_logger
 
 logger = setup_logger(__name__)
 
@@ -344,7 +344,7 @@ def split_candidate_bgra(
     }
 
     groups: list[set[int]] = [{label} for label in range(1, num_labels)]
-    canvas_shape = bgra.shape[:2]
+    canvas_shape = image_hw(bgra)
     changed = True
     while changed:
         changed = False
@@ -566,7 +566,7 @@ def _translate_image(img: np.ndarray, tx: float, ty: float, binary: bool = False
         (w, h),
         flags=interp,
         borderMode=cv2.BORDER_CONSTANT,
-        borderValue=0,
+        borderValue=(0, 0, 0, 0),
     )
 
 
@@ -744,8 +744,8 @@ def _evaluate_pairwise_scale(
     mov_alpha = _resize_image(mov.score_alpha_soft.astype(np.float32), float(working_scale))
 
     canvas_shape = _build_alignment_canvas_shape(
-        ref.score_distance_field.shape[:2],
-        mov_dist.shape[:2],
+        image_hw(ref.score_distance_field),
+        image_hw(mov_dist),
     )
 
     ref_dist_canvas, _, _ = _center_on_canvas(
@@ -766,7 +766,9 @@ def _evaluate_pairwise_scale(
         return None
 
     hann = _get_hann_window(canvas_shape)
-    (tx, ty), response = cv2.phaseCorrelate(ref_dist_canvas * hann, mov_dist_canvas * hann)
+    (tx, ty), response = cv2.phaseCorrelate(
+        (ref_dist_canvas * hann).astype(np.float64), (mov_dist_canvas * hann).astype(np.float64)
+    )
     aligned_support = _translate_image(mov_support_canvas, tx, ty, binary=True)
     aligned_alpha = _translate_image(mov_alpha_canvas, tx, ty, binary=False)
 
@@ -1219,7 +1221,7 @@ def _scaled_shape(shape: tuple[int, int], scale: float) -> tuple[int, int]:
 
 
 def _cluster_canvas_shape(graph: CandidateGraph, cluster: ClusterRecord) -> tuple[int, int]:
-    anchor_shape = graph.records[cluster.anchor_index].bgra.shape[:2]
+    anchor_shape = image_hw(graph.records[cluster.anchor_index].bgra)
     max_h, max_w = anchor_shape
     for member_index in cluster.member_indices:
         if member_index == cluster.anchor_index:
@@ -1228,7 +1230,7 @@ def _cluster_canvas_shape(graph: CandidateGraph, cluster: ClusterRecord) -> tupl
         if score is None:
             continue
         scaled_h, scaled_w = _scaled_shape(
-            graph.records[member_index].bgra.shape[:2],
+            image_hw(graph.records[member_index].bgra),
             score.scale,
         )
         max_h = max(max_h, scaled_h)

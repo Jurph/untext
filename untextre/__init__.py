@@ -8,6 +8,13 @@ are imported lazily so that lightweight entry points like ``--help`` and
 watermark-only CLI runs don't pay the TensorFlow / PyTorch startup cost.
 """
 
+# basedpyright cannot follow the __getattr__ (PEP 562) lazy-export hook below,
+# so it flags every name in __all__ as "not present in module" even though
+# __getattr__ resolves each one on first access. This is the documented
+# mechanism this module exists for (see module docstring); suppressing the
+# check here is correct, not a workaround for a real gap.
+# pyright: reportUnsupportedDunderAll=false
+
 __version__ = "0.1.0"
 __author__ = "Untextre Team"
 

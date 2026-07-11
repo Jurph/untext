@@ -62,7 +62,7 @@ def main() -> None:
     
     # Start timing
     start_time = time.time()
-    detailed_timings = [] if args.timing else None
+    detailed_timings: List[dict] = []
     
     # Validate input path
     input_path = Path(args.input)

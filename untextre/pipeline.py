@@ -3,7 +3,7 @@
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, TYPE_CHECKING, Tuple
 
 import cv2
 import numpy as np
@@ -11,11 +11,18 @@ import numpy as np
 from .utils import (
     CLI_DEFAULT_CONFIDENCE,
     calculate_bbox_superset,
+    image_hw,
     load_image,
     pad_bbox_to_multiple,
     save_image,
     setup_logger,
 )
+
+if TYPE_CHECKING:
+    # Deferred: importing .inpaint eagerly would pull in torch at module load,
+    # defeating the lazy-loading this module is designed around (see the
+    # local `from .inpaint import inpaint_image` calls below). Type-only.
+    from .inpaint import InpaintMethod
 
 logger = setup_logger(__name__)
 
@@ -162,7 +169,7 @@ def _generate_masks_and_inpaint(
     image: np.ndarray,
     consensus_boxes: List[Tuple[int, int, int, int]],
     g_value: int,
-    method: str,
+    method: "InpaintMethod",
     target_color: Optional[tuple] = None,
     use_grabcut: bool = False,
     use_grabcut_expand: bool = False,
@@ -223,7 +230,7 @@ def _generate_masks_and_inpaint(
                 cleanup_close_px=mask_config.get("cleanup_close_px", 11),
                 cleanup_dilate_px=mask_config.get("cleanup_dilate_px", 13),
             )
-            if use_grabcut_expand or use_budgeted_expand:
+            if isinstance(mask_result, tuple):
                 region_mask, cluster_data = mask_result
             else:
                 region_mask = mask_result
@@ -285,7 +292,7 @@ def _generate_masks_and_inpaint(
 
     logger.info(f"Processed {regions_processed}/{len(consensus_boxes)} regions with g={g_value}")
 
-    inpaint_region = calculate_bbox_superset(consensus_boxes, image.shape[:2])
+    inpaint_region = calculate_bbox_superset(consensus_boxes, (h, w))
 
     total_image_pixels = h * w
     mask_pixel_count = int(np.sum(combined_mask > 0))
@@ -326,7 +333,7 @@ def process_image_array(
     *,
     image_name: str = "<memory>",
     target_color: Optional[tuple] = None,
-    method: str = "lama",
+    method: "InpaintMethod" = "lama",
     mask: Optional[np.ndarray] = None,
     confidence_threshold: float = CLI_DEFAULT_CONFIDENCE,
     granularity: Optional[int] = None,
@@ -410,7 +417,7 @@ def _process_image_array_impl(
     *,
     image_name: str = "<memory>",
     target_color: Optional[tuple] = None,
-    method: str = "lama",
+    method: "InpaintMethod" = "lama",
     mask: Optional[np.ndarray] = None,
     confidence_threshold: float = CLI_DEFAULT_CONFIDENCE,
     granularity: Optional[int] = None,
@@ -595,7 +602,7 @@ def _process_image_array_impl(
 
         # Inpaint using the loaded mask
         inpaint_start = time.time()
-        inpaint_region = calculate_bbox_superset(consensus_boxes, image.shape[:2])
+        inpaint_region = calculate_bbox_superset(consensus_boxes, image_hw(image))
         result = inpaint_image(image, mask, bbox=inpaint_region, method=method)
         timings['inpaint_time'] = time.time() - inpaint_start
     else:
@@ -661,7 +668,7 @@ def process_single_image(
     output_dir: Path,
     target_color: Optional[tuple] = None,
     keep_masks: bool = False,
-    method: str = "lama",
+    method: "InpaintMethod" = "lama",
     maskfile: Optional[str] = None,
     confidence_threshold: float = CLI_DEFAULT_CONFIDENCE,
     granularity: Optional[int] = None,

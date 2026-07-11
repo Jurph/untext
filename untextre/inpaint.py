@@ -9,10 +9,15 @@ import cv2
 import gc
 import numpy as np
 import torch
-from typing import Optional, Tuple, Literal
+from typing import Optional, Tuple, Literal, TYPE_CHECKING
 
-from .utils import ImageArray, MaskArray, BBox, setup_logger, dilate_bbox, pad_bbox_to_multiple
+from .utils import ImageArray, MaskArray, BBox, image_hw, setup_logger, dilate_bbox, pad_bbox_to_multiple
 
+if TYPE_CHECKING:
+    # Type-only: the runtime import below may legitimately resolve to None
+    # when LaMa's dependencies aren't installed, so `LamaInpainter` isn't
+    # always a type at runtime and can't be used directly in annotations.
+    from .lama_inpainter import LamaInpainter as _LamaInpainterType
 
 try:
     from .lama_inpainter import LamaInpainter
@@ -174,7 +179,7 @@ def initialize_lama_model(device: str = "cuda", force_reinit: bool = False) -> b
         reset_lama_model()
         return False
 
-def get_lama_inpainter() -> Optional[LamaInpainter]:
+def get_lama_inpainter() -> "Optional[_LamaInpainterType]":
     """Get the cached LaMa inpainter instance.
     
     Returns:
@@ -253,13 +258,15 @@ def _inpaint_with_lama(
             logger.warning("LaMa model not initialized. Attempting auto-initialization...")
             if initialize_lama_model(device=_lama_device or "cuda"):
                 inpainter = get_lama_inpainter()
+                if inpainter is None:
+                    raise RuntimeError("LaMa model initialized but inpainter instance unavailable.")
             else:
                 raise RuntimeError("Failed to auto-initialize LaMa model.")
         else:
             raise RuntimeError("LaMa model not initialized. Call initialize_lama_model() first.")
     
     # Calculate subregion for efficient processing
-    subregion = _calculate_inpainting_subregion(mask, bbox, image.shape[:2])
+    subregion = _calculate_inpainting_subregion(mask, bbox, image_hw(image))
     
     # If no subregion found (no pixels to inpaint), return original image
     if subregion is None:
@@ -352,7 +359,7 @@ def _has_pixels_to_inpaint(mask: MaskArray) -> bool:
     Returns:
         True if there are pixels to inpaint (white pixels), False otherwise
     """
-    return np.any(mask > 0)
+    return bool(np.any(mask > 0))
 
 
 

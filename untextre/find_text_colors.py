@@ -19,7 +19,7 @@ import cv2
 import numpy as np
 from typing import Optional
 
-from .utils import ImageArray, BBox, Color, setup_logger
+from .utils import ImageArray, BBox, Color, image_hw, setup_logger
 
 logger = setup_logger(__name__)
 
@@ -55,7 +55,7 @@ def html_to_bgr(html_color: str) -> Color:
     # Convert HTML name to hex using PIL
     from PIL import ImageColor
     rgb = ImageColor.getrgb(html_color)
-    return (rgb[2], rgb[1], rgb[0])  # Convert RGB to BGR
+    return (int(rgb[2]), int(rgb[1]), int(rgb[0]))  # Convert RGB to BGR
 
 
 def compute_cluster_fom(
@@ -160,7 +160,7 @@ def grabcut_refine(
         cv2.grabCut(
             image_roi,
             gc_mask,
-            None,  # rect unused when mask is provided
+            (0, 0, 0, 0),  # rect unused when mask is provided (GC_INIT_WITH_MASK)
             bgd_model,
             fgd_model,
             iterations,
@@ -336,7 +336,7 @@ def color_guided_expand(
     fgd_model = np.zeros((1, 65), np.float64)
 
     try:
-        cv2.grabCut(roi, gc_init, None, bgd_model, fgd_model,
+        cv2.grabCut(roi, gc_init, (0, 0, 0, 0), bgd_model, fgd_model,
                     iterations, cv2.GC_INIT_WITH_MASK)
     except cv2.error as e:
         if debug:
@@ -455,7 +455,7 @@ def geometry_budgeted_expand(
     """
     x, y, w, h = bbox
     bbox_area = max(w * h, 0)
-    x1, y1, x2, y2 = _expanded_bbox_roi(image.shape[:2], bbox, expand_factor)
+    x1, y1, x2, y2 = _expanded_bbox_roi(image_hw(image), bbox, expand_factor)
     roi_w = x2 - x1
     roi_h = y2 - y1
     if roi_w < 3 or roi_h < 3:
@@ -481,7 +481,7 @@ def geometry_budgeted_expand(
         cv2.grabCut(
             roi,
             gc_init,
-            None,
+            (0, 0, 0, 0),  # rect unused when mask is provided (GC_INIT_WITH_MASK)
             bgd_model,
             fgd_model,
             iterations,
@@ -570,7 +570,7 @@ def find_mask_by_spatial_tf_idf(
     cleanup_dilate_px: int = 13,
     use_grabcut: bool = False,
     return_cluster_data: bool = False,
-) -> np.ndarray:
+) -> np.ndarray | tuple[np.ndarray, dict]:
     """Create a binary mask using Figure of Merit analysis.
     
     This approach identifies text colors by computing a Figure of Merit (FOM)
@@ -680,7 +680,7 @@ def find_mask_by_spatial_tf_idf(
     _, labels, centers = cv2.kmeans(
         all_pixels_rgb.astype(np.float32), 
         num_clusters, 
-        None, 
+        np.zeros((all_pixels_rgb.shape[0], 1), dtype=np.int32),  # bestLabels ignored (KMEANS_PP_CENTERS)
         criteria, 
         10, 
         cv2.KMEANS_PP_CENTERS

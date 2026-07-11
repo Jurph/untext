@@ -368,14 +368,18 @@ class TestFindKnownMaskValidation:
                 return [], None
 
         monkeypatch.setattr(orb_matcher_mod, "build_candidate_orb_variants", fake_build_candidate_orb_variants)
-        monkeypatch.setattr(cv2, "ORB_create", lambda *args, **kwargs: FakeORB())
+        monkeypatch.setattr(cv2.ORB, "create", lambda *args, **kwargs: FakeORB())
 
         result = find_known_mask_in_image(target, known_rgba)
 
         assert result is None
         assert builder_called["value"] is True
         assert len(orb_masks) >= 1
-        assert orb_masks[0] is None
+        # find_known_mask_in_image passes an explicit all-255 "no restriction"
+        # mask instead of None (the cv2 stub rejects None; an all-255 mask is
+        # the behaviorally-equivalent, stub-satisfying replacement).
+        assert orb_masks[0] is not None
+        assert np.all(orb_masks[0] == 255)
 
     def test_known_mask_falls_back_to_later_prepared_variant(self, monkeypatch):
         target = np.zeros((80, 100, 3), dtype=np.uint8)
