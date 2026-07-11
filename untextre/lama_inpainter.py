@@ -319,10 +319,17 @@ class LamaInpainter:  # pylint: disable=too-few-public-methods
                     out_bgr = out_bgr[edge_pad_top:edge_pad_top+orig_h, edge_pad_left:edge_pad_left+orig_w]
                     logger.info(f"Cropped padded result back to original size: {out_bgr.shape[1]}x{out_bgr.shape[0]}")
             
-            # Force GPU memory cleanup if using CUDA
+            # Reclaim cached GPU memory. No explicit torch.cuda.synchronize()
+            # here: by this point `out_bgr` is already CPU-resident (the
+            # manual-tensor branch called `.cpu()` on `out`; the SimpleLama
+            # branch got a PIL Image back from `self.model(...)`), and both
+            # of those transfers implicitly block until this call's CUDA work
+            # completes. An extra manual synchronize() adds nothing for
+            # correctness here -- it only forces the CPU to wait on *every*
+            # queued CUDA stream, which serializes back-to-back images in a
+            # batch run instead of letting their GPU work overlap.
             if torch.cuda.is_available() and self.device.type == 'cuda':
                 torch.cuda.empty_cache()
-                torch.cuda.synchronize()
             
             logger.info("LaMa processing completed")
             return out_bgr

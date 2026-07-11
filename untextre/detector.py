@@ -586,48 +586,50 @@ def _decode_east_predictions(scores: np.ndarray, geometry: np.ndarray,
     Returns:
         Tuple of (rectangles, confidences) where rectangles are (x,y,w,h) tuples
     """
-    # Extract dimensions from score volume
-    (num_rows, num_cols) = scores.shape[2:4]
-    rectangles = []
-    confidences = []
-    
-    # Loop over each row and column of the score map
-    for y in range(0, num_rows):
-        # Extract scores and geometry data for current row
-        scores_data = scores[0, 0, y]
-        x_data_0 = geometry[0, 0, y]  # Distance to top edge
-        x_data_1 = geometry[0, 1, y]  # Distance to right edge
-        x_data_2 = geometry[0, 2, y]  # Distance to bottom edge
-        x_data_3 = geometry[0, 3, y]  # Distance to left edge
-        angles_data = geometry[0, 4, y]  # Rotation angles
-        
-        for x in range(0, num_cols):
-            # Skip if confidence is too low
-            if scores_data[x] < min_confidence:
-                continue
-            
-            # Calculate offset - EAST output is 4x smaller than input
-            (offset_x, offset_y) = (x * 4.0, y * 4.0)
-            
-            # Extract rotation angle and calculate sin/cos
-            angle = angles_data[x]
-            cos = np.cos(angle)
-            sin = np.sin(angle)
-            
-            # Calculate width and height of bounding box
-            h = x_data_0[x] + x_data_2[x]
-            w = x_data_1[x] + x_data_3[x]
-            
-            # Rotation-aware bbox: angle from EAST geometry channel 4 orients the box.
-            end_x = int(offset_x + (cos * x_data_1[x]) + (sin * x_data_2[x]))
-            end_y = int(offset_y - (sin * x_data_1[x]) + (cos * x_data_2[x]))
-            start_x = int(end_x - w)
-            start_y = int(end_y - h)
-            
-            # Store rectangle as (x, y, width, height)
-            rectangles.append((start_x, start_y, int(w), int(h)))
-            confidences.append(float(scores_data[x]))
-    
+    # Per-cell score/geometry channels, shape (num_rows, num_cols).
+    scores_map = scores[0, 0]
+    x_data_0 = geometry[0, 0]  # Distance to top edge
+    x_data_1 = geometry[0, 1]  # Distance to right edge
+    x_data_2 = geometry[0, 2]  # Distance to bottom edge
+    x_data_3 = geometry[0, 3]  # Distance to left edge
+    angles_data = geometry[0, 4]  # Rotation angles
+
+    # Cells passing the confidence gate. np.nonzero on a 2D array yields
+    # (row, col) pairs in row-major order, matching the row-outer/col-inner
+    # iteration this replaces, so downstream list order is unchanged.
+    mask = scores_map >= min_confidence
+    ys, xs = np.nonzero(mask)
+
+    # Offset - EAST output is 4x smaller than input.
+    offset_x = xs.astype(np.float64) * 4.0
+    offset_y = ys.astype(np.float64) * 4.0
+
+    angle = angles_data[mask]
+    cos = np.cos(angle)
+    sin = np.sin(angle)
+
+    d0 = x_data_0[mask]
+    d1 = x_data_1[mask]
+    d2 = x_data_2[mask]
+    d3 = x_data_3[mask]
+
+    h = d0 + d2
+    w = d1 + d3
+
+    # Rotation-aware bbox: angle from EAST geometry channel 4 orients the box.
+    # end_x/end_y truncate to int before the w/h subtraction, same as the
+    # scalar original (int() truncates toward zero; astype(int64) matches).
+    end_x = (offset_x + cos * d1 + sin * d2).astype(np.int64).astype(np.float64)
+    end_y = (offset_y - sin * d1 + cos * d2).astype(np.int64).astype(np.float64)
+    start_x = (end_x - w).astype(np.int64)
+    start_y = (end_y - h).astype(np.int64)
+    w_i = w.astype(np.int64)
+    h_i = h.astype(np.int64)
+
+    # Store rectangles as (x, y, width, height).
+    rectangles = list(zip(start_x.tolist(), start_y.tolist(), w_i.tolist(), h_i.tolist()))
+    confidences = scores_map[mask].astype(float).tolist()
+
     return rectangles, confidences
 
 def _geometry_to_bbox(geometry: np.ndarray) -> BBox:
