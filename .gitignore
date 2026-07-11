@@ -239,6 +239,7 @@ tests/images/archived/
 
 # Superpowers session working documents — agent scratchpad, not product artifacts.
 .superpowers/
+docs/superpowers/
 .worktrees/
 .lsp.json
 
