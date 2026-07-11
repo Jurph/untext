@@ -88,3 +88,27 @@ Zoom in: see the graphite on the paper, the individual fibers, the motes of carb
 Zoom out: see the patterns across files, across modules, across the landscape. The order should be visible at every scale.
 
 Seek order by drawing the correct figures; zoom out and perceive the truth of the binary.
+
+## GitHub MCP Tool Quirk
+
+When using the GitHub MCP comment tool, be careful to keep **comment-body**
+calls and **reaction-to-existing-comment** calls separate.
+
+- A plain issue/PR comment should send **only** a body plus the target issue/PR.
+- A reaction should send the target `comment_id` plus the reaction, **without**
+  a body.
+
+Observed failure mode on 2026-07-11:
+
+- The MCP layer rejected mixed-shape calls with:
+  `comment_id cannot be combined with body`
+- Repeating the same malformed call can trap the agent in a retry loop.
+
+Safe workaround:
+
+- If the comment tool starts insisting on `comment_id`/reaction-shaped args while
+  you are trying to leave a plain text comment, stop retrying it.
+- For simple close/restate/update operations, use the GitHub issue/PR **update**
+  path instead of the comment path for that turn.
+
+This is a tooling quirk, not a repo-code problem.
