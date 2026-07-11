@@ -58,9 +58,9 @@ so this file never drifts from the tracker.
 - [x] **Consensus padding label**: Add `# EMPIRICAL` label to the 10%-per-side
   padding constant. `(consensus.py:397-417)`
 
-- [ ] **process_with_known_mask API** (#8): Document (or add a `WatermarkTemplate`
-  overload to) `process_with_known_mask` so batch callers are not forced into
-  O(N×templates) ORB extraction. `(orb_matcher.py:93)`
+- [x] **process_with_known_mask API** (#8): Added reusable target-ORB feature
+  preparation so multi-template known-mask cascades extract the target image’s
+  ORB keypoints/descriptors once per image instead of once per template.
 
 ---
 
