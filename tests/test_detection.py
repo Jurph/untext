@@ -22,15 +22,10 @@ pytestmark = pytest.mark.slow
 # Import consensus detection functions
 from untextre.consensus import (
     detect_with_doctr,
-    detect_with_easyocr, 
-    detect_with_east,
-    run_consensus_detection,
-    find_consensus_boxes,
 )
 from untextre.pipeline import (
     initialize_consensus_models as init_all_models,
-    _apply_color_enhancement,
-    _try_color_enhanced_detection
+    _apply_color_enhancement
 )
 from untextre.utils import load_image
 

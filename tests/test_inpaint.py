@@ -14,19 +14,11 @@ import numpy as np
 import pytest
 from skimage.metrics import structural_similarity as ssim
 
-import untextre.inpaint as inpaint_mod
 from untextre.inpaint import (
     inpaint_image,
-    _has_pixels_to_inpaint,
-    _calculate_inpainting_subregion,
-    _inpaint_with_lama,
-    _inpaint_with_telea,
     is_lama_available,
     is_lama_initialized,
-    is_lama_healthy,
-    get_lama_status,
     initialize_lama_model,
-    reset_lama_model,
 )
 
 

@@ -788,7 +788,6 @@ def test_extract_watermark_colors_opaque_watermark_unchanged(tmp_path):
     wm_alpha = float(alpha_hat[wm_slice].mean())
     assert wm_alpha > 0.8, f"Expected alpha_hat ≈ 1.0 for opaque watermark, got {wm_alpha:.3f}"
 
-from untextre.discovery import _consensus_vote
 from untextre.watermark_consensus import ConsensusTemplate
 
 

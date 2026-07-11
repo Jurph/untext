@@ -18,8 +18,6 @@ pytestmark = pytest.mark.slow
 
 from untextre.detector import (
     TextDetector,
-    detect_text_regions,
-    cleanup_vram,
 )
 
 

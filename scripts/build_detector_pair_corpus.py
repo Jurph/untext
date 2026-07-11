@@ -47,8 +47,6 @@ def main() -> None:
 
     out_root = args.out_root
     pairs_dir = out_root / "pairs"
-    twins_dir = pairs_dir / "synthetic_twins"
-    masks_dir = pairs_dir / "truth_masks"
     manifest_path = pairs_dir / "pair_manifest.jsonl"
     pairs_dir.mkdir(parents=True, exist_ok=True)
 

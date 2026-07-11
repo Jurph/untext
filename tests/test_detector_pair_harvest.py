@@ -5,7 +5,6 @@ import pytest
 
 from untextre.detector_pair_harvest import (
     append_jsonl,
-    bbox_area,
     bbox_center,
     bbox_iou,
     box_metrics_against_truth,

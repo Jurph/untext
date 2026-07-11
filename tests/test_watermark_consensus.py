@@ -1,24 +1,13 @@
-from dataclasses import is_dataclass
-import logging
 
 import numpy as np
 
 from untextre.watermark_consensus import (
-    ComponentDescriptor,
-    CandidateGeometry,
-    CandidateGraph,
-    ClusterRecord,
     CandidateMetadata,
     CandidateRecord,
-    ConsensusTemplate,
-    PairwiseScore,
-    ScaleProposal,
     _filter_scoring_alpha,
     alpha_to_soft_mask,
     build_candidate_graph,
     build_candidate_record,
-    build_distance_field,
-    build_edge_field,
     build_final_templates,
     extract_candidate_clusters,
     propose_pair_scales,

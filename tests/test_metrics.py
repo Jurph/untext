@@ -16,8 +16,6 @@ from untextre.metrics import (
     expand_bbox_along_long_axis,
     EXPANSION_BLACKHAT_THRESHOLD,
     EXPANSION_EDGE_ROW_THRESHOLD,
-    RETRY_BLACKHAT_THRESHOLD,
-    RETRY_EDGE_ROW_THRESHOLD,
 )
 
 

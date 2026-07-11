@@ -6,12 +6,11 @@ import cv2
 import numpy as np
 import pytest
 
-import untextre
 import untextre.cli as cli_mod
 import untextre.orb_matcher as orb_matcher_mod
 import untextre.pipeline as pipeline_mod
 import untextre.reports as reports_mod
-from untextre.cli import main, parse_args
+from untextre.cli import main
 
 
 
