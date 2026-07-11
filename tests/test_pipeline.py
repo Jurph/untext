@@ -5,6 +5,7 @@ import numpy as np
 import pytest
 
 import untextre.consensus as consensus_mod
+import untextre.detector as detector_mod
 import untextre.metrics as metrics_mod
 import untextre.pipeline as pipeline_mod
 import untextre.preprocessor as preprocessor_mod
@@ -207,6 +208,64 @@ class TestProcessImageArray:
         )
 
         assert captured["use_budgeted_expand"] is True
+
+    def test_cleanup_vram_runs_on_success(self, monkeypatch):
+        """process_image_array sweeps GPU/CPU memory on a normal return.
+
+        Detection already self-cleans (consensus.run_consensus_detection calls
+        cleanup_vram); this is the matching guarantee on the caller-facing
+        entry point, so every caller gets it without wrapping the call
+        themselves (#33).
+        """
+        image = np.ones((40, 80, 3), dtype=np.uint8) * 200
+        monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: image.copy())
+        monkeypatch.setattr(metrics_mod, "needs_retry", lambda _region: False)
+        monkeypatch.setattr(
+            pipeline_mod,
+            "_generate_masks_and_inpaint",
+            lambda img, boxes, _g, _method, _target, **_kw: (
+                np.zeros(img.shape[:2], dtype=np.uint8),
+                img.copy(),
+            ),
+        )
+        calls = []
+        monkeypatch.setattr(detector_mod, "cleanup_vram", lambda: calls.append("cleanup"))
+
+        process_image_array(
+            image,
+            method="telea",
+            forced_bbox=(12, 8, 24, 16),
+            auto_retry=False,
+        )
+
+        assert calls == ["cleanup"]
+
+    def test_cleanup_vram_runs_even_when_pipeline_raises(self, monkeypatch):
+        """A mid-pipeline exception must not skip the memory sweep.
+
+        Before #33's fix, nothing in the call chain wrapped inpainting in a
+        try/finally at all, so an exception left GPU/CPU memory dangling with
+        no cleanup whatsoever.
+        """
+        image = np.ones((40, 80, 3), dtype=np.uint8) * 200
+        monkeypatch.setattr(preprocessor_mod, "preprocess_image", lambda _img: image.copy())
+
+        def boom(img, boxes, _g, _method, _target, **_kw):
+            raise RuntimeError("inpaint exploded")
+
+        monkeypatch.setattr(pipeline_mod, "_generate_masks_and_inpaint", boom)
+        calls = []
+        monkeypatch.setattr(detector_mod, "cleanup_vram", lambda: calls.append("cleanup"))
+
+        with pytest.raises(RuntimeError, match="inpaint exploded"):
+            process_image_array(
+                image,
+                method="telea",
+                forced_bbox=(12, 8, 24, 16),
+                auto_retry=False,
+            )
+
+        assert calls == ["cleanup"]
 
 
 class TestProcessSingleImageFailovers:

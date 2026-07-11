@@ -373,6 +373,61 @@ def process_image_array(
 
     Returns:
         PipelineResult containing cleaned image, mask, timings, and consensus boxes.
+
+    GPU/CPU memory is reclaimed via cleanup_vram() on every exit path (normal
+    return, early skip, or exception) so callers never have to remember to wrap
+    this themselves -- see #33. Detection already self-cleans in
+    consensus.run_consensus_detection(); this closes the matching gap on the
+    inpainting side.
+    """
+    from .detector import cleanup_vram
+
+    try:
+        return _process_image_array_impl(
+            image,
+            image_name=image_name,
+            target_color=target_color,
+            method=method,
+            mask=mask,
+            confidence_threshold=confidence_threshold,
+            granularity=granularity,
+            forced_bbox=forced_bbox,
+            color_sensitivity=color_sensitivity,
+            expand_bboxes=expand_bboxes,
+            auto_retry=auto_retry,
+            use_grabcut=use_grabcut,
+            use_grabcut_expand=use_grabcut_expand,
+            use_budgeted_expand=use_budgeted_expand,
+            coverage_limit=coverage_limit,
+            mask_config=mask_config,
+        )
+    finally:
+        cleanup_vram()
+
+
+def _process_image_array_impl(
+    image: np.ndarray,
+    *,
+    image_name: str = "<memory>",
+    target_color: Optional[tuple] = None,
+    method: str = "lama",
+    mask: Optional[np.ndarray] = None,
+    confidence_threshold: float = CLI_DEFAULT_CONFIDENCE,
+    granularity: Optional[int] = None,
+    forced_bbox: Optional[tuple] = None,
+    color_sensitivity: int = 3,
+    expand_bboxes: bool = True,
+    auto_retry: bool = True,
+    use_grabcut: bool = False,
+    use_grabcut_expand: bool = False,
+    use_budgeted_expand: bool = False,
+    coverage_limit: float = 0.06,
+    mask_config: Optional[dict] = None,
+) -> PipelineResult:
+    """Pipeline body for process_image_array; see that function's docstring.
+
+    Not part of the public API -- callers should always go through
+    process_image_array so the memory cleanup in its finally: block applies.
     """
     from .preprocessor import preprocess_image
     from .consensus import run_consensus_detection
