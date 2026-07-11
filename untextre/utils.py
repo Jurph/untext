@@ -13,7 +13,21 @@ ImageArray = np.ndarray  # H×W×3 BGR uint8
 MaskArray = np.ndarray   # H×W uint8
 Color = Tuple[int, int, int]  # BGR color tuple
 BBox = Tuple[int, int, int, int]  # (x, y, width, height)
+Shape2D = Tuple[int, int]  # (height, width)
 ImagePath = Union[str, Path]
+
+
+def image_hw(image: np.ndarray) -> Shape2D:
+    """Return an array's (height, width) as a concrete 2-tuple.
+
+    ``image.shape[:2]`` types as ``tuple[int, ...]`` under numpy's stubs
+    (shape's length isn't statically known), which callers typed
+    ``Tuple[int, int]`` reject. Unpacking into two names and rebuilding the
+    tuple narrows it correctly; use this instead of raw ``.shape[:2]``
+    wherever the result feeds a ``Shape2D``/``Tuple[int, int]`` parameter.
+    """
+    h, w = image.shape[:2]
+    return (h, w)
 
 # Supported image extensions
 IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.tif', '.webp'}

@@ -90,7 +90,9 @@ def find_known_mask_in_image(
 
     target_gray = cv2.cvtColor(target_image, cv2.COLOR_BGR2GRAY)
     orb = create_orb_detector()
-    target_keypoints, target_descriptors = orb.detectAndCompute(target_gray, None)
+    target_keypoints, target_descriptors = orb.detectAndCompute(
+        target_gray, np.full(target_gray.shape, 255, dtype=np.uint8)
+    )
 
     if target_descriptors is None or target_keypoints is None:
         logger.warning("Could not compute target ORB descriptors")
@@ -136,8 +138,8 @@ def find_known_mask_in_image(
             logger.warning(f"Not enough good matches: {len(good_matches)} < {min_matches}")
             continue
 
-        src_pts = np.float32([known_keypoints[m.queryIdx].pt for m in good_matches]).reshape(-1, 1, 2)
-        dst_pts = np.float32([target_keypoints[m.trainIdx].pt for m in good_matches]).reshape(-1, 1, 2)
+        src_pts = np.array([known_keypoints[m.queryIdx].pt for m in good_matches], dtype=np.float32).reshape(-1, 1, 2)
+        dst_pts = np.array([target_keypoints[m.trainIdx].pt for m in good_matches], dtype=np.float32).reshape(-1, 1, 2)
 
         M, inlier_mask = cv2.estimateAffine2D(
             src_pts,
@@ -201,7 +203,7 @@ def find_known_mask_in_image(
             (w_target, h_target),
             flags=cv2.INTER_LINEAR,
             borderMode=cv2.BORDER_CONSTANT,
-            borderValue=0,
+            borderValue=(0, 0, 0, 0),
         )
         _, binary_mask = cv2.threshold(warped_mask, 127, 255, cv2.THRESH_BINARY)
 

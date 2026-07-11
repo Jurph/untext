@@ -19,7 +19,7 @@ import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 from .mask_experiments import MaskExperimentConfig, compute_mask_metrics
-from .pipeline import process_image_array
+from .pipeline import PipelineResult, process_image_array
 from .utils import load_image
 
 
@@ -178,7 +178,7 @@ def run_in_memory_watermark_benchmark(
     font_dirs: Sequence[Path] | None = None,
     image_loader: Callable[[Path], np.ndarray] = load_image,
     case_builder: Callable[..., SyntheticTextCase] | None = None,
-    process_image_fn: Callable[..., object] = process_image_array,
+    process_image_fn: Callable[..., PipelineResult] = process_image_array,
 ) -> list[dict]:
     """Run a reproducible synthetic watermark benchmark fully in memory."""
     base_dir = Path(base_dir)
@@ -490,9 +490,11 @@ def replay_synthetic_text_case(
     text = str(case["text"])
     font_path = Path(case["font_path"])
     font_size = int(case["font_size"])
-    fill_rgb = tuple(int(channel) for channel in case["color_rgb"])
+    fill_r, fill_g, fill_b = (int(channel) for channel in case["color_rgb"])
+    fill_rgb: tuple[int, int, int] = (fill_r, fill_g, fill_b)
     opacity = float(case["opacity"])
-    truth_bbox = tuple(int(value) for value in case["truth_bbox"])
+    bbox_x, bbox_y, bbox_w, bbox_h = (int(value) for value in case["truth_bbox"])
+    truth_bbox: tuple[int, int, int, int] = (bbox_x, bbox_y, bbox_w, bbox_h)
 
     outline_present = bool(case.get("outline_present", False))
     outline_thickness_px = int(case.get("outline_thickness_px", 0)) if outline_present else 0
@@ -728,7 +730,8 @@ def _rgb_to_hex(rgb: tuple[int, int, int]) -> str:
 
 def _hex_to_rgb(value: str) -> tuple[int, int, int]:
     value = value.lstrip("#")
-    return tuple(int(value[index:index + 2], 16) for index in (0, 2, 4))
+    r, g, b = (int(value[index:index + 2], 16) for index in (0, 2, 4))
+    return (r, g, b)
 
 
 def _summarize_corners(clean_bgr: np.ndarray) -> dict[str, dict]:
@@ -904,7 +907,12 @@ def _fit_text_mask(
 
     candidates.sort()
     font_size = candidates[0][1]
-    mask, local_bbox, raw_bbox, _ink_width = ink(font_size)
+    # font_size came from `candidates`, built only from sizes where ink()
+    # returned non-None (line 896); ink() memoizes by size, so this call
+    # returns that same cached, already-validated result.
+    info = ink(font_size)
+    assert info is not None
+    mask, local_bbox, raw_bbox, _ink_width = info
     return font_size, mask, local_bbox, raw_bbox
 
 

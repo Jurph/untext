@@ -33,7 +33,7 @@ class CandidateOrbVariant:
 
 
 def create_orb_detector() -> cv2.ORB:
-    return cv2.ORB_create(
+    return cv2.ORB.create(
         nfeatures=ORB_NFEATURES,
         edgeThreshold=ORB_EDGE_THRESHOLD,
         fastThreshold=ORB_FAST_THRESHOLD,
@@ -106,7 +106,7 @@ def prepare_candidate_for_orb(
             padding,
             padding,
             cv2.BORDER_CONSTANT,
-            value=0,
+            value=(0, 0, 0, 0),
         )
 
     prepared_gray = cv2.cvtColor(prepared_bgr, cv2.COLOR_BGR2GRAY)
