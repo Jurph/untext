@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 from skimage.metrics import structural_similarity as ssim
 
+from untextre.color_metrics import masked_delta_e
 from untextre.inpaint import initialize_lama_model
 from untextre.pipeline import MASK_MODE_CHOICES, initialize_consensus_models, mask_mode_options, process_image_array
 from untextre.synthetic_text_benchmark import (
@@ -56,13 +57,6 @@ def _masked_ssim_score(before: np.ndarray, after: np.ndarray, mask: np.ndarray) 
     return float(np.mean(ssim_map[mask.astype(bool)]))
 
 
-def _masked_lab_mae(before: np.ndarray, after: np.ndarray, mask: np.ndarray) -> float:
-    before_lab = (cv2.cvtColor(before, cv2.COLOR_BGR2LAB) // 16) * 16
-    after_lab = (cv2.cvtColor(after, cv2.COLOR_BGR2LAB) // 16) * 16
-    diff = np.abs(before_lab.astype(np.int16) - after_lab.astype(np.int16))
-    return float(diff[mask.astype(bool)].mean())
-
-
 def _classify_outcome(
     *,
     consensus_boxes: list[tuple[int, int, int, int]],
@@ -97,9 +91,9 @@ def _row_summary(rows: list[dict]) -> str:
             )
         )
         parts.append(
-            "lab_mae_delta mean={:.6f} median={:.6f}".format(
-                statistics.fmean(row["lab_mae_delta"] for row in repaired),
-                statistics.median(row["lab_mae_delta"] for row in repaired),
+            "delta_e_delta mean={:.6f} median={:.6f}".format(
+                statistics.fmean(row["delta_e_delta"] for row in repaired),
+                statistics.median(row["delta_e_delta"] for row in repaired),
             )
         )
     return "; ".join(parts)
@@ -189,14 +183,14 @@ def test_generated_text_monte_carlo_benchmark(
             repaired_ssim = _masked_ssim_score(
                 synthetic.clean, pipeline_result.image, synthetic.truth_mask
             )
-            baseline_lab = _masked_lab_mae(
+            baseline_de = masked_delta_e(
                 synthetic.clean, synthetic.watermarked, synthetic.truth_mask
             )
-            repaired_lab = _masked_lab_mae(
+            repaired_de = masked_delta_e(
                 synthetic.clean, pipeline_result.image, synthetic.truth_mask
             )
             row["ssim_delta"] = repaired_ssim - baseline_ssim
-            row["lab_mae_delta"] = baseline_lab - repaired_lab
+            row["delta_e_delta"] = baseline_de - repaired_de
         rows.append(row)
 
         if save_images_dir is not None:
