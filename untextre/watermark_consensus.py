@@ -1467,6 +1467,12 @@ def build_final_templates(
         templates.sort(key=lambda template: -template.alpha_mass)
         return templates
 
+    # Cascade order: cluster-level consensus/stingy/generous templates first
+    # (higher confidence, built from multiple aligned records), then a
+    # per-record "source" fallback appended for every individual candidate,
+    # clustered or not. Callers try templates in list order and take the
+    # first match, so the loop order below is the fallback priority: cluster
+    # outputs before source crops.
     outputs: list[ConsensusTemplate] = []
     for cluster in clusters:
         outputs.extend(build_cluster_outputs(graph, cluster))
