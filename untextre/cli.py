@@ -236,7 +236,7 @@ def main() -> None:
                 if args.force_output:
                     # Copy the original unchanged so every input has output
                     output_file = output_path / f"{image_path.stem}_clean{image_path.suffix}"
-                    save_image(load_image(image_path), output_file, source_path=image_path)
+                    save_image(image if image is not None else load_image(image_path), output_file, source_path=image_path)
                     logger.info(f"No text detected - copied original to {output_file}")
                 else:
                     logger.info(f"Skipped {image_path.name} (no text detected)")

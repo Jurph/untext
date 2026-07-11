@@ -70,10 +70,10 @@ so this file never drifts from the tracker.
   `_try_color_enhanced_detection` invocations into a single helper that tries all
   colors in one pass with early exit. `(pipeline.py:87-121)`
 
-- [ ] **force_output double-load** (#10): When `image is not None` in the `force_output`
-  path, use the already-loaded image instead of reloading from disk. Requires a
-  conditional (not a one-line swap — `image` is `None` in the no-templates path).
-  `(cli.py:254-260)`
+- [x] **force_output double-load** (#10): `force_output` now reuses the already-loaded
+  `image` array from the template-cascade path instead of reloading from disk; falls
+  back to `load_image(image_path)` only when no image was loaded (no-templates path).
+  `(cli.py:239)`
 
 - [ ] **LaMa health check cost** (#17): Replace the full forward-pass health check with a
   cheaper attribute-existence check. `(inpaint.py:47-78)`
