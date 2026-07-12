@@ -663,9 +663,9 @@ def find_mask_by_spatial_tf_idf(
     bbox_mask[bbox_start_y:bbox_end_y, bbox_start_x:bbox_end_x] = True
     
     # Extract surrounding region (corpus) by excluding bbox area
-    # Need to apply mask to each color channel separately to preserve shape
-    surrounding_mask_3d = np.stack([~bbox_mask, ~bbox_mask, ~bbox_mask], axis=2)
-    surrounding_region = expanded_region[surrounding_mask_3d].reshape(-1, 3)
+    # 2D boolean indexing into the 3-channel array selects rows directly,
+    # producing shape (N, 3) without an intermediate 3-channel mask allocation.
+    surrounding_region = expanded_region[~bbox_mask]
     
     # Combine both regions for k-means clustering
     bbox_pixels = bbox_region.reshape(-1, 3)
