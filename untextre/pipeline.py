@@ -165,6 +165,36 @@ def _try_color_enhanced_detection(original_image: np.ndarray, confidence_thresho
     
     return consensus_boxes
 
+_COLOR_FAILOVER_LABELS = {
+    "#808080": "gray_enhancement",
+    "#FFFFFF": "white_enhancement",
+}
+
+
+def _try_colors_in_order(
+    image: np.ndarray,
+    confidence_threshold: float,
+    colors: List[str],
+    sensitivity: int = 3,
+) -> Tuple[List[Tuple[int, int, int, int]], Optional[str]]:
+    """Try color-enhanced detection for each hex color in order, early-exiting on the first hit.
+
+    Args:
+        image: Original unprocessed image.
+        confidence_threshold: Confidence threshold for detection.
+        colors: Hex colors to try, in priority order (e.g. ["#808080", "#FFFFFF"]).
+        sensitivity: Plus-or-minus range around each target color.
+
+    Returns:
+        (consensus_boxes, matched_color) -- matched_color is the hex string whose
+        enhancement produced a hit, or None if no color in the list found anything.
+    """
+    for hex_color in colors:
+        boxes = _try_color_enhanced_detection(image, confidence_threshold, hex_color, sensitivity=sensitivity)
+        if boxes:
+            return boxes, hex_color
+    return [], None
+
 def _generate_masks_and_inpaint(
     image: np.ndarray,
     consensus_boxes: List[Tuple[int, int, int, int]],
@@ -502,7 +532,7 @@ def _process_image_array_impl(
             target_hex = f"#{r:02X}{g:02X}{b:02X}"
             logger.info(f"User specified target color {target_hex} - trying color enhancement first...")
             
-            consensus_boxes = _try_color_enhanced_detection(image, confidence_threshold, target_hex, sensitivity=color_sensitivity)
+            consensus_boxes, _ = _try_colors_in_order(image, confidence_threshold, [target_hex], sensitivity=color_sensitivity)
             
             if consensus_boxes:
                 timings['failover_type'] = 'target_color'
@@ -545,35 +575,24 @@ def _process_image_array_impl(
             else:
                 logger.warning("No consensus regions detected after rotation failover, trying generic color enhancements...")
                 
-                # Try gray enhancement with the configured sensitivity.
-                consensus_boxes = _try_color_enhanced_detection(
+                # Try generic color fallbacks (gray, then white) with the configured sensitivity.
+                consensus_boxes, matched_color = _try_colors_in_order(
                     image,
                     confidence_threshold,
-                    "#808080",
+                    ["#808080", "#FFFFFF"],
                     sensitivity=color_sensitivity,
                 )
-                
-                if consensus_boxes:
-                    timings['failover_type'] = 'gray_enhancement'
+
+                if consensus_boxes and matched_color is not None:
+                    timings['failover_type'] = _COLOR_FAILOVER_LABELS.get(matched_color, 'color_enhancement')
                 else:
-                    # Try white enhancement with the configured sensitivity.
-                    consensus_boxes = _try_color_enhanced_detection(
-                        image,
-                        confidence_threshold,
-                        "#FFFFFF",
-                        sensitivity=color_sensitivity,
-                    )
-                    
-                    if consensus_boxes:
-                        timings['failover_type'] = 'white_enhancement'
-                    else:
-                        logger.warning(f"No text detected in {image_name} after all failovers - skipping")
-                        timings['mask_found'] = False
-                        timings['detection_time'] = time.time() - detection_start
-                        timings['total_time'] = time.time() - start_time
-                        timings['skipped'] = True
-                        empty_mask = np.zeros(image.shape[:2], dtype=np.uint8)
-                        return PipelineResult(image.copy(), empty_mask, timings, [])
+                    logger.warning(f"No text detected in {image_name} after all failovers - skipping")
+                    timings['mask_found'] = False
+                    timings['detection_time'] = time.time() - detection_start
+                    timings['total_time'] = time.time() - start_time
+                    timings['skipped'] = True
+                    empty_mask = np.zeros(image.shape[:2], dtype=np.uint8)
+                    return PipelineResult(image.copy(), empty_mask, timings, [])
     
     timings['detection_time'] = time.time() - detection_start
     
