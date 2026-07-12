@@ -262,6 +262,8 @@ def encode_result_for_download(result_pil, original_filename):
     return buf.getvalue(), download_name, mime_type
 
 
+
+
 # Page configuration
 st.set_page_config(
     page_title="UnTextre - Text Watermark Removal",
@@ -269,6 +271,66 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+@st.cache_data(show_spinner=False)
+def load_original_image_from_bytes(image_bytes):
+    """Decode uploaded image bytes once per content hash for Streamlit reruns."""
+    original_image = Image.open(io.BytesIO(image_bytes))
+    # Force full image load: PIL is lazy, and Streamlit may render after the
+    # BytesIO object would otherwise be gone.
+    original_image.load()
+
+    # Canvas and downstream OpenCV paths expect RGB-like images.
+    if original_image.mode not in ("RGB", "RGBA"):
+        original_image = original_image.convert("RGB")
+
+    return original_image
+
+
+@st.cache_data(show_spinner=False)
+def encode_result_array_for_download(result_image, original_filename):
+    """Encode a result ndarray once while the displayed result is unchanged."""
+    result_pil = Image.fromarray(result_image)
+    return encode_result_for_download(result_pil, original_filename)
+
+def _watermarks_dir_signature(path):
+    """Cheap directory-listing signature so template caching invalidates on change."""
+    if not path.exists():
+        return ()
+    entries = []
+    for candidate in sorted(path.iterdir()):
+        if candidate.suffix.lower() in (".png", ".tif", ".tiff"):
+            file_stat = candidate.stat()
+            entries.append((candidate.name, file_stat.st_mtime_ns, file_stat.st_size))
+    return tuple(entries)
+
+
+@st.cache_resource(show_spinner=False)
+def load_watermark_templates_cached(path_str, dir_signature):
+    """Load + ORB-prepare watermark templates once per directory content.
+
+    ``load_watermark_templates`` reads every PNG in ``watermarks/`` and runs
+    ORB feature extraction (3 outside-value variants per template). Without
+    caching this ran on every Streamlit rerun -- every widget click anywhere
+    in the app -- regardless of whether an image was even loaded.
+    """
+    return load_watermark_templates(Path(path_str))
+
+
+@st.cache_data(show_spinner=False)
+def run_watermark_cascade_cached(image_bytes, template_names, watermarks_dir_str, dir_signature):
+    """Run the ORB watermark cascade once per (image, template selection)."""
+    all_templates = load_watermark_templates_cached(watermarks_dir_str, dir_signature)
+    name_set = set(template_names)
+    templates = [t for t in all_templates if t.name in name_set]
+    if not templates:
+        return None
+    arr = np.frombuffer(image_bytes, dtype=np.uint8)
+    img_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    if img_bgr is None:
+        return None
+    return try_watermark_cascade(img_bgr, templates)
+
 
 @st.cache_resource
 def initialize_models():
@@ -811,8 +873,7 @@ def main():
             image_loaded = current_bytes is not None
             
             if image_loaded:
-                # Get image dimensions
-                original_image = Image.open(io.BytesIO(current_bytes))
+                original_image = load_original_image_from_bytes(current_bytes)
                 img_width, img_height = original_image.size
                 st.caption(f"📐 Image is {img_width}w × {img_height}h")
                 
@@ -891,7 +952,8 @@ def main():
         st.subheader("📂 Known Watermarks")
 
         # Discover templates on disk
-        available_templates = load_watermark_templates(WATERMARKS_DIR)
+        watermarks_dir_signature = _watermarks_dir_signature(WATERMARKS_DIR)
+        available_templates = load_watermark_templates_cached(str(WATERMARKS_DIR), watermarks_dir_signature)
 
         use_watermark_templates = False
         selected_templates = []
@@ -924,25 +986,24 @@ def main():
                     "🔍 Test templates now",
                     help="Run ORB matching against the current image without inpainting.",
                 ):
-                    import cv2 as _cv2
                     import time as _time
-                    arr = np.frombuffer(test_image_bytes, dtype=np.uint8)
-                    test_img = _cv2.imdecode(arr, _cv2.IMREAD_COLOR)
-                    if test_img is not None:
-                        t0 = _time.perf_counter()
-                        cascade_hit = try_watermark_cascade(test_img, selected_templates)
-                        elapsed = _time.perf_counter() - t0
-                        if cascade_hit is not None:
-                            _, bbox, matched_name = cascade_hit
-                            st.success(
-                                f"Matched **{matched_name}** at "
-                                f"({bbox[0]}, {bbox[1]}) {bbox[2]}x{bbox[3]}px "
-                                f"in {elapsed:.2f}s"
-                            )
-                        else:
-                            st.warning(f"No template matched ({elapsed:.2f}s)")
+                    t0 = _time.perf_counter()
+                    cascade_hit = run_watermark_cascade_cached(
+                        test_image_bytes,
+                        tuple(sorted(t.name for t in selected_templates)),
+                        str(WATERMARKS_DIR),
+                        watermarks_dir_signature,
+                    )
+                    elapsed = _time.perf_counter() - t0
+                    if cascade_hit is not None:
+                        _, bbox, matched_name = cascade_hit
+                        st.success(
+                            f"Matched **{matched_name}** at "
+                            f"({bbox[0]}, {bbox[1]}) {bbox[2]}x{bbox[3]}px "
+                            f"in {elapsed:.2f}s"
+                        )
                     else:
-                        st.error("Could not decode the current image")
+                        st.warning(f"No template matched ({elapsed:.2f}s)")
         else:
             st.caption("No templates in watermarks/ folder")
 
@@ -1134,15 +1195,7 @@ def main():
         st.session_state.current_image_id = image_state_id
         
         if image_bytes is not None:
-            # Load original image from bytes
-            original_image = Image.open(io.BytesIO(image_bytes))
-            
-            # Force full image load (PIL uses lazy loading which can cause race conditions)
-            original_image.load()
-            
-            # Convert to RGB if needed (canvas may not handle all modes like 'P', 'LA', 'CMYK')
-            if original_image.mode not in ('RGB', 'RGBA'):
-                original_image = original_image.convert('RGB')
+            original_image = load_original_image_from_bytes(image_bytes)
             
             img_width, img_height = original_image.size
             
@@ -1157,46 +1210,49 @@ def main():
             watermark_handled = False
             wm_match = None          # (mask, bbox, name, img_bgr) on hit
             if use_watermark_templates and selected_templates:
-                import cv2 as _cv2
                 import time as _time
-                arr = np.frombuffer(image_bytes, dtype=np.uint8)
-                img_bgr = _cv2.imdecode(arr, _cv2.IMREAD_COLOR)
-                if img_bgr is not None:
-                    t0 = _time.perf_counter()
-                    cascade_hit = try_watermark_cascade(img_bgr, selected_templates)
-                    wm_cascade_elapsed = _time.perf_counter() - t0
-                    if cascade_hit is not None:
-                        wm_mask, wm_bbox, wm_tmpl_name = cascade_hit
-                        wm_match = (wm_mask, wm_bbox, wm_tmpl_name, img_bgr)
-                        st.success(
-                            f"🎯 Matched watermark template **{wm_tmpl_name}** "
-                            f"at ({wm_bbox[0]}, {wm_bbox[1]}) "
-                            f"{wm_bbox[2]}x{wm_bbox[3]}px  ({wm_cascade_elapsed:.2f}s)"
-                        )
-                        # Draw bounding box overlay on the image
-                        annotated = original_image.copy()
-                        draw = ImageDraw.Draw(annotated)
-                        x, y, w, h = wm_bbox
-                        draw.rectangle(
-                            [x, y, x + w, y + h],
-                            outline=(0, 255, 0), width=3,
-                        )
-                        # Label with template filename (sans extension)
-                        label = Path(wm_tmpl_name).stem
-                        try:
-                            font = ImageFont.truetype("arial.ttf", size=max(16, img_height // 40))
-                        except OSError:
-                            font = ImageFont.load_default()
-                        draw.text(
-                            (x, max(0, y - font.size - 4)),
-                            label, fill=(0, 255, 0), font=font,
-                        )
-                        st.image(annotated, caption=f"Matched: {wm_tmpl_name}", width='stretch')
-                        watermark_handled = True
-                    else:
-                        st.caption(
-                            f"No watermark template matched ({wm_cascade_elapsed:.2f}s)"
-                        )
+                t0 = _time.perf_counter()
+                cascade_hit = run_watermark_cascade_cached(
+                    image_bytes,
+                    tuple(sorted(t.name for t in selected_templates)),
+                    str(WATERMARKS_DIR),
+                    watermarks_dir_signature,
+                )
+                wm_cascade_elapsed = _time.perf_counter() - t0
+                if cascade_hit is not None:
+                    wm_mask, wm_bbox, wm_tmpl_name = cascade_hit
+                    arr = np.frombuffer(image_bytes, dtype=np.uint8)
+                    img_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                    wm_match = (wm_mask, wm_bbox, wm_tmpl_name, img_bgr)
+                    st.success(
+                        f"🎯 Matched watermark template **{wm_tmpl_name}** "
+                        f"at ({wm_bbox[0]}, {wm_bbox[1]}) "
+                        f"{wm_bbox[2]}x{wm_bbox[3]}px  ({wm_cascade_elapsed:.2f}s)"
+                    )
+                    # Draw bounding box overlay on the image
+                    annotated = original_image.copy()
+                    draw = ImageDraw.Draw(annotated)
+                    x, y, w, h = wm_bbox
+                    draw.rectangle(
+                        [x, y, x + w, y + h],
+                        outline=(0, 255, 0), width=3,
+                    )
+                    # Label with template filename (sans extension)
+                    label = Path(wm_tmpl_name).stem
+                    try:
+                        font = ImageFont.truetype("arial.ttf", size=max(16, img_height // 40))
+                    except OSError:
+                        font = ImageFont.load_default()
+                    draw.text(
+                        (x, max(0, y - font.size - 4)),
+                        label, fill=(0, 255, 0), font=font,
+                    )
+                    st.image(annotated, caption=f"Matched: {wm_tmpl_name}", width='stretch')
+                    watermark_handled = True
+                else:
+                    st.caption(
+                        f"No watermark template matched ({wm_cascade_elapsed:.2f}s)"
+                    )
             
             # ── Automatic mask mode or manual canvas ─────────────────────
             if not watermark_handled and is_auto_mode:
@@ -1487,9 +1543,8 @@ def main():
             st.image(st.session_state.result_image, caption="Processed Image", width='stretch')
             
             # Encode result for download (format chosen by original extension)
-            result_pil = Image.fromarray(st.session_state.result_image)
-            buf_bytes, download_name, mime_type = encode_result_for_download(
-                result_pil, st.session_state.original_filename
+            buf_bytes, download_name, mime_type = encode_result_array_for_download(
+                st.session_state.result_image, st.session_state.original_filename
             )
             file_size_mb = len(buf_bytes) / (1024 * 1024)
             

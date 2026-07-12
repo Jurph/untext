@@ -49,37 +49,18 @@ def is_lama_initialized() -> bool:
     return _lama_inpainter is not None
 
 def is_lama_healthy() -> bool:
-    """Check if LaMa model is healthy and responsive.
-    
-    Performs a quick test with a small dummy image to verify the model
-    is working correctly.
-    
-    Returns:
-        True if LaMa is healthy, False otherwise
+    """Return whether the cached LaMa object exposes the runtime API.
+
+    This check runs during Streamlit rerenders and before processing, so it
+    must not execute a model forward pass or allocate GPU tensors. Runtime
+    inference errors still surface from the actual inpaint call.
     """
     global _lama_inpainter
-    
+
     if _lama_inpainter is None:
         return False
-    
-    try:
-        # Create a small test image and mask
-        test_image = np.zeros((32, 32, 3), dtype=np.uint8)
-        test_mask = np.zeros((32, 32), dtype=np.uint8)
-        test_mask[10:22, 10:22] = 255  # Small square to inpaint
-        
-        # Try a quick inpaint operation
-        result = _lama_inpainter.inpaint(test_image, test_mask)
-        
-        # Basic validation of result
-        if result is None or result.shape != test_image.shape:
-            return False
-            
-        return True
-        
-    except Exception as e:
-        logger.warning(f"LaMa health check failed: {e}")
-        return False
+
+    return callable(getattr(_lama_inpainter, "inpaint", None))
 
 def get_lama_status() -> dict:
     """Get comprehensive status information about LaMa.

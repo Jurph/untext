@@ -8,20 +8,28 @@ These helpers have no Streamlit dependency and can be tested in isolation:
 
 import io
 
+import cv2
+import numpy as np
 import pytest
 from PIL import Image
 
+import streamlit_app
 from streamlit_app import (
     MODE_DRAW_MANUALLY,
     MODE_LOCAL_COLOR,
     MODE_LOCAL_SHAPE,
     MODE_REGIONAL,
+    _watermarks_dir_signature,
     bbox_to_fabric_rect,
-    fabric_rect_to_bbox,
+    encode_result_array_for_download,
     encode_result_for_download,
+    fabric_rect_to_bbox,
+    load_original_image_from_bytes,
+    load_watermark_templates_cached,
     make_image_state_id,
     resolve_mask_mode_options,
     resolve_active_image,
+    run_watermark_cascade_cached,
 )
 
 
@@ -85,6 +93,126 @@ def test_resolve_mask_mode_options_match_sidebar_choices():
         "use_grabcut": False,
         "use_grabcut_expand": False,
     }
+
+
+def test_load_original_image_from_bytes_converts_canvas_unsafe_modes():
+    palette_image = Image.new("P", (3, 2))
+    buf = io.BytesIO()
+    palette_image.save(buf, format="PNG")
+
+    result = load_original_image_from_bytes(buf.getvalue())
+
+    assert result.mode == "RGB"
+    assert result.size == (3, 2)
+
+
+def test_encode_result_array_for_download_uses_existing_format_rules():
+    result_array = np.zeros((2, 2, 3), dtype=np.uint8)
+    result_array[:, :] = (255, 0, 0)
+
+    buf_bytes, name, mime = encode_result_array_for_download(result_array, "source.webp")
+
+    assert name == "source_clean.png"
+    assert mime == "image/png"
+    assert Image.open(io.BytesIO(buf_bytes)).size == (2, 2)
+
+# =========================================================================
+# Watermark template caching — every Streamlit rerun must skip the ORB
+# feature-extraction cost when the templates directory and image are
+# unchanged (see load_watermark_templates_cached / run_watermark_cascade_cached).
+# =========================================================================
+
+
+def _write_rgba_template(path):
+    rgba = np.zeros((8, 8, 4), dtype=np.uint8)
+    rgba[:, :, :3] = 255
+    rgba[:, :, 3] = 200
+    cv2.imwrite(str(path), rgba)
+
+
+def test_watermarks_dir_signature_empty_for_missing_or_empty_dir(tmp_path):
+    missing = tmp_path / "does_not_exist"
+    assert _watermarks_dir_signature(missing) == ()
+    assert _watermarks_dir_signature(tmp_path) == ()
+
+
+def test_watermarks_dir_signature_changes_when_a_template_is_added(tmp_path):
+    before = _watermarks_dir_signature(tmp_path)
+    _write_rgba_template(tmp_path / "logo.png")
+    after = _watermarks_dir_signature(tmp_path)
+
+    assert before == ()
+    assert len(after) == 1
+    assert after[0][0] == "logo.png"
+
+
+def test_load_watermark_templates_cached_skips_reload_for_unchanged_signature(tmp_path, monkeypatch):
+    _write_rgba_template(tmp_path / "logo.png")
+    signature = _watermarks_dir_signature(tmp_path)
+
+    calls = {"n": 0}
+    original_loader = streamlit_app.load_watermark_templates
+
+    def counting_loader(path):
+        calls["n"] += 1
+        return original_loader(path)
+
+    monkeypatch.setattr(streamlit_app, "load_watermark_templates", counting_loader)
+
+    first = load_watermark_templates_cached(str(tmp_path), signature)
+    second = load_watermark_templates_cached(str(tmp_path), signature)
+
+    assert calls["n"] == 1, "second call with an unchanged directory must hit the cache"
+    assert len(first) == 1
+    assert first is second, "cache_resource returns the same object, not a fresh reload"
+
+
+def test_run_watermark_cascade_cached_skips_rematch_for_same_image_and_selection(tmp_path, monkeypatch):
+    _write_rgba_template(tmp_path / "logo.png")
+    signature = _watermarks_dir_signature(tmp_path)
+
+    target = np.zeros((40, 40, 3), dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", target)
+    assert ok
+    image_bytes = encoded.tobytes()
+
+    calls = {"n": 0}
+    original_cascade = streamlit_app.try_watermark_cascade
+
+    def counting_cascade(image, templates, **kwargs):
+        calls["n"] += 1
+        return original_cascade(image, templates, **kwargs)
+
+    monkeypatch.setattr(streamlit_app, "try_watermark_cascade", counting_cascade)
+
+    first = run_watermark_cascade_cached(image_bytes, ("logo.png",), str(tmp_path), signature)
+    second = run_watermark_cascade_cached(image_bytes, ("logo.png",), str(tmp_path), signature)
+
+    assert calls["n"] == 1, "second call with the same image + selection must hit the cache"
+    assert first == second
+
+
+def test_run_watermark_cascade_cached_skips_matching_when_no_templates_selected(tmp_path, monkeypatch):
+    _write_rgba_template(tmp_path / "logo.png")
+    signature = _watermarks_dir_signature(tmp_path)
+
+    target = np.zeros((40, 40, 3), dtype=np.uint8)
+    ok, encoded = cv2.imencode(".png", target)
+    assert ok
+    image_bytes = encoded.tobytes()
+
+    calls = {"n": 0}
+    monkeypatch.setattr(
+        streamlit_app,
+        "try_watermark_cascade",
+        lambda *a, **kw: calls.__setitem__("n", calls["n"] + 1),
+    )
+
+    result = run_watermark_cascade_cached(image_bytes, (), str(tmp_path), signature)
+
+    assert result is None
+    assert calls["n"] == 0, "an empty template selection must not run ORB matching at all"
+
 
 
 def test_manual_mode_uses_local_shape_mask_without_expansion():

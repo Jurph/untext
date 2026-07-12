@@ -14,6 +14,7 @@ import numpy as np
 import pytest
 from skimage.metrics import structural_similarity as ssim
 
+from untextre import inpaint as inpaint_mod
 from untextre.inpaint import (
     inpaint_image,
     is_lama_available,
@@ -277,6 +278,29 @@ class TestComparativeInpainting:
 # LaMa health / status / reset — unit tests with mocked globals
 # =========================================================================
 
+
+class TestLamaHealthHelpers:
+    """LaMa status checks should be cheap enough to call during Streamlit reruns."""
+
+    def test_is_lama_healthy_checks_callable_without_forward_pass(self, monkeypatch):
+        class FakeInpainter:
+            def __init__(self):
+                self.forward_calls = 0
+
+            def inpaint(self, image, mask):
+                self.forward_calls += 1
+                raise AssertionError("health check should not run model inference")
+
+        fake = FakeInpainter()
+        monkeypatch.setattr(inpaint_mod, "_lama_inpainter", fake)
+
+        assert inpaint_mod.is_lama_healthy() is True
+        assert fake.forward_calls == 0
+
+    def test_is_lama_healthy_rejects_missing_inpaint_callable(self, monkeypatch):
+        monkeypatch.setattr(inpaint_mod, "_lama_inpainter", object())
+
+        assert inpaint_mod.is_lama_healthy() is False
 
 
 
