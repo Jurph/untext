@@ -110,8 +110,9 @@ class TestTryWatermarkCascade:
         result = try_watermark_cascade(image, templates, min_matches=9, dilation_pixels=5)
 
         assert result is not None
-        mask, bbox, template_name = result
+        mask, bbox, template_name, inliers = result
         assert template_name == "c.png", "Template with more inliers should win"
+        assert inliers == 10, "Winning template's inlier count must be propagated"
         np.testing.assert_array_equal(mask, mask_c)
         assert bbox == bbox_c
         assert len(calls) == 3, "All three templates must be tried"

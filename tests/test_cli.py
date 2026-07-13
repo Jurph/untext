@@ -365,6 +365,7 @@ class TestMainIntegrationPaths:
                 np.zeros((50, 50), dtype=np.uint8),
                 (5, 5, 20, 20),
                 "template.png",
+                42,
             ),
         )
         monkeypatch.setattr(inpaint_mod, "inpaint_image", lambda image, *_a, **_kw: image.copy())
@@ -383,6 +384,7 @@ class TestMainIntegrationPaths:
         main()
 
         assert captured["timings"][0]["matched_template"] == "template.png"
+        assert captured["timings"][0]["orb_inliers"] == 42
         assert captured["timings"][0]["total_time"] > 0
 
 

@@ -190,7 +190,7 @@ def main() -> None:
                         image, watermark_templates,
                     )
                     if cascade_result is not None:
-                        mask, bbox, tmpl_name = cascade_result
+                        mask, bbox, tmpl_name, orb_inliers = cascade_result
                         # Inpaint and save
                         from .inpaint import inpaint_image
 
@@ -204,6 +204,7 @@ def main() -> None:
                         timing_data = {
                             "image": image_path.name,
                             "matched_template": tmpl_name,
+                            "orb_inliers": orb_inliers,
                             "mask_found": True,
                             "total_time": time.perf_counter() - image_start,
                         }

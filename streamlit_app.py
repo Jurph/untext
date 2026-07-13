@@ -996,7 +996,7 @@ def main():
                     )
                     elapsed = _time.perf_counter() - t0
                     if cascade_hit is not None:
-                        _, bbox, matched_name = cascade_hit
+                        _, bbox, matched_name, _inliers = cascade_hit
                         st.success(
                             f"Matched **{matched_name}** at "
                             f"({bbox[0]}, {bbox[1]}) {bbox[2]}x{bbox[3]}px "
@@ -1220,14 +1220,15 @@ def main():
                 )
                 wm_cascade_elapsed = _time.perf_counter() - t0
                 if cascade_hit is not None:
-                    wm_mask, wm_bbox, wm_tmpl_name = cascade_hit
+                    wm_mask, wm_bbox, wm_tmpl_name, wm_inliers = cascade_hit
                     arr = np.frombuffer(image_bytes, dtype=np.uint8)
                     img_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
                     wm_match = (wm_mask, wm_bbox, wm_tmpl_name, img_bgr)
                     st.success(
                         f"🎯 Matched watermark template **{wm_tmpl_name}** "
                         f"at ({wm_bbox[0]}, {wm_bbox[1]}) "
-                        f"{wm_bbox[2]}x{wm_bbox[3]}px  ({wm_cascade_elapsed:.2f}s)"
+                        f"{wm_bbox[2]}x{wm_bbox[3]}px, {wm_inliers} inliers "
+                        f"({wm_cascade_elapsed:.2f}s)"
                     )
                     # Draw bounding box overlay on the image
                     annotated = original_image.copy()

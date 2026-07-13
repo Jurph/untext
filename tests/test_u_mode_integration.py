@@ -322,7 +322,7 @@ def test_removal_metrics_across_corpus(
             continue
         aligned += 1
 
-        mask, bbox, template_name = cascade_result
+        mask, bbox, template_name, _inliers = cascade_result
         mask_bool = mask > 0
         assert mask_bool.any(), f"aligned mask for {wm_path.name} is empty"
 
@@ -403,7 +403,7 @@ def test_novel_image_removal_with_discovered_template(
             "alignment quality is exercised by the in-sample test instead."
         )
 
-    mask, bbox, template_name = cascade_result
+    mask, bbox, template_name, _inliers = cascade_result
     mask_bool = mask > 0
     assert mask_bool.any(), "aligned mask on novel image is empty"
 

@@ -182,6 +182,39 @@ class TestSaveCleanTimingReport:
         assert "watermarked_photo.jpg" in text or "watermarked_photo" in text
         assert "Template match: 1" in text
 
+    def test_template_match_inliers_rendered_in_report(self, tmp_path):
+        """Regression: orb_inliers on a template-match timing dict must show
+        up in the rendered report, so a marginal (low-inlier) template match
+        is distinguishable from a strong one."""
+        template_only = {
+            "image": "watermarked_photo.jpg",
+            "matched_template": "sg_logo.png",
+            "orb_inliers": 87,
+            "mask_found": True,
+            "total_time": 0,
+        }
+        out_file = tmp_path / "report.txt"
+        _save_clean_timing_report(
+            [template_only], total_time=1.0, avg_time=1.0,
+            timing_file=out_file,
+            config=TimingReportConfig(method="lama", confidence_threshold=0.3),
+        )
+        text = out_file.read_text()
+        assert "87" in text
+
+    def test_missing_orb_inliers_renders_as_na(self, tmp_path):
+        """Consensus-path entries never set orb_inliers; report must not KeyError
+        and must show N/A rather than a bogus 0."""
+        timing = _make_timing()
+        out_file = tmp_path / "report.txt"
+        _save_clean_timing_report(
+            [timing], total_time=1.0, avg_time=1.0,
+            timing_file=out_file,
+            config=TimingReportConfig(method="lama", confidence_threshold=0.3),
+        )
+        text = out_file.read_text()
+        assert "N/A" in text
+
     def test_mixed_consensus_and_template_entries(self, tmp_path):
         """Mix of full consensus timings and template-only timings writes without KeyError."""
         consensus = _make_timing(name="consensus.png", total=2.0)

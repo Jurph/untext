@@ -87,11 +87,11 @@ def _save_clean_timing_report(
         if expanded_count > 0:
             f.write(f"Total bboxes expanded: {expanded_count}\n")
         
-        f.write("\nColumns: MP=Megapixels, Det=Detection, Msk=Mask, Inp=Inpaint, Tot=Total, Failover=R/T/G/W/B (Rotation/Target/Gray/White/Baseline)\n")
+        f.write("\nColumns: MP=Megapixels, Det=Detection, Msk=Mask, Inp=Inpaint, Tot=Total, Failover=R/T/G/W/B (Rotation/Target/Gray/White/Baseline), Inl=ORB inlier count (template matches only)\n")
         
         # Header with wider format
-        f.write(f"{'Image Name':<25} {'MP':>4} {'Det':>4} {'TF-IDF':>6} {'Msk':>4} {'Inp':>5} {'Tot':>5} {'Boxes':>5} {'Fail':>4}\n")
-        f.write("-" * 74 + "\n")
+        f.write(f"{'Image Name':<25} {'MP':>4} {'Det':>4} {'TF-IDF':>6} {'Msk':>4} {'Inp':>5} {'Tot':>5} {'Boxes':>5} {'Fail':>4} {'Inl':>5}\n")
+        f.write("-" * 78 + "\n")
         
         # Individual rows (support both consensus path keys and template-match path keys)
         for timing in detailed_timings:
@@ -116,9 +116,11 @@ def _save_clean_timing_report(
             color_time = timing.get('color_time')
             mask_time = timing.get('mask_time')
             inpaint_time = timing.get('inpaint_time')
+            orb_inliers = timing.get('orb_inliers')
             color_time_str = "N/A" if color_time is None else f"{color_time:>6.1f}"
             mask_time_str = "N/A" if mask_time is None else f"{mask_time:>4.1f}"
             inpaint_time_str = "N/A" if inpaint_time is None else f"{inpaint_time:>5.1f}"
+            orb_inliers_str = "N/A" if orb_inliers is None else f"{orb_inliers:>5d}"
 
             image_mp = timing.get('image_mp', 0)
             detection_time = timing.get('detection_time', 0)
@@ -133,7 +135,8 @@ def _save_clean_timing_report(
                    f"{inpaint_time_str:>5} "
                    f"{total_time:>5.1f} "
                    f"{consensus_boxes_count:>5d} "
-                   f"{failover_marker:>4}\n")
+                   f"{failover_marker:>4} "
+                   f"{orb_inliers_str:>5}\n")
             f.write(row)
         
         if len(detailed_timings) > 1:

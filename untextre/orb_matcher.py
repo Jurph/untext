@@ -277,7 +277,7 @@ def try_watermark_cascade(
     templates: List[WatermarkTemplate],
     min_matches: int = 6,
     dilation_pixels: int = 15,
-) -> Optional[Tuple[np.ndarray, Tuple[int, int, int, int], str]]:
+) -> Optional[Tuple[np.ndarray, Tuple[int, int, int, int], str, int]]:
     """Try every watermark template against a loaded image; return the best match.
 
     All templates are evaluated.  The one with the most RANSAC inliers wins,
@@ -293,9 +293,10 @@ def try_watermark_cascade(
         dilation_pixels: Pixels to dilate the matched mask.
 
     Returns:
-        Tuple of (mask, bbox, template_name) for the best-matching template, or None.
+        Tuple of (mask, bbox, template_name, inliers) for the best-matching
+        template, or None.
     """
-    best: Optional[Tuple[np.ndarray, Tuple[int, int, int, int], str]] = None
+    best: Optional[Tuple[np.ndarray, Tuple[int, int, int, int], str, int]] = None
     best_inliers = -1
 
     if not templates:
@@ -320,7 +321,7 @@ def try_watermark_cascade(
             mask, bbox, inliers = result
             logger.info(f"Template {tmpl_name} matched with {inliers} inliers")
             if inliers > best_inliers:
-                best = (mask, bbox, tmpl_name)
+                best = (mask, bbox, tmpl_name, inliers)
                 best_inliers = inliers
 
     if best is not None:
