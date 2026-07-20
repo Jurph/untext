@@ -333,6 +333,34 @@ def test_split_candidate_bgra_applies_percentage_padding():
     assert subcrops[0].shape[:2] == (22, 44)
 
 
+def test_split_candidate_bgra_defaults_bridge_gap_pre_tuning_defaults_missed():
+    """Locks in the loosened default merge ratios (post-`-U` candidate-count
+    tuning). A 15px horizontal gap between two 20x10 glyph blobs is NOT
+    bridged by the pre-tuning ratios (pad sum 5+5=10 < 15px gap) but IS
+    bridged by the current defaults (pad sum 9+9=18 >= 15px gap). Guards the
+    actual tuning intent, not just non-regression of unrelated cases.
+    """
+    bgra = make_multi_component_bgra(
+        [
+            (10, 50, 20, 10),
+            (45, 50, 20, 10),  # gap = 45 - (10 + 20) = 15px
+        ],
+        canvas_shape=(120, 120),
+    )
+
+    pre_tuning_subcrops = split_candidate_bgra(
+        bgra,
+        major_merge_ratio=0.25,
+        minor_merge_ratio=0.05,
+        min_major_padding_px=3,
+        min_minor_padding_px=1,
+    )
+    assert len(pre_tuning_subcrops) == 2
+
+    current_subcrops = split_candidate_bgra(bgra)
+    assert len(current_subcrops) == 1
+
+
 def test_build_candidate_graph_isolates_noise_node():
     records = [make_related_record(i) for i in range(3)] + [make_noise_record(99)]
     graph = build_candidate_graph(records)

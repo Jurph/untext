@@ -1,14 +1,14 @@
 """Pipeline tests using real fixture images.
 
-Known-mask (ORB) pipeline:
+Known-mask (SIFT) pipeline:
     Superimposes tests/images/test-watermark.png on test3-without-text.png
-    at known positions/scales, runs ORB detection + inpainting, and asserts
+    at known positions/scales, runs SIFT detection + inpainting, and asserts
     SSIM of the result against the original (clean) image.
 
     Variants:
     - Lower-right corner, mild out-of-bounds (watermark partly clipped)
     - Dead center, 5% horizontal stretch
-    - Near ORB's minimum viable scale (empirically determined)
+    - Near SIFT's minimum viable scale for this fixture
 
 Consensus detection pipeline:
     Runs process_single_image on test3-with-text.png (the real production
@@ -25,7 +25,7 @@ import numpy as np
 import pytest
 from skimage.metrics import structural_similarity as ssim
 
-from untextre.orb_matcher import find_known_mask_in_image
+from untextre.sift_matcher import find_known_mask_in_image
 from untextre.pipeline import process_single_image
 from untextre.inpaint import inpaint_image
 from untextre.utils import load_image
@@ -143,9 +143,9 @@ class TestWatermarkCompositedPipeline:
         min_ssim: float = 0.92,
         method: str = "telea",
     ) -> float:
-        """Run ORB detection, inpaint, return SSIM(cleaned, original)."""
+        """Run SIFT detection, inpaint, return SSIM(cleaned, original)."""
         result = find_known_mask_in_image(
-            composited, watermark_rgba, min_matches=6, dilation_pixels=7
+            composited, watermark_rgba, dilation_pixels=7
         )
         assert result is not None, "Known-mask detection should find the watermark"
         mask, bbox, _inliers = result
@@ -188,13 +188,11 @@ class TestWatermarkCompositedPipeline:
         score = self._run_detect_inpaint_ssim(composited, base, wm)
         assert score > 0.90
 
-    def test_near_orb_minimum_viable_scale(self, watermark_fixture_images):
-        """Watermark at 0.35x -- empirically just above ORB's detection cliff.
+    def test_near_sift_minimum_viable_scale(self, watermark_fixture_images):
+        """Watermark at 0.35x.
 
-        ORB with min_matches=6 finds this watermark's 400x400 template at
-        0.35x (140x140) but fails at 0.30x (120x120).  This test sits right
-        at the boundary to catch regressions in ORB matching or the affine
-        transform pipeline.
+        This test sits near the small-template boundary to catch regressions in
+        SIFT matching or the affine transform pipeline.
         """
         base = watermark_fixture_images["base"]
         wm = watermark_fixture_images["watermark_rgba"]

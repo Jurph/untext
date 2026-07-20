@@ -19,8 +19,8 @@ from .utils import (
     CLI_DEFAULT_CONFIDENCE, configure_logging,
 )
 
-from . import orb_matcher, pipeline, reports
-from .orb_matcher import WatermarkTemplate
+from . import pipeline, reports, sift_matcher
+from .sift_matcher import WatermarkTemplate
 
 
 logger = setup_logger(__name__)
@@ -123,7 +123,7 @@ def main() -> None:
             )
             sys.exit(1)
 
-        # Export candidates in orb-prepped form so on-disk templates match -K inputs.
+        # Export candidates in the same on-disk form; reports returns SIFT-prepared templates.
         watermark_templates = reports._save_discovered_watermark_candidates(output_path, candidates)
 
     # ── Load watermark templates ─────────────────────────────────────
@@ -132,14 +132,14 @@ def main() -> None:
         watermark_templates: List[WatermarkTemplate] = []
         if args.known_mask:
             known_mask_path = Path(args.known_mask)
-            watermark_templates = orb_matcher.load_watermark_templates(known_mask_path)
+            watermark_templates = sift_matcher.load_watermark_templates(known_mask_path)
             if not watermark_templates:
                 logger.error(f"No valid BGRA/RGBA watermark templates found at: {args.known_mask}")
                 sys.exit(1)
         else:
             # Auto-check the watermarks/ directory next to the package root
             default_watermarks_dir = Path(__file__).resolve().parent.parent / "watermarks"
-            watermark_templates = orb_matcher.load_watermark_templates(default_watermarks_dir)
+            watermark_templates = sift_matcher.load_watermark_templates(default_watermarks_dir)
 
     if watermark_templates:
         names = ", ".join(template.name for template in watermark_templates)
@@ -186,11 +186,11 @@ def main() -> None:
             if watermark_templates:
                 image = load_image(image_path)
                 if image is not None:
-                    cascade_result = orb_matcher.try_watermark_cascade(
+                    cascade_result = sift_matcher.try_watermark_cascade(
                         image, watermark_templates,
                     )
                     if cascade_result is not None:
-                        mask, bbox, tmpl_name, orb_inliers = cascade_result
+                        mask, bbox, tmpl_name, sift_inliers = cascade_result
                         # Inpaint and save
                         from .inpaint import inpaint_image
 
@@ -204,7 +204,7 @@ def main() -> None:
                         timing_data = {
                             "image": image_path.name,
                             "matched_template": tmpl_name,
-                            "orb_inliers": orb_inliers,
+                            "feature_inliers": sift_inliers,
                             "mask_found": True,
                             "total_time": time.perf_counter() - image_start,
                         }
@@ -407,7 +407,7 @@ def create_parser() -> argparse.ArgumentParser:
     mask_group.add_argument(
         "-K", "--known-mask",
         help="Path to a BGRA/RGBA watermark image (PNG with transparency), "
-             "or a directory of such images. Uses ORB feature matching to localize "
+             "or a directory of such images. Uses SIFT feature matching to localize "
              "the watermark in each input image at any scale/position. The alpha "
              "channel defines the watermark mask after localization. Skips consensus "
              "detection when used."
@@ -417,7 +417,7 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Auto-discover watermark from input directory via low-variance stacking, "
-             "save candidate BGRA template(s) to output dir, then process with ORB matching. "
+             "save candidate BGRA template(s) to output dir, then process with SIFT matching. "
              "Requires directory input. Mutually exclusive with -K."
     )
 

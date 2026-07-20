@@ -313,10 +313,10 @@ def _crop_group_with_ratio_padding(
 
 def split_candidate_bgra(
     bgra: np.ndarray,
-    major_merge_ratio: float = 0.25,
-    minor_merge_ratio: float = 0.05,
-    min_major_padding_px: int = 3,
-    min_minor_padding_px: int = 1,
+    major_merge_ratio: float = 0.45,
+    minor_merge_ratio: float = 0.15,
+    min_major_padding_px: int = 6,
+    min_minor_padding_px: int = 3,
     crop_padding_ratio: float = 0.05,
 ) -> tuple[np.ndarray, ...]:
     alpha = bgra[:, :, 3]

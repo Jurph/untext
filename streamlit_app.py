@@ -9,13 +9,16 @@ Usage:
     streamlit run streamlit_app.py
 """
 
-import streamlit as st
-import cv2
+import hashlib
+import io
 import tempfile
 import time
-from pathlib import Path
-from PIL import Image
-import io
+from pathlib import Path, PurePosixPath, PureWindowsPath
+
+import cv2
+import numpy as np
+import streamlit as st
+from PIL import Image, ImageDraw, ImageFont
 from streamlit_drawable_canvas import st_canvas
 from streamlit_js_eval import streamlit_js_eval
 
@@ -26,7 +29,7 @@ from untextre.utils import (
     WEB_DEFAULT_CONFIDENCE,
 )
 from untextre.preprocessor import preprocess_image
-from untextre.orb_matcher import (
+from untextre.sift_matcher import (
     load_watermark_templates,
     try_watermark_cascade,
 )
@@ -38,11 +41,8 @@ from untextre.pipeline import (
     mask_mode_options,
     process_single_image,
 )
-import numpy as np
 from untextre.consensus import find_consensus_boxes
 from untextre.inpaint import initialize_lama_model, get_lama_status, reset_lama_model
-import hashlib
-from PIL import ImageDraw, ImageFont
 
 # ---------------------------------------------------------------------------
 # UI / layout constants  (single source of truth for magic numbers)
@@ -65,8 +65,31 @@ COLOR_INPUT_PICKER = "Color picker"
 COLOR_INPUT_HEX = "Hex code"
 
 # Layout
-COLUMN_WIDTH_RATIO = 0.42          # fraction of window.innerWidth for each column
-RESULT_COLUMN_SPACER_PX = 258      # vertical spacer so result image aligns with source
+COLUMN_GAP_PX = 16                  # st.columns "small" gap (1rem)
+# Measured inside the streamlit_js_eval iframe, whose own window.innerWidth
+# IS the main container's content width; the image-row column width is then
+# (content - gap) / 2.  The component renders AFTER the sidebar block, so
+# the container width is already final apart from the sidebar's brief
+# expand animation — resolve once two samples 150ms apart agree.
+COLUMN_MEASURE_JS = """
+new Promise((resolve) => {
+    let last = -1;
+    const measure = () => {
+        const width = window.innerWidth;
+        if (width === last) {
+            resolve(Math.floor((width - %d) / 2));
+        } else {
+            last = width;
+            setTimeout(measure, 150);
+        }
+    };
+    measure();
+})
+""" % COLUMN_GAP_PX
+RESULT_PLACEHOLDER_MAX_WIDTH = 320  # placeholder only needs the aspect ratio
+# Solid dropzone-style grays (Streamlit default secondaryBackgroundColor)
+PLACEHOLDER_FILL_DARK = (38, 39, 48)     # #262730
+PLACEHOLDER_FILL_LIGHT = (240, 242, 246)  # #F0F2F6
 
 # File handling
 MAX_DOWNLOAD_BYTES = int(14.5 * 1024 * 1024)   # Streamlit download button limit
@@ -262,6 +285,80 @@ def encode_result_for_download(result_pil, original_filename):
     return buf.getvalue(), download_name, mime_type
 
 
+def original_file_basename(original_filename):
+    """Return a browser-safe basename for an uploaded source filename/path."""
+    if not original_filename:
+        return "image.png"
+
+    name = PureWindowsPath(str(original_filename)).name
+    name = PurePosixPath(name).name
+    return name or "image.png"
+
+
+def _parse_hex_color(hex_color):
+    """Parse ``#RRGGBB`` to an RGB tuple; return None on anything else."""
+    if not isinstance(hex_color, str):
+        return None
+    value = hex_color.strip().lstrip('#')
+    if len(value) != 6:
+        return None
+    try:
+        return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return None
+
+
+def resolve_placeholder_fill(theme_type, configured_hex=None):
+    """Pick the placeholder's solid fill from the active theme.
+
+    Matches the file-dropzone look: the app's configured
+    ``secondaryBackgroundColor`` when one is set, otherwise Streamlit's
+    default secondary background for the session's light/dark theme.
+    """
+    configured = _parse_hex_color(configured_hex)
+    if configured is not None:
+        return configured
+    return PLACEHOLDER_FILL_DARK if theme_type == "dark" else PLACEHOLDER_FILL_LIGHT
+
+
+def make_result_placeholder(width, height, fill=PLACEHOLDER_FILL_LIGHT):
+    """Build a small solid placeholder with the source image's aspect ratio.
+
+    Rendered stretched in the result cell before any processing so the image
+    row is symmetric from the start.  Only the aspect ratio matters for
+    layout, so the array is capped at a small width instead of allocating a
+    full-resolution copy of large uploads.
+    """
+    placeholder_width = min(int(width), RESULT_PLACEHOLDER_MAX_WIDTH)
+    placeholder_height = max(1, round(placeholder_width * height / width))
+    placeholder = np.empty((placeholder_height, placeholder_width, 3), dtype=np.uint8)
+    placeholder[:] = fill
+    return placeholder
+
+
+def make_detection_signature(detections):
+    """Stable identity for an ordered detection list.
+
+    Region checkboxes are keyed by list index, so when the detection list
+    itself changes (e.g. a confidence-threshold tweak), stale index-keyed
+    selection state would silently remap to different regions.  Callers
+    compare this signature across reruns and reset selection state when it
+    changes.  Fields are normalized (bbox tuple, sorted detector names,
+    rounded confidence) so representation jitter never triggers a reset;
+    list ORDER is deliberately part of the identity.
+    """
+    return tuple(
+        (
+            tuple(det.get('bbox', ())),
+            tuple(sorted(det.get('detectors', []))),
+            round(float(det.get('confidence', 0)), 4),
+        )
+        for det in detections
+    )
+
+
+
+
 
 
 # Page configuration
@@ -307,10 +404,10 @@ def _watermarks_dir_signature(path):
 
 @st.cache_resource(show_spinner=False)
 def load_watermark_templates_cached(path_str, dir_signature):
-    """Load + ORB-prepare watermark templates once per directory content.
+    """Load + SIFT-prepare watermark templates once per directory content.
 
     ``load_watermark_templates`` reads every PNG in ``watermarks/`` and runs
-    ORB feature extraction (3 outside-value variants per template). Without
+    SIFT feature extraction per template. Without
     caching this ran on every Streamlit rerun -- every widget click anywhere
     in the app -- regardless of whether an image was even loaded.
     """
@@ -319,7 +416,7 @@ def load_watermark_templates_cached(path_str, dir_signature):
 
 @st.cache_data(show_spinner=False)
 def run_watermark_cascade_cached(image_bytes, template_names, watermarks_dir_str, dir_signature):
-    """Run the ORB watermark cascade once per (image, template selection)."""
+    """Run the SIFT watermark cascade once per (image, template selection)."""
     all_templates = load_watermark_templates_cached(watermarks_dir_str, dir_signature)
     name_set = set(template_names)
     templates = [t for t in all_templates if t.name in name_set]
@@ -716,23 +813,7 @@ def main():
     rendering stays inline per Streamlit convention.
     """
 
-    # ── Bootstrap: measure layout & load models ──────────────────────────
-    # This gives JS time to execute while the rest of the UI loads
-    # We use a simple, reliable measurement: half the window width minus padding
-    js_measured_width = streamlit_js_eval(
-        js_expressions=f'Math.floor(window.innerWidth * {COLUMN_WIDTH_RATIO})',
-        key="app_column_width_measurement"
-    )
-    
-    # Block until we have the measurement - this is essential for correct canvas sizing
-    if js_measured_width is None:
-        st.info("⏳ Initializing display...")
-        st.stop()
-    
-    # Store in session state for use later
-    st.session_state["column_width"] = js_measured_width
-    
-    # Initialize models
+    # ── Bootstrap: load models ────────────────────────────────────────────
     init_results = initialize_models()
     
     # Title and description
@@ -980,11 +1061,11 @@ def main():
                 if selected_templates:
                     st.caption(f"{len(selected_templates)} template(s) selected")
 
-                # Quick-test button: run ORB cascade against current image
+                # Quick-test button: run SIFT cascade against current image
                 test_image_bytes = st.session_state.get("current_image_bytes")
                 if test_image_bytes and st.button(
                     "🔍 Test templates now",
-                    help="Run ORB matching against the current image without inpainting.",
+                    help="Run SIFT matching against the current image without inpainting.",
                 ):
                     import time as _time
                     t0 = _time.perf_counter()
@@ -1099,6 +1180,21 @@ def main():
                 help="Display the detected text regions"
             )
     
+    # ── Layout measurement (must come AFTER the sidebar block) ──────────
+    # The component's own iframe spans the main container, whose width is
+    # only final once the sidebar occupies its layout space.  Rendering the
+    # component after the sidebar guarantees that; COLUMN_MEASURE_JS adds a
+    # short stability loop to ride out the sidebar's expand animation.  The
+    # value posts asynchronously and triggers a rerun, so the manual-mode
+    # canvas waits one rerun cycle on first use instead of drawing at a
+    # stale width.
+    js_measured_width = streamlit_js_eval(
+        js_expressions=COLUMN_MEASURE_JS,
+        key="app_column_width_measurement"
+    )
+    if js_measured_width:
+        st.session_state["column_width"] = int(js_measured_width)
+
     # ── Main content area ──────────────────────────────────────────────
     final_target_color = target_color if enable_color_enhancement and target_color else None
     auto_detections = []
@@ -1107,243 +1203,273 @@ def main():
     superset_bbox = None
     use_superset = False
 
-    col1, col2 = st.columns(2)
-    
-    # ── Column 1: upload, detect, select regions ───────────────────────
-    with col1:
-        st.header("📤 Upload Image")
-        
-        # File uploader, Ingest, and Refresh side by side
-        upload_col, ingest_col, refresh_col = st.columns([3, 1, 1])
-        
-        with upload_col:
-            uploaded_file = st.file_uploader(
-                "Choose an image file",
-                type=['png', 'jpg', 'jpeg', 'bmp', 'tiff', 'webp'],
-                help="Drag and drop an image or click to browse",
-                key="source_image_uploader",
-            )
-        
-        with ingest_col:
-            # Add some vertical spacing to align with file uploader
-            st.write("")  # Spacer
-            st.write("")  # Spacer
-            
-            # Check if we have a result to ingest
-            has_result = hasattr(st.session_state, 'result_image') and st.session_state.result_image is not None
-            
-            if st.button("🔄 Ingest Result", disabled=not has_result, 
-                        help="Load the processed result as the new input for another pass"):
-                if has_result:
-                    # Convert result numpy array to bytes
-                    result_pil = Image.fromarray(st.session_state.result_image)
-                    buf = io.BytesIO()
-                    result_pil.save(buf, format='PNG')
-                    buf.seek(0)
-                    
-                    # Store ingested image data in session state
-                    st.session_state.ingested_image_bytes = buf.getvalue()
-                    st.session_state.ingested_image_name = f"pass_{st.session_state.get('ingest_count', 0) + 1}_{st.session_state.get('original_filename', 'image.png')}"
-                    st.session_state.ingest_count = st.session_state.get('ingest_count', 0) + 1
-                    
-                    # Clear the previous result so we can run again
-                    st.session_state.result_image = None
-                    st.session_state.mask_image = None
-                    
-                    st.rerun()
-        
-        with refresh_col:
-            st.write("")  # Spacer
-            st.write("")  # Spacer
-            if st.button("🔃 Refresh Canvas",
-                         help="Force the canvas to re-render (fixes occasional blackouts)"):
-                # Bump a counter that is part of the canvas widget key,
-                # which forces Streamlit to destroy and recreate it.
-                st.session_state["canvas_refresh_counter"] = (
-                    st.session_state.get("canvas_refresh_counter", 0) + 1
-                )
-                st.rerun()
-        
-        # Determine which image source to use: ingested image takes priority over uploaded file
-        image_bytes, image_name = resolve_active_image(
-            st.session_state.get("ingested_image_bytes"),
-            st.session_state.get("ingested_image_name"),
-            uploaded_file,
+    # ── Row 1: upload & status (full width) ─────────────────────────────
+    # Alignment invariant: nothing variable-height may render above exactly
+    # one image.  Everything in this row spans both columns of the image row
+    # below, so banners and warnings shift both images equally.
+    st.header("📤 Upload Image")
+
+    # File uploader, Ingest, and Refresh side by side
+    upload_col, ingest_col, refresh_col = st.columns([3, 1, 1])
+
+    with upload_col:
+        uploaded_file = st.file_uploader(
+            "Choose an image file",
+            type=['png', 'jpg', 'jpeg', 'bmp', 'tiff', 'webp'],
+            help="Drag and drop an image or click to browse",
+            key="source_image_uploader",
         )
-        image_state_id = make_image_state_id(image_name, image_bytes)
 
-        if st.session_state.get("active_image_id") != image_state_id:
-            st.session_state["sorted_detections"] = []
-            st.session_state.result_image = None
-            st.session_state.mask_image = None
-            st.session_state.timing_data = None
-            st.session_state.active_image_id = image_state_id
+    with ingest_col:
+        # Add some vertical spacing to align with file uploader
+        st.write("")  # Spacer
+        st.write("")  # Spacer
 
-        if 'ingested_image_bytes' in st.session_state and st.session_state.ingested_image_bytes is not None:
-            st.info(f"🔄 Using ingested result: {image_name}")
-            
-            # Add button to clear ingested and go back to file uploader
-            if st.button("❌ Clear ingested image"):
-                st.session_state.ingested_image_bytes = None
-                st.session_state.ingested_image_name = None
+        # Check if we have a result to ingest
+        has_result = hasattr(st.session_state, 'result_image') and st.session_state.result_image is not None
+
+        if st.button("🔄 Ingest Result", disabled=not has_result,
+                    help="Load the processed result as the new input for another pass"):
+            if has_result:
+                # Convert result numpy array to bytes
+                result_pil = Image.fromarray(st.session_state.result_image)
+                buf = io.BytesIO()
+                result_pil.save(buf, format='PNG')
+                buf.seek(0)
+
+                # Store ingested image data in session state
+                st.session_state.ingested_image_bytes = buf.getvalue()
+                st.session_state.ingested_image_name = f"pass_{st.session_state.get('ingest_count', 0) + 1}_{st.session_state.get('original_filename', 'image.png')}"
+                st.session_state.ingest_count = st.session_state.get('ingest_count', 0) + 1
+
+                # Clear the previous result so we can run again
+                st.session_state.result_image = None
+                st.session_state.mask_image = None
+
                 st.rerun()
-        
-        # Store in session state for other parts of the app
-        st.session_state.uploaded_file = uploaded_file
-        st.session_state.current_image_bytes = image_bytes
-        st.session_state.current_image_name = image_name
-        st.session_state.current_image_id = image_state_id
-        
-        if image_bytes is not None:
-            original_image = load_original_image_from_bytes(image_bytes)
-            
-            img_width, img_height = original_image.size
-            
-            # Image info
-            st.info(f"📊 Size: {img_width}×{img_height} pixels")
-            
-            # ── Watermark cascade (fast path) ────────────────────────────
-            # Try known templates before heavy detection.  If a template
-            # matches we store the result and skip detection entirely;
-            # the single "Remove Watermark" button at the bottom handles
-            # both the template-match and consensus-detection paths.
-            watermark_handled = False
-            wm_match = None          # (mask, bbox, name, img_bgr) on hit
-            if use_watermark_templates and selected_templates:
-                import time as _time
-                t0 = _time.perf_counter()
-                cascade_hit = run_watermark_cascade_cached(
-                    image_bytes,
-                    tuple(sorted(t.name for t in selected_templates)),
-                    str(WATERMARKS_DIR),
-                    watermarks_dir_signature,
+
+    with refresh_col:
+        st.write("")  # Spacer
+        st.write("")  # Spacer
+        if st.button("🔃 Refresh Canvas",
+                     help="Force the canvas to re-render (fixes occasional blackouts)"):
+            # Bump a counter that is part of the canvas widget key,
+            # which forces Streamlit to destroy and recreate it.
+            st.session_state["canvas_refresh_counter"] = (
+                st.session_state.get("canvas_refresh_counter", 0) + 1
+            )
+            st.rerun()
+
+    # Determine which image source to use: ingested image takes priority over uploaded file
+    image_bytes, image_name = resolve_active_image(
+        st.session_state.get("ingested_image_bytes"),
+        st.session_state.get("ingested_image_name"),
+        uploaded_file,
+    )
+    image_state_id = make_image_state_id(image_name, image_bytes)
+
+    if st.session_state.get("active_image_id") != image_state_id:
+        st.session_state["sorted_detections"] = []
+        st.session_state.result_image = None
+        st.session_state.mask_image = None
+        st.session_state.timing_data = None
+        st.session_state.active_image_id = image_state_id
+
+    if 'ingested_image_bytes' in st.session_state and st.session_state.ingested_image_bytes is not None:
+        st.info(f"🔄 Using ingested result: {image_name}")
+
+        # Add button to clear ingested and go back to file uploader
+        if st.button("❌ Clear ingested image"):
+            st.session_state.ingested_image_bytes = None
+            st.session_state.ingested_image_name = None
+            st.rerun()
+
+    # Store in session state for other parts of the app
+    st.session_state.uploaded_file = uploaded_file
+    st.session_state.current_image_bytes = image_bytes
+    st.session_state.current_image_name = image_name
+    st.session_state.current_image_id = image_state_id
+
+    if image_bytes is None:
+        st.info("👆 Upload an image and click '🚀 Remove Watermark' to see results here")
+    else:
+        original_image = load_original_image_from_bytes(image_bytes)
+
+        img_width, img_height = original_image.size
+
+        # Image info
+        st.info(f"📊 Size: {img_width}×{img_height} pixels")
+
+        # ── Watermark cascade (fast path) ────────────────────────────
+        # Try known templates before heavy detection.  If a template
+        # matches we keep the annotated image for the image row and skip
+        # detection entirely; the single "Remove Watermark" button in the
+        # controls row handles both the template-match and
+        # consensus-detection paths.
+        watermark_handled = False
+        wm_match = None          # (mask, bbox, name, img_bgr) on hit
+        wm_annotated = None      # (annotated PIL image, caption) for the image row
+        if use_watermark_templates and selected_templates:
+            import time as _time
+            t0 = _time.perf_counter()
+            cascade_hit = run_watermark_cascade_cached(
+                image_bytes,
+                tuple(sorted(t.name for t in selected_templates)),
+                str(WATERMARKS_DIR),
+                watermarks_dir_signature,
+            )
+            wm_cascade_elapsed = _time.perf_counter() - t0
+            if cascade_hit is not None:
+                wm_mask, wm_bbox, wm_tmpl_name, wm_inliers = cascade_hit
+                arr = np.frombuffer(image_bytes, dtype=np.uint8)
+                img_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+                wm_match = (wm_mask, wm_bbox, wm_tmpl_name, img_bgr)
+                st.success(
+                    f"🎯 Matched watermark template **{wm_tmpl_name}** "
+                    f"at ({wm_bbox[0]}, {wm_bbox[1]}) "
+                    f"{wm_bbox[2]}x{wm_bbox[3]}px, {wm_inliers} inliers "
+                    f"({wm_cascade_elapsed:.2f}s)"
                 )
-                wm_cascade_elapsed = _time.perf_counter() - t0
-                if cascade_hit is not None:
-                    wm_mask, wm_bbox, wm_tmpl_name, wm_inliers = cascade_hit
-                    arr = np.frombuffer(image_bytes, dtype=np.uint8)
-                    img_bgr = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                    wm_match = (wm_mask, wm_bbox, wm_tmpl_name, img_bgr)
-                    st.success(
-                        f"🎯 Matched watermark template **{wm_tmpl_name}** "
-                        f"at ({wm_bbox[0]}, {wm_bbox[1]}) "
-                        f"{wm_bbox[2]}x{wm_bbox[3]}px, {wm_inliers} inliers "
-                        f"({wm_cascade_elapsed:.2f}s)"
-                    )
-                    # Draw bounding box overlay on the image
-                    annotated = original_image.copy()
-                    draw = ImageDraw.Draw(annotated)
-                    x, y, w, h = wm_bbox
-                    draw.rectangle(
-                        [x, y, x + w, y + h],
-                        outline=(0, 255, 0), width=3,
-                    )
-                    # Label with template filename (sans extension)
-                    label = Path(wm_tmpl_name).stem
-                    try:
-                        font = ImageFont.truetype("arial.ttf", size=max(16, img_height // 40))
-                    except OSError:
-                        font = ImageFont.load_default()
-                    draw.text(
-                        (x, max(0, y - font.size - 4)),
-                        label, fill=(0, 255, 0), font=font,
-                    )
-                    st.image(annotated, caption=f"Matched: {wm_tmpl_name}", width='stretch')
-                    watermark_handled = True
-                else:
-                    st.caption(
-                        f"No watermark template matched ({wm_cascade_elapsed:.2f}s)"
-                    )
-            
-            # ── Automatic mask mode or manual canvas ─────────────────────
-            if not watermark_handled and is_auto_mode:
-                # Run detections immediately
-                with st.spinner("🔍 Running consensus detection..."):
-                    auto_detections = run_detections_cached(
-                        image_bytes, 
-                        confidence_threshold
-                    )
-                
-                if auto_detections:
-                    st.success(f"✅ Found {len(auto_detections)} consensus regions")
-                    
-                    # Sort detections by consensus strength (# detectors + confidence)
-                    # Higher is better: 3-way consensus ranks above 2-way, and within
-                    # same consensus level, higher confidence wins
-                    def detection_score(det):
-                        num_detectors = len(det.get('detectors', []))
-                        confidence = det.get('confidence', 0)
-                        return num_detectors + confidence  # e.g., 3-way @ 80% = 3.8
-                    
-                    sorted_detections = sorted(auto_detections, key=detection_score, reverse=True)
-                    
-                    # Store sorted detections in session state for use in processing section
-                    st.session_state['sorted_detections'] = sorted_detections
-                    
-                    # Detection selector with checkboxes
-                    st.subheader("📦 Select Regions to Remove")
-                    
-                    # Initialize session state for selected boxes - auto-select first (best) region
-                    selection_key = f"selected_detections_{image_state_id}"
-                    if selection_key not in st.session_state:
-                        # Auto-select the first (highest-scoring) detection
-                        st.session_state[selection_key] = {0} if sorted_detections else set()
-                    
-                    # Checkboxes for each detection (now sorted by score)
-                    for i, det in enumerate(sorted_detections):
-                        x, y, w, h = det['bbox']
-                        conf = det.get('confidence', 0)
-                        detectors = "+".join(sorted(det.get('detectors', [])))
-                        detector_count = len(det.get('detectors', []))
-                        
-                        # Create clearer label
-                        consensus_type = f"{detector_count}-way" if detector_count >= 2 else "1-way"
-                        label = f"Region {i+1}: {consensus_type} consensus ({detectors}) - {conf:.0%} confidence - {w}×{h}px at ({x},{y})"
-                        
-                        # Checkbox
-                        is_selected = st.checkbox(
-                            label,
-                            value=(i in st.session_state[selection_key]),
-                            key=f"detection_checkbox_{i}_{image_state_id}"
-                        )
-                        
-                        # Update session state
-                        if is_selected:
+                # Draw bounding box overlay for the image row
+                annotated = original_image.copy()
+                draw = ImageDraw.Draw(annotated)
+                x, y, w, h = wm_bbox
+                draw.rectangle(
+                    [x, y, x + w, y + h],
+                    outline=(0, 255, 0), width=3,
+                )
+                # Label with template filename (sans extension)
+                label = Path(wm_tmpl_name).stem
+                try:
+                    font = ImageFont.truetype("arial.ttf", size=max(16, img_height // 40))
+                except OSError:
+                    font = ImageFont.load_default()
+                draw.text(
+                    (x, max(0, y - font.size - 4)),
+                    label, fill=(0, 255, 0), font=font,
+                )
+                wm_annotated = (annotated, f"Matched: {wm_tmpl_name}")
+                watermark_handled = True
+            else:
+                st.caption(
+                    f"No watermark template matched ({wm_cascade_elapsed:.2f}s)"
+                )
+
+        # ── Auto-detection state (computed BEFORE the image row) ─────
+        # The overlay drawn in the image row depends on the region
+        # selection, but the checkboxes render in the controls row BELOW
+        # the images.  Streamlit updates widget-keyed session state before
+        # the rerun starts, so syncing the selection set here reads the
+        # current checkbox values one row before the widgets render.
+        selection_key = f"selected_detections_{image_state_id}"
+        if not watermark_handled and is_auto_mode:
+            # Run detections immediately
+            with st.spinner("🔍 Running consensus detection..."):
+                auto_detections = run_detections_cached(
+                    image_bytes,
+                    confidence_threshold
+                )
+
+            if auto_detections:
+                st.success(f"✅ Found {len(auto_detections)} consensus regions")
+
+                # Sort detections by consensus strength (# detectors + confidence)
+                # Higher is better: 3-way consensus ranks above 2-way, and within
+                # same consensus level, higher confidence wins
+                def detection_score(det):
+                    num_detectors = len(det.get('detectors', []))
+                    confidence = det.get('confidence', 0)
+                    return num_detectors + confidence  # e.g., 3-way @ 80% = 3.8
+
+                sorted_detections = sorted(auto_detections, key=detection_score, reverse=True)
+
+                # Store sorted detections in session state for use in processing section
+                st.session_state['sorted_detections'] = sorted_detections
+
+                # Reset index-keyed selection state whenever the detection
+                # list itself changes (e.g. a threshold tweak): otherwise the
+                # surviving checkbox keys would silently point at different
+                # regions than the ones the user picked.
+                signature_key = f"detection_signature_{image_state_id}"
+                detection_signature = make_detection_signature(sorted_detections)
+                if st.session_state.get(signature_key) != detection_signature:
+                    st.session_state[signature_key] = detection_signature
+                    st.session_state[selection_key] = {0} if sorted_detections else set()
+                    stale_checkbox_keys = [
+                        key for key in st.session_state
+                        if isinstance(key, str)
+                        and key.startswith("detection_checkbox_")
+                        and key.endswith(f"_{image_state_id}")
+                    ]
+                    for key in stale_checkbox_keys:
+                        st.session_state.pop(key, None)
+                    st.session_state.pop(f"superset_checkbox_{image_state_id}", None)
+
+                # Seed the selection set - auto-select first (best) region
+                if selection_key not in st.session_state:
+                    st.session_state[selection_key] = {0} if sorted_detections else set()
+
+                # Sync from the checkbox widget keys (same length as the
+                # current list — stale longer lists were reset above)
+                for i in range(len(sorted_detections)):
+                    checkbox_key = f"detection_checkbox_{i}_{image_state_id}"
+                    if checkbox_key in st.session_state:
+                        if st.session_state[checkbox_key]:
                             st.session_state[selection_key].add(i)
                         else:
                             st.session_state[selection_key].discard(i)
-                    
-                    # Get selected indices
-                    selected_detection_indices = st.session_state[selection_key]
-                    
-                    # Superset box option (only if at least one box is selected)
-                    superset_bbox = None
-                    if selected_detection_indices:
-                        selected_bboxes = [sorted_detections[i]['bbox'] for i in selected_detection_indices]
-                        superset_bbox = calculate_bbox_superset(selected_bboxes, (img_height, img_width))
-                        
-                        if superset_bbox:
-                            sx, sy, sw, sh = superset_bbox
-                            superset_label = f"Superset Box: Contains all {len(selected_detection_indices)} selected region(s) - {sw}×{sh}px at ({sx},{sy})"
-                            
-                            # Default to False - let user explicitly opt into superset
-                            use_superset = st.checkbox(
-                                superset_label,
-                                value=False,
-                                key=f"superset_checkbox_{image_state_id}",
-                                help="Use a single bounding box that contains all selected regions"
-                            )
-                    else:
-                        st.info("💡 Select one or more regions above to enable the superset box option")
-                    
+                selected_detection_indices = st.session_state[selection_key]
+
+                # Superset box (only if at least one box is selected)
+                if selected_detection_indices:
+                    selected_bboxes = [sorted_detections[i]['bbox'] for i in selected_detection_indices]
+                    superset_bbox = calculate_bbox_superset(selected_bboxes, (img_height, img_width))
+                    use_superset = superset_bbox is not None and bool(
+                        st.session_state.get(f"superset_checkbox_{image_state_id}", False)
+                    )
+            else:
+                st.session_state['sorted_detections'] = []
+                st.warning("⚠️ No consensus regions detected")
+                st.info("💡 Try lowering confidence threshold or switch to manual mode")
+
+        # ── Shared display geometry ──────────────────────────────────
+        # The manual-mode canvas renders at FIXED pixel dimensions while
+        # st.image stretches to the live column width.  When the two cells
+        # size themselves independently they drift apart, so the result
+        # cell mirrors the canvas box exactly whenever the canvas is the
+        # source-side renderer; otherwise both cells stretch.
+        canvas_display = None
+        if not watermark_handled and not is_auto_mode:
+            measured_column_width = st.session_state.get("column_width")
+            if measured_column_width:
+                canvas_display_width = int(measured_column_width)
+                canvas_display_height = int(round(canvas_display_width * img_height / img_width))
+                canvas_display = (canvas_display_width, canvas_display_height)
+        result_display_width = 'stretch' if canvas_display is None else canvas_display[0]
+        manual_pending = (
+            not watermark_handled and not is_auto_mode and canvas_display is None
+        )
+
+        # ── Row 2: image row — tops align by construction ────────────
+        # Each cell's first element is a matching subheader, then the
+        # image, so the two image tops are pixel-aligned regardless of
+        # detection count, banners, or other variable-height content.
+        img_col, result_col = st.columns(2)
+
+        with img_col:
+            st.subheader("🖼️ Source")
+            if wm_annotated is not None:
+                st.image(wm_annotated[0], caption=wm_annotated[1], width='stretch')
+            elif is_auto_mode:
+                if sorted_detections:
                     # Show annotated image with overlays
                     annotated_image = draw_detection_overlays(
-                        original_image, 
-                        sorted_detections, 
+                        original_image,
+                        sorted_detections,
                         selected_indices=selected_detection_indices,
                         superset_bbox=superset_bbox if use_superset else None
                     )
-                    
+
                     caption = "Detected Regions"
                     if selected_detection_indices:
                         caption += f" (Green = {len(selected_detection_indices)} selected"
@@ -1351,44 +1477,37 @@ def main():
                             caption += ", Orange = Superset"
                         caption += ")"
                     st.image(annotated_image, caption=caption, width='stretch')
-                    
                 else:
-                    st.session_state['sorted_detections'] = []
-                    st.warning("⚠️ No consensus regions detected")
-                    st.info("💡 Try lowering confidence threshold or switch to manual mode")
                     st.image(original_image, caption="Original Image", width='stretch')
-            
-            elif not watermark_handled:
+            elif canvas_display is None:
+                # Manual mode before the layout measurement has posted —
+                # the streamlit_js_eval value triggers a rerun the moment
+                # it arrives, so this state lasts one rerun cycle at most.
+                st.info("⏳ Measuring layout...")
+            else:
                 # Manual mode - show interactive canvas overlay on image
                 global_bbox_key = f"pipeline_bbox_{image_state_id}"
-                
+
                 # Initialize session state
                 if global_bbox_key not in st.session_state:
                     st.session_state[global_bbox_key] = None
-                
-                # Get the measured column width (measured at app startup)
-                # This ensures the canvas fills the column width exactly
+
+                # Mirror the shared canvas geometry (also used by the
+                # result cell so both boxes are pixel-identical)
                 orig_width, orig_height = original_image.size
-                orig_aspect = orig_width / orig_height
-                
-                # Use the column width measured at app startup
-                container_width = st.session_state["column_width"]
-                
-                # Calculate display dimensions to fill container width while preserving aspect ratio
-                display_width = int(container_width)
-                display_height = int(round(display_width / orig_aspect))
-                
+                display_width, display_height = canvas_display
+
                 # Calculate scale factors for coordinate conversion
                 scale_x = orig_width / display_width
                 scale_y = orig_height / display_height
-                
+
                 # Build initial_drawing for the canvas (handles dragging, resizing, etc.)
                 initial_drawing = None
                 if st.session_state[global_bbox_key] is not None:
                     initial_drawing = bbox_to_fabric_rect(
                         st.session_state[global_bbox_key], scale_x, scale_y
                     )
-                
+
                 # Create canvas with background image
                 # Canvas uses large pixel dimensions - will fill container via Streamlit's natural sizing
                 # Coordinate mapping uses these pixel dimensions (canvas coordinate system)
@@ -1405,7 +1524,7 @@ def main():
                     key=f"manual_rect_canvas_{image_state_id}_{st.session_state.get('canvas_refresh_counter', 0)}",
                     initial_drawing=initial_drawing  # This handles everything - dragging, resizing, out-of-frame
                 )
-                
+
                 # Convert canvas result back to image coordinates
                 if canvas_result.json_data is not None:
                     objects = canvas_result.json_data.get("objects", [])
@@ -1422,14 +1541,91 @@ def main():
                     elif not objects and st.session_state[global_bbox_key] is not None:
                         # User cleared the drawing - clear the bbox
                         st.session_state[global_bbox_key] = None
-            
-            # ── Resolve final bbox for processing ────────────────────────
+
+        with result_col:
+            st.subheader("📥 Result")
+            if manual_pending:
+                # Mirror the source cell's one-rerun measuring state so the
+                # two cells never disagree, even transiently.
+                st.info("⏳ Measuring layout...")
+            elif st.session_state.get('result_image') is not None:
+                st.image(
+                    st.session_state.result_image,
+                    caption="Processed Image",
+                    width=result_display_width,
+                )
+            else:
+                # Same aspect ratio as the source, so both cells stretch
+                # to identical display heights.
+                try:
+                    theme_type = st.context.theme.type
+                except Exception:
+                    theme_type = None
+                placeholder_fill = resolve_placeholder_fill(
+                    theme_type, st.get_option("theme.secondaryBackgroundColor")
+                )
+                st.image(
+                    make_result_placeholder(img_width, img_height, placeholder_fill),
+                    caption="Result will appear here",
+                    width=result_display_width,
+                )
+
+        # ── Row 3: controls (variable height is safe below the images) ──
+        ctrl_left, ctrl_right = st.columns(2)
+
+        with ctrl_left:
+            # Detection selector with checkboxes (auto mode)
+            if not watermark_handled and is_auto_mode and sorted_detections:
+                st.subheader("📦 Select Regions to Remove")
+
+                # Checkboxes for each detection (sorted by score).  These use
+                # the same keys the pre-image-row sync reads, so the overlay
+                # above always reflects the current selection.
+                for i, det in enumerate(sorted_detections):
+                    x, y, w, h = det['bbox']
+                    conf = det.get('confidence', 0)
+                    detectors = "+".join(sorted(det.get('detectors', [])))
+                    detector_count = len(det.get('detectors', []))
+
+                    # Create clearer label
+                    consensus_type = f"{detector_count}-way" if detector_count >= 2 else "1-way"
+                    label = f"Region {i+1}: {consensus_type} consensus ({detectors}) - {conf:.0%} confidence - {w}×{h}px at ({x},{y})"
+
+                    # Checkbox
+                    is_selected = st.checkbox(
+                        label,
+                        value=(i in st.session_state[selection_key]),
+                        key=f"detection_checkbox_{i}_{image_state_id}"
+                    )
+
+                    # Update session state
+                    if is_selected:
+                        st.session_state[selection_key].add(i)
+                    else:
+                        st.session_state[selection_key].discard(i)
+
+                # Superset box option (only if at least one box is selected)
+                if selected_detection_indices and superset_bbox:
+                    sx, sy, sw, sh = superset_bbox
+                    superset_label = f"Superset Box: Contains all {len(selected_detection_indices)} selected region(s) - {sw}×{sh}px at ({sx},{sy})"
+
+                    # Default to False - let user explicitly opt into superset
+                    use_superset = st.checkbox(
+                        superset_label,
+                        value=False,
+                        key=f"superset_checkbox_{image_state_id}",
+                        help="Use a single bounding box that contains all selected regions"
+                    )
+                elif not selected_detection_indices:
+                    st.info("💡 Select one or more regions above to enable the superset box option")
+
+            # ── Resolve final bbox for processing ────────────────────
             force_bbox_coords = None
-            
+
             # Get sorted detections from session state (sorted by consensus score)
             sorted_detections = st.session_state.get('sorted_detections', [])
-            
-            if is_auto_mode and sorted_detections:
+
+            if not watermark_handled and is_auto_mode and sorted_detections:
                 if use_superset and superset_bbox:
                     # Use superset box
                     force_bbox_coords = superset_bbox
@@ -1448,7 +1644,7 @@ def main():
                     # No selection - warn user
                     force_bbox_coords = None
                     st.warning("⚠️ Please select at least one region to process")
-            
+
             elif not watermark_handled and detection_mode == MODE_DRAW_MANUALLY:
                 # Manual mode - get bbox from pipeline state
                 global_bbox_key = f"pipeline_bbox_{image_state_id}"
@@ -1461,8 +1657,8 @@ def main():
                 else:
                     force_bbox_coords = None
                     st.info("💡 Drag a rectangle on the image above to set detection coordinates")
-            
-            # ── Process button (always in the same location) ─────────────
+
+            # ── Process button (always in the same location) ─────────
             # Warning for LaMa issues
             if method == "lama":
                 lama_status = get_lama_status()
@@ -1470,10 +1666,10 @@ def main():
                     st.error("⚠️ LaMa not available - please install simple-lama-inpainting or switch to TELEA")
                 elif not lama_status["healthy"]:
                     st.warning("⚠️ LaMa may not be working correctly - consider restarting it")
-            
+
             if st.button("🚀 Remove Watermark", type="primary"):
 
-                # ── Watermark template path ───────────────────────────
+                # ── Watermark template path ───────────────────────
                 if wm_match is not None:
                     from untextre.inpaint import inpaint_image
                     wm_mask, wm_bbox, wm_tmpl_name, img_bgr = wm_match
@@ -1497,7 +1693,7 @@ def main():
                     st.success(f"✅ Watermark removed in {processing_time:.1f}s!")
                     st.rerun()
 
-                # ── Consensus detection path ──────────────────────────
+                # ── Consensus detection path ──────────────────────
                 else:
                     if is_auto_mode:
                         if not selected_detection_indices:
@@ -1506,9 +1702,9 @@ def main():
                         if force_bbox_coords is None:
                             st.error("❌ No valid bounding box selected")
                             st.stop()
-                    
+
                     start_time = time.time()
-                    
+
                     with st.spinner("Processing image... This may take a few seconds."):
                         result_image, mask_image, timing_data = process_image_streamlit(
                             image_bytes, confidence_threshold, granularity, method, keep_masks,
@@ -1518,93 +1714,95 @@ def main():
                             use_grabcut=mask_options["use_grabcut"],
                             use_grabcut_expand=mask_options["use_grabcut_expand"],
                         )
-                    
+
                     processing_time = time.time() - start_time
-                    
+
                     if result_image is not None:
                         st.session_state.result_image = result_image
                         st.session_state.mask_image = mask_image
                         st.session_state.timing_data = timing_data
                         st.session_state.processing_time = processing_time
                         st.session_state.original_filename = image_name
-                        
+
                         st.success(f"✅ Processing complete in {processing_time:.1f} seconds!")
                         st.rerun()
-    
-    # ── Column 2: result display, download, stats ──────────────────────
-    with col2:
-        st.header("📥 Result")
-        
-        # Spacer to align result image with the source image in col1
-        # (col1 has file uploader, info boxes, and size display above its image)
-        st.markdown(f"<div style='height: {RESULT_COLUMN_SPACER_PX}px'></div>", unsafe_allow_html=True)
-        
-        if hasattr(st.session_state, 'result_image') and st.session_state.result_image is not None:
-            # Display result image
-            st.image(st.session_state.result_image, caption="Processed Image", width='stretch')
-            
-            # Encode result for download (format chosen by original extension)
-            buf_bytes, download_name, mime_type = encode_result_array_for_download(
-                st.session_state.result_image, st.session_state.original_filename
-            )
-            file_size_mb = len(buf_bytes) / (1024 * 1024)
-            
-            st.download_button(
-                label=f"💾 Download Result ({file_size_mb:.1f}MB)",
-                data=buf_bytes,
-                file_name=download_name,
-                mime=mime_type
-            )
-            
-            # Show processing stats
-            if st.session_state.timing_data:
-                timing = st.session_state.timing_data
-                
-                with st.expander("📊 Processing Details"):
-                    col_a, col_b = st.columns(2)
-                    
-                    with col_a:
-                        st.metric("Total Time", f"{timing['total_time']:.1f}s")
-                        
-                        matched_tmpl = timing.get("matched_template")
-                        if matched_tmpl:
-                            # Watermark template path — show template name
-                            st.metric("Method", "Template Match")
-                            st.caption(f"Matched: {matched_tmpl}")
-                        elif is_auto_mode and sorted_detections:
-                            st.metric("Detection Time", "Cached ✨", help="Detection ran when image was uploaded")
-                            st.metric("Consensus Boxes", timing.get('consensus_boxes_count', 0))
-                        else:
-                            det_time = timing.get('detection_time')
-                            if det_time is not None:
-                                st.metric("Detection Time", f"{det_time:.1f}s")
-                            st.metric("Consensus Boxes", timing.get('consensus_boxes_count', 0))
-                    
-                    with col_b:
-                        color_time = timing.get('color_time')
-                        if color_time is not None:
-                            st.metric("TF-IDF Time", f"{color_time:.1f}s")
-                        inpaint_time = timing.get('inpaint_time')
-                        if inpaint_time is not None:
-                            st.metric("Inpainting Time", f"{inpaint_time:.1f}s")
-                        
-                        failover_type = timing.get('failover_type', 'none')
-                        if failover_type != 'none':
-                            st.metric("Failover Used", failover_type.title())
-            
-            # Show mask if available
-            if keep_masks and hasattr(st.session_state, 'mask_image') and st.session_state.mask_image is not None:
-                with st.expander("🎭 Detection Mask"):
-                    st.image(st.session_state.mask_image, caption="Detected Text Regions", width='stretch')
-        
-        else:
-            st.info("👆 Upload an image and click 'Remove Text Watermarks' to see results here")
+
+        with ctrl_right:
+            if st.session_state.get('result_image') is not None:
+                # Encode result for download (format chosen by original extension)
+                buf_bytes, download_name, mime_type = encode_result_array_for_download(
+                    st.session_state.result_image, st.session_state.original_filename
+                )
+                file_size_mb = len(buf_bytes) / (1024 * 1024)
+
+                save_col, overwrite_col = st.columns(2, gap="small")
+                with save_col:
+                    st.download_button(
+                        label=f"💾 Download Result ({file_size_mb:.1f}MB)",
+                        data=buf_bytes,
+                        file_name=download_name,
+                        mime=mime_type,
+                        use_container_width=True,
+                    )
+                with overwrite_col:
+                    st.download_button(
+                        label=" ♻️ Download and Keep Filename",
+                        data=buf_bytes,
+                        file_name=original_file_basename(st.session_state.original_filename),
+                        mime=mime_type,
+                        use_container_width=True,
+                        help="Save using the original filename. Your browser or OS handles overwrite warnings.",
+                    )
+
+                # Show processing stats
+                if st.session_state.timing_data:
+                    timing = st.session_state.timing_data
+
+                    with st.expander("📊 Processing Details"):
+                        col_a, col_b = st.columns(2)
+
+                        with col_a:
+                            st.metric("Total Time", f"{timing['total_time']:.1f}s")
+
+                            matched_tmpl = timing.get("matched_template")
+                            if matched_tmpl:
+                                # Watermark template path — show template name
+                                st.metric("Method", "Template Match")
+                                st.caption(f"Matched: {matched_tmpl}")
+                            elif is_auto_mode and sorted_detections:
+                                st.metric("Detection Time", "Cached ✨", help="Detection ran when image was uploaded")
+                                st.metric("Consensus Boxes", timing.get('consensus_boxes_count', 0))
+                            else:
+                                det_time = timing.get('detection_time')
+                                if det_time is not None:
+                                    st.metric("Detection Time", f"{det_time:.1f}s")
+                                st.metric("Consensus Boxes", timing.get('consensus_boxes_count', 0))
+
+                        with col_b:
+                            color_time = timing.get('color_time')
+                            if color_time is not None:
+                                st.metric("TF-IDF Time", f"{color_time:.1f}s")
+                            inpaint_time = timing.get('inpaint_time')
+                            if inpaint_time is not None:
+                                st.metric("Inpainting Time", f"{inpaint_time:.1f}s")
+
+                            failover_type = timing.get('failover_type', 'none')
+                            if failover_type != 'none':
+                                st.metric("Failover Used", failover_type.title())
+
+                # Show mask if available
+                if keep_masks and st.session_state.get('mask_image') is not None:
+                    with st.expander("🎭 Detection Mask"):
+                        st.image(st.session_state.mask_image, caption="Detected Text Regions", width='stretch')
+
+            else:
+                st.info("👆 Select a region and click '🚀 Remove Watermark' to see results here")
     
     # ── Footer ────────────────────────────────────────────────────────
     st.markdown("---")
     st.markdown("""
     <div style='text-align: center; color: #666;'>
-        <p>Built with Streamlit • Powered by LaMa, EAST, EasyOCR, YOLO11x, and ORB</p>
+        <p>Built with Streamlit • Powered by LaMa, EAST, EasyOCR, YOLO11x, and SIFT</p>
     </div>
     """, unsafe_allow_html=True)
 

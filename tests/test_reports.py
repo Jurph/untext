@@ -10,7 +10,7 @@ from untextre.reports import (
 )
 
 class TestSaveDiscoveredWatermarkCandidates:
-    def test_exports_orb_prepped_candidates_only(self, tmp_path):
+    def test_exports_sift_prepped_candidates_only(self, tmp_path):
         raw = np.zeros((11, 11, 4), dtype=np.uint8)
         raw[:, :, :3] = 177
         raw[3:8, 3:8, :3] = 220
@@ -183,13 +183,12 @@ class TestSaveCleanTimingReport:
         assert "Template match: 1" in text
 
     def test_template_match_inliers_rendered_in_report(self, tmp_path):
-        """Regression: orb_inliers on a template-match timing dict must show
-        up in the rendered report, so a marginal (low-inlier) template match
-        is distinguishable from a strong one."""
+        """feature_inliers on a template-match timing dict must show up, so a
+        marginal (low-inlier) template match is distinguishable from a strong one."""
         template_only = {
             "image": "watermarked_photo.jpg",
             "matched_template": "sg_logo.png",
-            "orb_inliers": 87,
+            "feature_inliers": 87,
             "mask_found": True,
             "total_time": 0,
         }
@@ -202,8 +201,8 @@ class TestSaveCleanTimingReport:
         text = out_file.read_text()
         assert "87" in text
 
-    def test_missing_orb_inliers_renders_as_na(self, tmp_path):
-        """Consensus-path entries never set orb_inliers; report must not KeyError
+    def test_missing_feature_inliers_renders_as_na(self, tmp_path):
+        """Consensus-path entries never set feature_inliers; report must not KeyError
         and must show N/A rather than a bogus 0."""
         timing = _make_timing()
         out_file = tmp_path / "report.txt"

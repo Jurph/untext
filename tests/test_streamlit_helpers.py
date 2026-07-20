@@ -7,6 +7,7 @@ These helpers have no Streamlit dependency and can be tested in isolation:
 """
 
 import io
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -26,6 +27,10 @@ from streamlit_app import (
     fabric_rect_to_bbox,
     load_original_image_from_bytes,
     load_watermark_templates_cached,
+    make_detection_signature,
+    make_result_placeholder,
+    original_file_basename,
+    resolve_placeholder_fill,
     make_image_state_id,
     resolve_mask_mode_options,
     resolve_active_image,
@@ -116,8 +121,73 @@ def test_encode_result_array_for_download_uses_existing_format_rules():
     assert mime == "image/png"
     assert Image.open(io.BytesIO(buf_bytes)).size == (2, 2)
 
+
+def test_original_file_basename_handles_browser_and_platform_paths():
+    assert original_file_basename(r"C:\Users\Jurph\Pictures\source.jpg") == "source.jpg"
+    assert original_file_basename("/home/jurph/source.png") == "source.png"
+    assert original_file_basename(None) == "image.png"
+
+
+def test_make_result_placeholder_preserves_aspect_without_full_resolution():
+    placeholder = make_result_placeholder(6400, 4800)
+
+    height, width, channels = placeholder.shape
+    assert channels == 3
+    assert width <= 320, "placeholder must not allocate at full source resolution"
+    assert abs(height / width - 4800 / 6400) < 0.01
+    assert placeholder.dtype == np.uint8
+
+
+def test_make_result_placeholder_keeps_small_sources_exact():
+    assert make_result_placeholder(8, 4).shape == (4, 8, 3)
+
+
+def test_make_result_placeholder_paints_requested_solid_fill():
+    placeholder = make_result_placeholder(8, 4, (38, 39, 48))
+
+    assert np.all(placeholder.reshape(-1, 3) == (38, 39, 48))
+
+
+def test_resolve_placeholder_fill_matches_theme_and_config():
+    # Configured secondaryBackgroundColor wins over the theme default
+    assert resolve_placeholder_fill("dark", "#1A2B3C") == (26, 43, 60)
+    # Dark theme falls back to Streamlit's default dark secondary background
+    assert resolve_placeholder_fill("dark", None) == (38, 39, 48)
+    # Light theme (or unknown) falls back to the light secondary background
+    assert resolve_placeholder_fill("light", None) == (240, 242, 246)
+    assert resolve_placeholder_fill(None, "not-a-color") == (240, 242, 246)
+
+
+def test_make_detection_signature_is_stable_for_identical_lists():
+    detections = [
+        {"bbox": (10, 20, 30, 40), "detectors": ["east", "yolo"], "confidence": 0.87},
+        {"bbox": (50, 60, 70, 80), "detectors": ["easyocr"], "confidence": 0.42},
+    ]
+
+    assert make_detection_signature(detections) == make_detection_signature(
+        [dict(det) for det in detections]
+    )
+
+
+def test_make_detection_signature_changes_when_detections_change():
+    base = [{"bbox": (10, 20, 30, 40), "detectors": ["east", "yolo"], "confidence": 0.87}]
+    moved = [{"bbox": (11, 20, 30, 40), "detectors": ["east", "yolo"], "confidence": 0.87}]
+    reordered_pair = [
+        {"bbox": (10, 20, 30, 40), "detectors": ["east"], "confidence": 0.5},
+        {"bbox": (50, 60, 70, 80), "detectors": ["yolo"], "confidence": 0.5},
+    ]
+
+    assert make_detection_signature(base) != make_detection_signature(moved)
+    # Index identity matters: checkboxes are keyed by list position, so a
+    # reordered list must count as a different detection set.
+    assert make_detection_signature(reordered_pair) != make_detection_signature(
+        list(reversed(reordered_pair))
+    )
+
+
+
 # =========================================================================
-# Watermark template caching — every Streamlit rerun must skip the ORB
+# Watermark template caching — every Streamlit rerun must skip the SIFT
 # feature-extraction cost when the templates directory and image are
 # unchanged (see load_watermark_templates_cached / run_watermark_cascade_cached).
 # =========================================================================
@@ -151,11 +221,9 @@ def test_load_watermark_templates_cached_skips_reload_for_unchanged_signature(tm
     signature = _watermarks_dir_signature(tmp_path)
 
     calls = {"n": 0}
-    original_loader = streamlit_app.load_watermark_templates
-
     def counting_loader(path):
         calls["n"] += 1
-        return original_loader(path)
+        return [SimpleNamespace(name="logo.png")]
 
     monkeypatch.setattr(streamlit_app, "load_watermark_templates", counting_loader)
 
@@ -177,11 +245,15 @@ def test_run_watermark_cascade_cached_skips_rematch_for_same_image_and_selection
     image_bytes = encoded.tobytes()
 
     calls = {"n": 0}
-    original_cascade = streamlit_app.try_watermark_cascade
+    monkeypatch.setattr(
+        streamlit_app,
+        "load_watermark_templates",
+        lambda _path: [SimpleNamespace(name="logo.png")],
+    )
 
     def counting_cascade(image, templates, **kwargs):
         calls["n"] += 1
-        return original_cascade(image, templates, **kwargs)
+        return ("matched", [template.name for template in templates])
 
     monkeypatch.setattr(streamlit_app, "try_watermark_cascade", counting_cascade)
 
@@ -211,7 +283,7 @@ def test_run_watermark_cascade_cached_skips_matching_when_no_templates_selected(
     result = run_watermark_cascade_cached(image_bytes, (), str(tmp_path), signature)
 
     assert result is None
-    assert calls["n"] == 0, "an empty template selection must not run ORB matching at all"
+    assert calls["n"] == 0, "an empty template selection must not run SIFT matching at all"
 
 
 

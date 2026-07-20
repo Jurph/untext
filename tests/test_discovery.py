@@ -59,7 +59,7 @@ def test_assign_zone_portrait():
 from untextre.discovery import crop_zone_to_bgra
 
 
-def _make_orb_ready_candidate(size: int = 128) -> np.ndarray:
+def _make_sift_ready_candidate(size: int = 128) -> np.ndarray:
     bgr = np.zeros((size, size, 3), dtype=np.uint8)
     alpha = np.zeros((size, size), dtype=np.uint8)
     center = (size // 2, size // 2)
@@ -95,7 +95,7 @@ def _make_orb_ready_candidate(size: int = 128) -> np.ndarray:
     return np.dstack([bgr, alpha])
 
 
-def _make_orb_dead_bar(width: int = 160, height: int = 40) -> np.ndarray:
+def _make_sift_dead_bar(width: int = 160, height: int = 40) -> np.ndarray:
     bgra = np.zeros((height, width, 4), dtype=np.uint8)
     bgra[10:30, 20:140, :3] = 220
     bgra[10:30, 20:140, 3] = 255
@@ -182,31 +182,31 @@ def test_crop_zone_to_bgra_channel_order():
     assert bgra[b, b, 2] == 0    # R channel
 
 
-def test_candidate_minimums_reject_orb_unusable_bar():
-    candidate = _make_orb_dead_bar()
+def test_candidate_minimums_reject_sift_unusable_bar():
+    candidate = _make_sift_dead_bar()
 
-    is_valid, area, bbox_w, bbox_h, edge_px, fill_ratio, orb_keypoints = _candidate_meets_consensus_minimums(candidate)
+    is_valid, area, bbox_w, bbox_h, edge_px, fill_ratio, sift_keypoints = _candidate_meets_consensus_minimums(candidate)
 
     assert area > 0
     assert bbox_w >= 120
     assert bbox_h >= 20
     assert edge_px >= 64
     assert fill_ratio > 0.01
-    assert orb_keypoints < 6
+    assert sift_keypoints < 5
     assert is_valid is False
 
 
-def test_candidate_minimums_accept_orb_ready_candidate():
-    candidate = _make_orb_ready_candidate()
+def test_candidate_minimums_accept_sift_ready_candidate():
+    candidate = _make_sift_ready_candidate()
 
-    is_valid, area, bbox_w, bbox_h, edge_px, fill_ratio, orb_keypoints = _candidate_meets_consensus_minimums(candidate)
+    is_valid, area, bbox_w, bbox_h, edge_px, fill_ratio, sift_keypoints = _candidate_meets_consensus_minimums(candidate)
 
     assert area > 0
     assert bbox_w >= 80
     assert bbox_h >= 80
     assert edge_px >= 64
     assert fill_ratio > 0.01
-    assert orb_keypoints >= 6
+    assert sift_keypoints >= 5
     assert is_valid is True
 
 def test_crop_zone_to_bgra_blob_at_edge_clamps_border():
@@ -224,6 +224,38 @@ def test_crop_zone_to_bgra_blob_at_edge_clamps_border():
     assert bgra.shape == (expected_h, expected_w, 4)
     # Top-left pixel is inside the blob, so alpha should be 255
     assert bgra[0, 0, 3] == 255
+
+
+def test_cap_zone_candidates_keeps_strongest_by_sift_edges_area():
+    """Truncation ranks by (sift_kp, edge_px, area) descending, not arrival order.
+
+    Twelve synthetic candidates, capped to MAX_CONSENSUS_CANDIDATES_PER_ZONE=10:
+    the two weakest by sift_keypoints (4 and 3) must be dropped regardless of
+    their area/edge_px, since sift_keypoints is the primary rank key.
+    """
+    from untextre.discovery import MAX_CONSENSUS_CANDIDATES_PER_ZONE, _cap_zone_candidates
+
+    stats = [
+        (100, 100, 20), (90, 90, 15), (80, 80, 12), (70, 70, 10),
+        (60, 60, 9), (50, 50, 8), (40, 40, 7), (30, 30, 6),
+        (20, 20, 5), (200, 200, 5), (10, 10, 4), (5, 5, 3),
+    ]
+    zone_valid = [(None, area, 10, 10, edge_px, 0.5, sift_kp) for area, edge_px, sift_kp in stats]
+
+    capped = _cap_zone_candidates(zone_valid, zone_label="test-zone")
+
+    assert len(capped) == MAX_CONSENSUS_CANDIDATES_PER_ZONE
+    kept_sift = sorted(item[6] for item in capped)
+    assert kept_sift == [5, 5, 6, 7, 8, 9, 10, 12, 15, 20]
+
+
+def test_cap_zone_candidates_is_noop_under_limit():
+    from untextre.discovery import _cap_zone_candidates
+
+    zone_valid = [(None, 10, 5, 5, 10, 0.5, 6) for _ in range(3)]
+    capped = _cap_zone_candidates(zone_valid, max_per_zone=10, zone_label="test-zone")
+    assert capped == zone_valid
+
 
 
 from untextre.discovery import compute_alpha_iou, select_best_family
@@ -823,7 +855,7 @@ def _template_from_crop(label: str, crop: np.ndarray, member_indices=(0,), famil
 
 def test_discover_finds_watermark_in_homogeneous_batch(tmp_path):
     """Integration test: batch of images with a consistent watermark blob."""
-    wm_patch = _make_orb_ready_candidate(160)
+    wm_patch = _make_sift_ready_candidate(160)
     paths = []
     np.random.seed(0)
     random.seed(0)
@@ -866,7 +898,7 @@ def test_discover_finds_candidate_near_watermark_despite_adjacent_stable_mass(tm
     stable region is adjacent.
 
     The composite score (low_var × structure) may merge or split the watermark
-    and mass depending on Otsu splits.  What matters for the downstream ORB
+    and mass depending on Otsu splits.  What matters for the downstream SIFT
     step is that at least one candidate is found and its centroid is near the
     watermark location.
     """
@@ -874,7 +906,7 @@ def test_discover_finds_candidate_near_watermark_despite_adjacent_stable_mass(tm
     rng = np.random.RandomState(20)
 
     stable_color = np.array([210, 210, 210], dtype=np.int16)
-    watermark_patch = _make_orb_ready_candidate(160)
+    watermark_patch = _make_sift_ready_candidate(160)
     mass_slice = (slice(120, 250), slice(170, 340))
 
     for i in range(6):
@@ -977,7 +1009,7 @@ def test_discovery_end_to_end_with_real_images(tmp_path):
     """
     np.random.seed(42)
     random.seed(42)
-    wm_patch = _make_orb_ready_candidate(160)
+    wm_patch = _make_sift_ready_candidate(160)
     paths = []
     for i in range(6):
         # Randomize background to simulate real photos
@@ -993,3 +1025,97 @@ def test_discovery_end_to_end_with_real_images(tmp_path):
     best = candidates[0]
     assert best.shape[2] == 4, "Expected 4-channel BGRA output"
     assert np.any(best[:, :, 3] > 127), "Expected nonzero alpha in best candidate"
+
+
+def test_cross_sub_sample_per_half_thresholds_differ_with_noise(tmp_path):
+    """Cross-sub-sample validation must compute a per-half Tukey threshold
+    from each half's OWN log-variance distribution, not reuse one shared
+    number across halves with different noise characteristics.
+
+    Regression lock for the threshold-mismatch fix (2026-07-19): a threshold
+    calibrated on a full/pooled population is a poor statistical fit for a
+    half-sized-sample variance estimate, especially when the two halves have
+    genuinely different underlying noise levels. Builds two synthetic image
+    sets with deliberately different per-pixel noise ranges (standing in for
+    "half A" and "half B" of a real cross-sub-sample split) and asserts their
+    self-consistent thresholds differ — the observable mechanism the fix
+    introduces.
+    """
+    from untextre.discovery import (
+        _precision_outlier_threshold_from_log_precision,
+        compute_stack_statistics,
+    )
+
+    rng = np.random.RandomState(5)
+    base = rng.randint(80, 120, (100, 150, 3), dtype=np.uint8)
+
+    low_noise_paths = []
+    for i in range(3):
+        img = np.clip(base.astype(np.int16) + rng.randint(-3, 4, base.shape), 0, 255).astype(np.uint8)
+        p = tmp_path / f"low_{i}.png"
+        cv2.imwrite(str(p), img)
+        low_noise_paths.append(p)
+
+    high_noise_paths = []
+    for i in range(3):
+        img = np.clip(base.astype(np.int16) + rng.randint(-40, 41, base.shape), 0, 255).astype(np.uint8)
+        p = tmp_path / f"high_{i}.png"
+        cv2.imwrite(str(p), img)
+        high_noise_paths.append(p)
+
+    stats_low = compute_stack_statistics(low_noise_paths)
+    stats_high = compute_stack_statistics(high_noise_paths)
+
+    log_var_low = np.log10(stats_low["var_gray"].astype(np.float64) + 1e-8)
+    log_var_high = np.log10(stats_high["var_gray"].astype(np.float64) + 1e-8)
+    threshold_low = _precision_outlier_threshold_from_log_precision(-log_var_low.flatten())
+    threshold_high = _precision_outlier_threshold_from_log_precision(-log_var_high.flatten())
+
+    # The low-noise half's own distribution sits at much lower absolute
+    # variance than the high-noise half's, so their self-consistent
+    # thresholds must differ — the whole point of computing them separately
+    # instead of reusing one shared/pooled number.
+    assert threshold_low != threshold_high
+
+
+def test_discover_finds_watermark_with_noisy_competing_region_at_cross_sample_boundary(tmp_path):
+    """Regression coverage for the changed cross-sub-sample code path.
+
+    Exactly 6 images (the >=6 threshold that activates cross-sub-sample
+    validation with self-consistent per-half thresholds), with both a
+    genuine fixed watermark and a noisier competing "stable-ish" region.
+    Discovery must still find the real watermark through the changed path.
+    """
+    from untextre.discovery import discover_watermark_candidates
+
+    rng = np.random.RandomState(7)
+    stable_color = np.array([210, 210, 210], dtype=np.int16)
+    watermark_patch = _make_sift_ready_candidate(160)
+    mass_slice = (slice(120, 250), slice(170, 340))
+
+    paths = []
+    for i in range(6):
+        img = rng.randint(20, 180, (300, 400, 3), dtype=np.uint8)
+        stable_region = stable_color + rng.randint(-20, 21, (130, 170, 3))
+        img[mass_slice] = np.clip(stable_region, 0, 255).astype(np.uint8)
+        _stamp_transparent_patch(img, watermark_patch, 130, 230)
+        path = tmp_path / f"img{i}.png"
+        cv2.imwrite(str(path), img)
+        paths.append(path)
+
+    candidates = discover_watermark_candidates(paths)
+
+    assert candidates, "Expected the real watermark to still be found"
+    # At least one candidate must be roughly watermark-patch-sized (the
+    # stamped patch is 160x160 before SIFT-ready trimming), not the much
+    # larger ~130x170 competing "stable-ish" mass region.
+    found_watermark_sized = False
+    for c in candidates:
+        ys, xs = np.where(c[:, :, 3] > 0)
+        if len(ys) == 0:
+            continue
+        bbox_w = int(xs.max() - xs.min() + 1)
+        bbox_h = int(ys.max() - ys.min() + 1)
+        if bbox_w <= 180 and bbox_h <= 180:
+            found_watermark_sized = True
+    assert found_watermark_sized, "No watermark-sized candidate found (all candidates oversized)"
