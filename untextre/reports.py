@@ -8,8 +8,8 @@ from typing import List, Optional
 import cv2
 import numpy as np
 
-from .orb_matcher import WatermarkTemplate, _make_watermark_template
-from .orb_prep import prepare_candidate_bgra_for_orb
+from .sift_matcher import WatermarkTemplate, _make_watermark_template
+from .sift_prep import prepare_candidate_bgra_for_sift
 from .utils import setup_logger
 
 logger = setup_logger(__name__)
@@ -19,13 +19,13 @@ def _save_discovered_watermark_candidates(
     output_path: Path,
     candidates: List[np.ndarray],
 ) -> List[WatermarkTemplate]:
-    """Save discovered candidates in the same orb-prepped form that -K will use."""
+    """Save discovered candidates in SIFT-prepped form and return SIFT templates."""
     watermark_templates: List[WatermarkTemplate] = []
 
     for i, bgra in enumerate(candidates):
         suffix = "" if i == 0 else f"_{i + 1}"
         candidate_path = output_path / f"watermark_candidate{suffix}.png"
-        prepared_bgra = prepare_candidate_bgra_for_orb(bgra)
+        prepared_bgra = prepare_candidate_bgra_for_sift(bgra)
         if candidate_path.exists():
             logger.warning(f"Overwriting existing candidate: {candidate_path.name}")
         cv2.imwrite(str(candidate_path), prepared_bgra)
@@ -87,7 +87,7 @@ def _save_clean_timing_report(
         if expanded_count > 0:
             f.write(f"Total bboxes expanded: {expanded_count}\n")
         
-        f.write("\nColumns: MP=Megapixels, Det=Detection, Msk=Mask, Inp=Inpaint, Tot=Total, Failover=R/T/G/W/B (Rotation/Target/Gray/White/Baseline), Inl=ORB inlier count (template matches only)\n")
+        f.write("\nColumns: MP=Megapixels, Det=Detection, Msk=Mask, Inp=Inpaint, Tot=Total, Failover=R/T/G/W/B (Rotation/Target/Gray/White/Baseline), Inl=feature-match inlier count (template matches only)\n")
         
         # Header with wider format
         f.write(f"{'Image Name':<25} {'MP':>4} {'Det':>4} {'TF-IDF':>6} {'Msk':>4} {'Inp':>5} {'Tot':>5} {'Boxes':>5} {'Fail':>4} {'Inl':>5}\n")
@@ -116,11 +116,11 @@ def _save_clean_timing_report(
             color_time = timing.get('color_time')
             mask_time = timing.get('mask_time')
             inpaint_time = timing.get('inpaint_time')
-            orb_inliers = timing.get('orb_inliers')
+            feature_inliers = timing.get('feature_inliers', timing.get('sift_inliers', timing.get('orb_inliers')))
             color_time_str = "N/A" if color_time is None else f"{color_time:>6.1f}"
             mask_time_str = "N/A" if mask_time is None else f"{mask_time:>4.1f}"
             inpaint_time_str = "N/A" if inpaint_time is None else f"{inpaint_time:>5.1f}"
-            orb_inliers_str = "N/A" if orb_inliers is None else f"{orb_inliers:>5d}"
+            feature_inliers_str = "N/A" if feature_inliers is None else f"{feature_inliers:>5d}"
 
             image_mp = timing.get('image_mp', 0)
             detection_time = timing.get('detection_time', 0)
@@ -136,7 +136,7 @@ def _save_clean_timing_report(
                    f"{total_time:>5.1f} "
                    f"{consensus_boxes_count:>5d} "
                    f"{failover_marker:>4} "
-                   f"{orb_inliers_str:>5}\n")
+                   f"{feature_inliers_str:>5}\n")
             f.write(row)
         
         if len(detailed_timings) > 1:

@@ -1,13 +1,14 @@
 """Tests for untextre.cli argument parsing and main() orchestration."""
 
 import sys
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
 import pytest
 
 import untextre.cli as cli_mod
-import untextre.orb_matcher as orb_matcher_mod
+import untextre.sift_matcher as sift_matcher_mod
 import untextre.pipeline as pipeline_mod
 import untextre.reports as reports_mod
 from untextre.cli import main
@@ -208,14 +209,12 @@ class TestMainIntegrationPaths:
         """force_output must not reload the image when the template cascade already loaded it (#10)."""
         img_path, out_dir = self._run_main(monkeypatch, tmp_path, ["--force-output"])
 
-        fake_template = orb_matcher_mod.WatermarkTemplate(
-            "fake.png", np.zeros((4, 4, 4), dtype=np.uint8), ()
-        )
+        fake_template = SimpleNamespace(name="fake.png")
         monkeypatch.setattr(
-            orb_matcher_mod, "load_watermark_templates",
+            sift_matcher_mod, "load_watermark_templates",
             lambda *_a, **_kw: [fake_template],
         )
-        monkeypatch.setattr(orb_matcher_mod, "try_watermark_cascade", lambda *_a, **_kw: None)
+        monkeypatch.setattr(sift_matcher_mod, "try_watermark_cascade", lambda *_a, **_kw: None)
         monkeypatch.setattr(
             pipeline_mod, "process_single_image",
             lambda **kw: {"total_time": 0.1, "skipped": True},
@@ -314,8 +313,8 @@ class TestMainIntegrationPaths:
         import untextre.inpaint as inpaint_mod
         monkeypatch.setattr(inpaint_mod, "initialize_lama_model", lambda **kw: True)
 
-        # Make cascade return None (no match)
-        monkeypatch.setattr(orb_matcher_mod, "try_watermark_cascade", lambda *a, **kw: None)
+        monkeypatch.setattr(sift_matcher_mod, "load_watermark_templates", lambda *_a, **_kw: [SimpleNamespace(name="template.png")])
+        monkeypatch.setattr(sift_matcher_mod, "try_watermark_cascade", lambda *a, **kw: None)
 
         # process_single_image should NOT be called (no fallback)
         def fail_if_called(**kw):
@@ -358,8 +357,9 @@ class TestMainIntegrationPaths:
 
         import untextre.inpaint as inpaint_mod
         monkeypatch.setattr(inpaint_mod, "initialize_lama_model", lambda **kw: True)
+        monkeypatch.setattr(sift_matcher_mod, "load_watermark_templates", lambda *_a, **_kw: [SimpleNamespace(name="template.png")])
         monkeypatch.setattr(
-            orb_matcher_mod,
+            sift_matcher_mod,
             "try_watermark_cascade",
             lambda *_a, **_kw: (
                 np.zeros((50, 50), dtype=np.uint8),
@@ -384,7 +384,7 @@ class TestMainIntegrationPaths:
         main()
 
         assert captured["timings"][0]["matched_template"] == "template.png"
-        assert captured["timings"][0]["orb_inliers"] == 42
+        assert captured["timings"][0]["feature_inliers"] == 42
         assert captured["timings"][0]["total_time"] > 0
 
 

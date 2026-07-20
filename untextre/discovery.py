@@ -1,7 +1,7 @@
 """Watermark auto-discovery for -U mode.
 
 Discovers a watermark template from a directory of consistently-watermarked
-images and returns BGRA crop(s) suitable for the -K / ORB pipeline.
+images and returns BGRA crop(s) suitable for the -K / SIFT pipeline.
 """
 
 import cv2
@@ -16,7 +16,7 @@ from .watermark_consensus import (
     build_final_templates,
     split_candidate_bgra,
 )
-from .orb_prep import count_candidate_orb_keypoints
+from .sift_prep import count_candidate_sift_keypoints
 
 logger = setup_logger(__name__)
 
@@ -38,7 +38,13 @@ MIN_CONSENSUS_CANDIDATE_LONG_SIDE_PX = 14
 MIN_CONSENSUS_CANDIDATE_EDGE_PX = 64
 MIN_CONSENSUS_CANDIDATE_FILL_RATIO = 0.01
 MAX_CONSENSUS_CANDIDATE_FILL_RATIO = 0.95
-MIN_CONSENSUS_CANDIDATE_ORB_KEYPOINTS = 6
+MIN_CONSENSUS_CANDIDATE_SIFT_KEYPOINTS = 5
+
+# After structural/SIFT filtering, cap surviving sub-candidates per zone so a
+# noisy directory cannot blow up the O(n^2) graph-consensus stage. Ranked by
+# (sift_keypoints, edge_px, area) descending before truncation — see #14/#N
+# in TODO.md for the split-fragmentation context this backstops.
+MAX_CONSENSUS_CANDIDATES_PER_ZONE = 10
 
 
 def assign_zone(
@@ -149,9 +155,9 @@ def _candidate_meets_consensus_minimums(
     if not structural_valid:
         return False, area, bbox_w, bbox_h, edge_px, fill_ratio, 0
 
-    orb_keypoints = count_candidate_orb_keypoints(bgra)
-    is_valid = orb_keypoints >= MIN_CONSENSUS_CANDIDATE_ORB_KEYPOINTS
-    return is_valid, area, bbox_w, bbox_h, edge_px, fill_ratio, orb_keypoints
+    sift_keypoints = count_candidate_sift_keypoints(bgra)
+    is_valid = sift_keypoints >= MIN_CONSENSUS_CANDIDATE_SIFT_KEYPOINTS
+    return is_valid, area, bbox_w, bbox_h, edge_px, fill_ratio, sift_keypoints
 
 
 def compute_alpha_iou(crop_a: np.ndarray, crop_b: np.ndarray) -> float:
@@ -379,18 +385,22 @@ def compute_median_gradient(paths: List[Path]) -> Optional[np.ndarray]:
     variance-based score handles the static-background failure mode.
 
     Memory note: all N gradient-magnitude frames (H×W float32 each) are held
-    in memory simultaneously for the median computation.  For large batches of
-    high-resolution images this may be significant.
+    in one preallocated array so the median can be computed with an in-place
+    partition.  This avoids the extra full-stack copy made by np.stack/np.median
+    on large high-resolution buckets.
 
     Args:
         paths: Paths to images that must all be the same pixel dimensions.
 
     Returns:
         H×W float32 median gradient magnitude, or None if fewer than 3 images
-        could be loaded.
+        could be loaded or the working array cannot be allocated.
     """
-    frames = []
+    frames: Optional[np.ndarray] = None
+    valid = 0
     warned_large_batch = False
+    expected_shape: tuple[int, int] | None = None
+
     for p in paths:
         try:
             img = load_image(p)
@@ -399,25 +409,60 @@ def compute_median_gradient(paths: List[Path]) -> Optional[np.ndarray]:
             logger.warning(f"compute_median_gradient: could not load {p.name}: {e}")
             continue
 
-        estimated_bytes = len(paths) * gray.size * np.dtype(np.float32).itemsize
-        if not warned_large_batch and len(paths) > 50 and estimated_bytes >= 1024 ** 3:
+        if expected_shape is None:
+            expected_shape = (gray.shape[0], gray.shape[1])
+            estimated_bytes = len(paths) * gray.size * np.dtype(np.float32).itemsize
+            if not warned_large_batch and estimated_bytes >= 512 * 1024 ** 2:
+                logger.warning(
+                    "compute_median_gradient will hold about %.1f GiB for %d image(s) at %dx%d",
+                    estimated_bytes / (1024 ** 3),
+                    len(paths),
+                    gray.shape[1],
+                    gray.shape[0],
+                )
+                warned_large_batch = True
+            try:
+                frames = np.empty((len(paths), *gray.shape), dtype=np.float32)
+            except MemoryError:
+                logger.warning(
+                    "compute_median_gradient: insufficient memory for %.1f GiB working array; "
+                    "continuing without median-gradient weighting",
+                    estimated_bytes / (1024 ** 3),
+                )
+                return None
+        elif gray.shape != expected_shape:
             logger.warning(
-                "compute_median_gradient will hold about %.1f GiB for %d image(s) at %dx%d",
-                estimated_bytes / (1024 ** 3),
-                len(paths),
-                gray.shape[1],
-                gray.shape[0],
+                "compute_median_gradient: skipping %s with mismatched shape %s (expected %s)",
+                p.name,
+                gray.shape,
+                expected_shape,
             )
-            warned_large_batch = True
+            continue
 
+        assert frames is not None
         gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
         gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-        frames.append(np.sqrt(gx ** 2 + gy ** 2))
+        cv2.magnitude(gx, gy, frames[valid])
+        valid += 1
 
-    if len(frames) < 3:
+    if frames is None or valid < 3:
         return None
 
-    return np.median(np.stack(frames, axis=0), axis=0).astype(np.float32)
+    frames = frames[:valid]
+    mid = valid // 2
+    try:
+        if valid % 2:
+            frames.partition(mid, axis=0)
+            return frames[mid].copy()
+        lower = mid - 1
+        frames.partition((lower, mid), axis=0)
+        return ((frames[lower] + frames[mid]) * 0.5).astype(np.float32, copy=False)
+    except MemoryError:
+        logger.warning(
+            "compute_median_gradient: insufficient memory during median partition; "
+            "continuing without median-gradient weighting"
+        )
+        return None
 
 
 def build_watermark_score(
@@ -872,6 +917,28 @@ def _top_n_alpha_components(alpha: np.ndarray, n: int = 1) -> np.ndarray:
     return out
 
 
+def _cap_zone_candidates(
+    zone_valid: List[Tuple[np.ndarray, int, int, int, int, float, int]],
+    max_per_zone: int = MAX_CONSENSUS_CANDIDATES_PER_ZONE,
+    zone_label: str = "",
+) -> List[Tuple[np.ndarray, int, int, int, int, float, int]]:
+    """Truncate a zone's structurally-valid candidates to the strongest few.
+
+    Ranks by (sift_keypoints, edge_px, area) descending — sift_keypoints first
+    because it is the same signal the matcher uses at match time, edge_px and
+    area as tiebreakers. No-op when already at or under the limit.
+    """
+    if len(zone_valid) <= max_per_zone:
+        return zone_valid
+    ranked = sorted(zone_valid, key=lambda item: (item[6], item[4], item[1]), reverse=True)
+    dropped = len(ranked) - max_per_zone
+    logger.info(
+        f"Consensus: capping zone {zone_label} to top {max_per_zone} of {len(ranked)} "
+        f"candidates (dropped {dropped} weakest by sift_kp/edges/area)"
+    )
+    return ranked[:max_per_zone]
+
+
 def _consensus_vote(
     zone_data: List[Tuple[np.ndarray, int, int, Tuple[int, int], np.ndarray, np.ndarray]],
     debug_dir: Optional[Path] = None,
@@ -888,15 +955,21 @@ def _consensus_vote(
             logger.info(
                 f"Consensus: split candidate from {img_w}x{img_h} zone {zone} into {len(subcrops)} sub-candidates"
             )
+        zone_valid: List[Tuple[np.ndarray, int, int, int, int, float, int]] = []
         for split_index, subcrop in enumerate(subcrops):
-            is_valid, area, bbox_w, bbox_h, edge_px, fill_ratio, orb_keypoints = _candidate_meets_consensus_minimums(subcrop)
+            is_valid, area, bbox_w, bbox_h, edge_px, fill_ratio, sift_keypoints = _candidate_meets_consensus_minimums(subcrop)
             if not is_valid:
                 logger.info(
                     f"Consensus: skipping low-signal candidate from {img_w}x{img_h} zone {zone} "
                     f"(split {split_index + 1}/{len(subcrops)}, {area} px, bbox {bbox_w}x{bbox_h}, "
-                    f"edges {edge_px}, fill {fill_ratio:.4f}, orb_kp {orb_keypoints})"
+                    f"edges {edge_px}, fill {fill_ratio:.4f}, sift_kp {sift_keypoints})"
                 )
                 continue
+            zone_valid.append((subcrop, area, bbox_w, bbox_h, edge_px, fill_ratio, sift_keypoints))
+
+        zone_valid = _cap_zone_candidates(zone_valid, zone_label=f"{zone} ({img_w}x{img_h})")
+
+        for subcrop, area, bbox_w, bbox_h, edge_px, fill_ratio, sift_keypoints in zone_valid:
             records.append(
                 build_candidate_record(
                     subcrop,
@@ -1041,12 +1114,26 @@ def discover_watermark_candidates(
             stats_a = compute_stack_statistics(shuffled[:half])
             stats_b = compute_stack_statistics(shuffled[half:])
             if stats_a is not None and stats_b is not None:
-                mask_a = (stats_a["var_gray"] <= global_stable_threshold).astype(np.uint8) * 255
-                mask_b = (stats_b["var_gray"] <= global_stable_threshold).astype(np.uint8) * 255
+                # Self-consistent per-half threshold, not the pooled global one:
+                # a threshold calibrated on the full/pooled population is a poor
+                # statistical fit for half-sized-sample variance estimates.
+                # EMPIRICAL — measured 2026-07-19 across 9 buckets in 3 galleries
+                # (SQ/PB/SG): self-consistent per-half thresholds matched or beat
+                # the shared-threshold approach in every bucket with real
+                # background noise to reject, sometimes dramatically (one bucket
+                # went from 69% to 99%+ in-zone concentration). See TODO.md for
+                # the full comparison and harness.
+                log_var_a = np.log10(stats_a["var_gray"].astype(np.float64) + 1e-8)
+                log_var_b = np.log10(stats_b["var_gray"].astype(np.float64) + 1e-8)
+                threshold_a = _precision_outlier_threshold_from_log_precision(-log_var_a.flatten())
+                threshold_b = _precision_outlier_threshold_from_log_precision(-log_var_b.flatten())
+                mask_a = (stats_a["var_gray"] <= threshold_a).astype(np.uint8) * 255
+                mask_b = (stats_b["var_gray"] <= threshold_b).astype(np.uint8) * 255
                 precision_mask = cv2.bitwise_and(precision_mask, cv2.bitwise_and(mask_a, mask_b))
                 xval_pct = float(np.mean(precision_mask > 0) * 100)
                 logger.debug(
-                    f"Bucket {img_w}x{img_h}: after cross-sub-sample validation: "
+                    f"Bucket {img_w}x{img_h}: after cross-sub-sample validation "
+                    f"(self-consistent thresholds a={threshold_a:.2e}, b={threshold_b:.2e}): "
                     f"{xval_pct:.2f}% of pixels stable in both halves"
                 )
 

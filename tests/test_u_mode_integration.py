@@ -8,7 +8,7 @@ These exercise ``-U`` mode's production path against the built corpus under
 2. The discovered templates are converted through the same report/export helper
    the CLI uses, producing production ``WatermarkTemplate`` objects.
 3. Every corpus image with a matching original is attempted through the same
-   ORB cascade and inpainting path the CLI uses; outcomes are measured.
+   SIFT cascade and inpainting path the CLI uses; outcomes are measured.
 4. A novel image (an archived singleton never seen by discovery) watermarked
    with the same DPS mascot can be cleaned with the discovered templates.
 
@@ -18,7 +18,7 @@ Design notes:
 * To turn discovered crops into usable templates, the test uses
   ``reports._save_discovered_watermark_candidates`` just like ``cli.py``.
 * To align a template to a full image, the test uses
-  ``orb_matcher.try_watermark_cascade`` just like ``cli.py``.
+  ``sift_matcher.try_watermark_cascade`` just like ``cli.py``.
 * Inpainting uses LaMa when it is available; otherwise the test falls back to
   TELEA so the corpus is still exercised on CPU-only machines.
 
@@ -38,10 +38,10 @@ import numpy as np
 import pytest
 from skimage.metrics import structural_similarity as ssim
 
-from untextre import orb_matcher
+from untextre import sift_matcher
 from untextre.discovery import discover_watermark_candidates
 from untextre.inpaint import inpaint_image, initialize_lama_model
-from untextre.orb_matcher import WatermarkTemplate
+from untextre.sift_matcher import WatermarkTemplate
 from untextre.reports import _save_discovered_watermark_candidates
 from untextre.utils import load_image
 
@@ -316,9 +316,9 @@ def test_removal_metrics_across_corpus(
             f"shape mismatch for {wm_path.name}: {watermarked.shape} vs {original.shape}"
         )
 
-        cascade_result = orb_matcher.try_watermark_cascade(watermarked, discovered_templates)
+        cascade_result = sift_matcher.try_watermark_cascade(watermarked, discovered_templates)
         if cascade_result is None:
-            logger.info("ORB could not align template to %s - skipping", wm_path.name)
+            logger.info("SIFT could not align template to %s - skipping", wm_path.name)
             continue
         aligned += 1
 
@@ -363,7 +363,7 @@ def test_removal_metrics_across_corpus(
         )
 
     assert aligned >= 1, (
-        "ORB aligned the discovered template to zero images - "
+        "SIFT aligned the discovered template to zero images - "
         "removal quality was never exercised."
     )
     assert metrics_rows, "No aligned images were exercised"
@@ -396,10 +396,10 @@ def test_novel_image_removal_with_discovered_template(
     y = PORTRAIT_H - WM_SIZE_PORTRAIT - WM_MARGIN
     watermarked = _alpha_composite(clean, wm_resized, x, y)
 
-    cascade_result = orb_matcher.try_watermark_cascade(watermarked, discovered_templates)
+    cascade_result = sift_matcher.try_watermark_cascade(watermarked, discovered_templates)
     if cascade_result is None:
         pytest.skip(
-            "ORB could not align the discovered template to the novel image - "
+            "SIFT could not align the discovered template to the novel image - "
             "alignment quality is exercised by the in-sample test instead."
         )
 
