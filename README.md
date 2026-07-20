@@ -66,6 +66,17 @@ For development tools:
 uv sync --extra web --extra dev
 ```
 
+**Enable the pre-commit type-check hook** (one time per clone — `.git/hooks/`
+isn't tracked, so this must be pointed at the repo's tracked hook explicitly):
+
+```bash
+git config core.hooksPath .githooks
+```
+
+This runs `uv run basedpyright untextre` (the same check CI runs) before each
+commit, so a type error is caught locally instead of showing up as a CI
+surprise. Bypass for an intentional WIP commit with `git commit --no-verify`.
+
 ### Alternative: install with pip
 
 The repository includes a canonical `requirements.txt` for pip users. It is generated from `pyproject.toml` and `uv.lock`, and includes the PyTorch package indexes needed for the platform-specific Torch wheels.
