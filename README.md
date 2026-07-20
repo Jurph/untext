@@ -28,7 +28,7 @@ A tool for removing watermarks from images using consensus detection, Figure of 
 
 * **Text Detection via Three-Model Consensus**: Combines three text detection methods ([EAST](https://arxiv.org/abs/1704.03155), [EasyOCR](https://github.com/JaidedAI/EasyOCR), and a watermark-specific [YOLO11x](https://github.com/ultralytics/ultralytics) fine-tune) to find regions where multiple detectors agree, for higher-confidence text detection
 * **Figure of Merit (FOM) Analysis**: Within regions detected as containing text, identifies text-like color clusters using a weighted combination of TF-IDF distinctiveness, border underrepresentation, and connected-component fragmentation
-* **Known Watermark Detection via [ORB](https://doi.org/10.1109/ICCV.2011.6126544) feature matching** (`-K`): If you have isolated the watermark as a transparent PNG, `untextre` can localize that reusable watermark template in each image and use its alpha channel as the mask instead of the slower text-detection and color-estimation path. Matching is done via ORB (Oriented FAST and Rotated BRIEF).
+* **Known Watermark Detection via [SIFT](https://doi.org/10.1023/B:VISI.0000029664.99615.94) feature matching** (`-K`): If you have isolated the watermark as a transparent PNG, `untextre` can localize that reusable watermark template in each image and use its alpha channel as the mask instead of the slower text-detection and color-estimation path. Matching is done via SIFT (Scale-Invariant Feature Transform) with affine RANSAC.
 * **Automatic Watermark Discovery** (`-U`): Given a directory of at least 3 same-resolution images that all carry the same watermark, automatically discovers the template by finding pixels with near-zero population variance across the full image stack. Discovered templates are saved as RGBA PNGs for future reuse with `-K`. Works best with large, consistent image sets.
 * **Inpainting**: [LaMa](https://arxiv.org/abs/2109.07161) (default) or [TELEA](https://doi.org/10.1080/10867651.2004.10487596) inpainting, applied only to masked regions
 
@@ -36,7 +36,7 @@ A tool for removing watermarks from images using consensus detection, Figure of 
 
 **untextre** uses the following approach: 
 
-1. **Consensus Detection**: Runs EAST, EasyOCR, and YOLO11x detectors to find text regions where 2+ detectors agree; also runs ORB (Oriented FAST and Rotated BRIEF) against known watermarks that are stored in `/watermarks` to see if there's an obvious match
+1. **Consensus Detection**: Runs EAST, EasyOCR, and YOLO11x detectors to find text regions where 2+ detectors agree; also runs SIFT against known watermarks that are stored in `/watermarks` to see if there's an obvious match
 2. **Color Clustering**: For each consensus region, clusters all colors (inside and surrounding) using K-means
 3. **Figure of Merit Scoring**: Evaluates each cluster with a weighted FOM combining TF-IDF score (color distinctiveness vs. background), border ratio (text underrepresented at bbox edges), and connected-component fraction (text is fragmented, not one solid blob)
 4. **Adaptive Masking**: Accepts clusters whose FOM exceeds a threshold and whose largest connected component is below a guard value, then applies morphological cleanup
@@ -65,6 +65,17 @@ For development tools:
 ```bash
 uv sync --extra web --extra dev
 ```
+
+**Enable the pre-commit type-check hook** (one time per clone — `.git/hooks/`
+isn't tracked, so this must be pointed at the repo's tracked hook explicitly):
+
+```bash
+git config core.hooksPath .githooks
+```
+
+This runs `uv run basedpyright untextre` (the same check CI runs) before each
+commit, so a type error is caught locally instead of showing up as a CI
+surprise. Bypass for an intentional WIP commit with `git commit --no-verify`.
 
 ### Alternative: install with pip
 
@@ -178,7 +189,7 @@ python -m untextre.cli -i image.jpg -o results/ --keep-masks --verbose --timing
 #### Input/Output Control
 
 * `-K`, `--known-mask PATH` - Path to a BGRA/RGBA PNG of a known watermark/logo template, or a directory of templates
-  - Uses ORB feature matching to localize the watermark in each input image at any scale/position
+  - Uses SIFT feature matching to localize the watermark in each input image at any scale/position
   - The alpha channel defines which localized watermark pixels to mask
   - **Skips consensus detection** — about 10x faster for consistent watermarks
   - Example: `--known-mask logo_template.png`
@@ -304,7 +315,7 @@ If wrong colors are being masked:
 
 ### Watermark Detection
 
-The system runs **ORB** against the target image, testing transparent PNG watermark templates from `-K` or the `watermarks/` subfolder. If a match is found, the localized template's alpha channel is used to construct the binary mask for that image. This is distinct from `--maskfile`, which takes a fixed black/white mask already aligned to one image. If no known watermark matches, the pipeline runs three production detectors:
+The system runs **SIFT** against the target image, testing transparent PNG watermark templates from `-K` or the `watermarks/` subfolder. If a match is found, the localized template's alpha channel is used to construct the binary mask for that image. This is distinct from `--maskfile`, which takes a fixed black/white mask already aligned to one image. If no known watermark matches, the pipeline runs three production detectors:
 
 - **EAST**: Fast OpenCV-based scene-text detection
 - **EasyOCR / CRAFT**: OCR-oriented text detection
@@ -323,9 +334,9 @@ When the source of a watermark is unknown, `-U` finds it automatically using pop
 5. **Core-connected threshold sweep**: Within each support component, discovery finds the darkest connected core and then sweeps the threshold upward through the 0-255 variance field. At each level it keeps only the connected region containing that core.
 6. **Knee selection**: Each growth stage is scored for darkness concentration, fill, and compactness. Discovery keeps the threshold level where the core-connected region is still compact and coherent, before diffuse low-variance background starts to dominate. Weak compact outliers are filtered using a bucket-relative score fence rather than a fixed watermark-size ceiling.
 7. **Template crop**: Each surviving candidate region is cropped from the pixel-wise mean of the bucket with an 8-pixel transparent border. The alpha channel is the candidate mask.
-8. **Cross-bucket validation**: If images at multiple resolutions all carry the same watermark (scaled), their candidate crops are compared by IoU on the alpha channel. Crops with IoU ≥ 0.5 are merged into one family; the largest crop (most ORB keypoints) is kept as the canonical template.
+8. **Cross-bucket validation**: If images at multiple resolutions all carry the same watermark (scaled), their candidate crops are compared by IoU on the alpha channel. Crops with IoU ≥ 0.5 are merged into one family; the largest crop (most SIFT keypoints) is kept as the canonical template.
 
-The discovered template is saved to the output directory and immediately used to process every image in the batch via the standard ORB pipeline. Save it and pass it to `-K` on future batches to skip the discovery step.
+The discovered template is saved to the output directory and immediately used to process every image in the batch via the standard SIFT pipeline. Save it and pass it to `-K` on future batches to skip the discovery step.
 
 ### Figure of Merit (FOM) Analysis
 
@@ -351,7 +362,7 @@ In a region where text is known to exist, we identify the text color by scoring 
 2. Zhou, X.; Yao, C.; Wen, H.; Wang, Y.; Zhou, S.; He, W.; Liang, J. "EAST: An Efficient and Accurate Scene Text Detector." *CVPR*, 2017. [arXiv:1704.03155](https://arxiv.org/abs/1704.03155) — **EAST**
 3. Baek, Y.; Lee, B.; Han, D.; Yun, S.; Lee, H. "Character Region Awareness for Text Detection." *CVPR*, 2019. [arXiv:1904.01941](https://arxiv.org/abs/1904.01941) — **CRAFT**, the detection model used by [EasyOCR](https://github.com/JaidedAI/EasyOCR)
 4. Sapkota, R.; et al. "Ultralytics YOLO Evolution: An Overview of YOLO26, YOLO11, YOLOv8 and YOLOv5 Object Detectors for Computer Vision and Pattern Recognition." *arXiv*, 2026. [arXiv:2510.09653](https://arxiv.org/abs/2510.09653) — **YOLO11-era** overview for the runtime family used by this project's watermark-specific fine-tune. For implementation details, see the Ultralytics YOLO11 docs: https://docs.ultralytics.com/models/yolo11/
-5. Rublee, E.; Rabaud, V.; Konolige, K.; Bradski, G. "ORB: An Efficient Alternative to SIFT or SURF." *ICCV*, 2011, pp. 2564–2571. [DOI:10.1109/ICCV.2011.6126544](https://doi.org/10.1109/ICCV.2011.6126544) — **ORB**
+5. Lowe, D.G. "Distinctive Image Features from Scale-Invariant Keypoints." *International Journal of Computer Vision*, vol. 60, no. 2, 2004, pp. 91–110. [DOI:10.1023/B:VISI.0000029664.99615.94](https://doi.org/10.1023/B:VISI.0000029664.99615.94) — **SIFT**
 6. Telea, A. "An Image Inpainting Technique Based on the Fast Marching Method." *Journal of Graphics Tools*, vol. 9, no. 1, 2004, pp. 23–34. [DOI:10.1080/10867651.2004.10487596](https://doi.org/10.1080/10867651.2004.10487596) — **TELEA**
 
 ### License
