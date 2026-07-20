@@ -1,0 +1,16 @@
+#!/bin/sh
+# Type-check staged Python changes before allowing a commit.
+#
+# Runs the exact same command CI runs (.circleci/config.yml: "Run basedpyright"),
+# so a type error never reaches CI as a surprise.
+#
+# One-time setup for a fresh clone (this directory isn't auto-discovered by
+# git; .git/hooks/ isn't tracked, so hooks must be pointed here explicitly):
+#   git config core.hooksPath .githooks
+#
+# Bypass for an intentional WIP commit: git commit --no-verify
+
+set -e
+
+echo "pre-commit: running basedpyright..."
+uv run basedpyright untextre
