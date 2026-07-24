@@ -59,6 +59,38 @@ class TimingReportConfig:
     forced_bbox: Optional[tuple] = None
 
 
+def format_candidate_performance(
+    template_wins: dict[str, List[int]],
+    n_images: int,
+) -> str:
+    """Summarize which watermark candidates matched best, sorted best-to-worst.
+
+    Ranks by match count, then median inliers, then max inliers, so with several
+    near-duplicate candidates the user can tell which to keep. Candidates that
+    never matched are listed last. `template_wins` maps candidate name -> the
+    inlier count from each image that candidate won.
+    """
+    def rank_key(item: tuple[str, List[int]]) -> tuple:
+        _, inliers = item
+        if not inliers:
+            return (0, 0.0, 0)
+        return (len(inliers), statistics.median(inliers), max(inliers))
+
+    ranked = sorted(template_wins.items(), key=rank_key, reverse=True)
+    width = max((len(name) for name in template_wins), default=0)
+    lines = [f"Candidate performance (best to worst) across {n_images} image(s):"]
+    for name, inliers in ranked:
+        if inliers:
+            med = statistics.median(inliers)
+            lines.append(
+                f"  {name:<{width}}  matched {len(inliers):>3}/{n_images:<3}  "
+                f"median {med:>4g}i  max {max(inliers):>3}i"
+            )
+        else:
+            lines.append(f"  {name:<{width}}  matched   0/{n_images:<3}  (no matches)")
+    return "\n".join(lines)
+
+
 def _save_clean_timing_report(
     detailed_timings: list,
     total_time: float,
@@ -116,7 +148,7 @@ def _save_clean_timing_report(
             color_time = timing.get('color_time')
             mask_time = timing.get('mask_time')
             inpaint_time = timing.get('inpaint_time')
-            feature_inliers = timing.get('feature_inliers', timing.get('sift_inliers', timing.get('orb_inliers')))
+            feature_inliers = timing.get('feature_inliers', timing.get('sift_inliers'))
             color_time_str = "N/A" if color_time is None else f"{color_time:>6.1f}"
             mask_time_str = "N/A" if mask_time is None else f"{mask_time:>4.1f}"
             inpaint_time_str = "N/A" if inpaint_time is None else f"{inpaint_time:>5.1f}"

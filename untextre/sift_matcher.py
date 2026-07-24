@@ -20,6 +20,15 @@ SIFT_MIN_MATCHES = 5
 SIFT_RANSAC_REPROJ_THRESHOLD = 5.0
 SIFT_MAX_KEYPOINTS = 10_000
 
+# Corner "push hard" cascade for scoped -K matching: search cheap corners first,
+# then the full frame, with early exit. Window = multiple x the template's mark;
+# marks whose window would not fit a corner are tried full-frame only. Only worth
+# it for a few user-specified templates (cost is O(templates x regions)), never
+# the whole watermarks/ library.
+CORNER_SEARCH_ORDER: Tuple[str, ...] = ("LR", "LL", "full", "UR", "UL")
+CORNER_WINDOW_MULTIPLE = 2
+CORNER_ELIGIBLE_FRACTION = 0.6
+
 
 @dataclass(frozen=True)
 class TemplateSiftFeatures:
@@ -372,21 +381,14 @@ def _candidate_for_template(
     )
 
 
-def try_watermark_cascade(
+def _best_candidate(
     image: np.ndarray,
     templates: List[WatermarkTemplate],
-    min_matches: int = SIFT_MIN_MATCHES,
-    dilation_pixels: int = 15,
-) -> Optional[Tuple[np.ndarray, Tuple[int, int, int, int], str, int]]:
-    """Try every watermark template with SIFT; return the best single match."""
-    if not templates:
-        logger.info("No template matched (tried 0)")
-        return None
-
-    prepared_target = prepare_target_sift_features(image)
-    if prepared_target is None:
-        return None
-
+    min_matches: int,
+    dilation_pixels: int,
+    prepared_target: PreparedTargetSift,
+) -> Optional[SiftMatchCandidate]:
+    """Best-ranked template match against an already-prepared target."""
     best: Optional[SiftMatchCandidate] = None
     for template in templates:
         logger.info(f"Trying template: {template.name}")
@@ -405,10 +407,115 @@ def try_watermark_cascade(
         )
         if best is None or candidate.rank_key > best.rank_key:
             best = candidate
+    return best
 
+
+def try_watermark_cascade(
+    image: np.ndarray,
+    templates: List[WatermarkTemplate],
+    min_matches: int = SIFT_MIN_MATCHES,
+    dilation_pixels: int = 15,
+) -> Optional[Tuple[np.ndarray, Tuple[int, int, int, int], str, int]]:
+    """Try every watermark template full-frame; return the best single match."""
+    if not templates:
+        logger.info("No template matched (tried 0)")
+        return None
+
+    prepared_target = prepare_target_sift_features(image)
+    if prepared_target is None:
+        return None
+
+    best = _best_candidate(image, templates, min_matches, dilation_pixels, prepared_target)
     if best is not None:
         logger.info(f"Best template: {best.template_name} ({best.inliers} inliers)")
         return best.mask, best.bbox, best.template_name, best.inliers
 
     logger.info(f"No template matched (tried {len(templates)})")
+    return None
+
+
+def _template_mark_size(template: WatermarkTemplate) -> int:
+    """Longest side (px) of the template's alpha footprint — the visible mark."""
+    ys, xs = np.nonzero(template.sift_features.alpha > 0)
+    if len(ys) == 0:
+        return 0
+    return max(int(ys.max() - ys.min() + 1), int(xs.max() - xs.min() + 1))
+
+
+def _corner_crop(image: np.ndarray, region: str, win: int) -> Tuple[np.ndarray, int, int]:
+    """Return (crop, row_offset, col_offset) for a named region ('full' or a corner)."""
+    h, w = image.shape[:2]
+    if region == "full":
+        return image, 0, 0
+    side = min(win, h, w)
+    r0 = 0 if region in ("UR", "UL") else h - side
+    c0 = 0 if region in ("LL", "UL") else w - side
+    return image[r0:r0 + side, c0:c0 + side], r0, c0
+
+
+def cascade_corners(
+    image: np.ndarray,
+    templates: List[WatermarkTemplate],
+    min_matches: int = SIFT_MIN_MATCHES,
+    dilation_pixels: int = 15,
+    order: Tuple[str, ...] = CORNER_SEARCH_ORDER,
+) -> Optional[Tuple[np.ndarray, Tuple[int, int, int, int], str, int]]:
+    """Scoped "push hard" cascade for user-specified watermark(s).
+
+    Searches cheap corners before the full frame (early exit on first hit) so a
+    small/faint corner logo is hunted in a tight per-template window instead of
+    being diluted across the whole image. Cost is O(templates x regions), so this
+    is for a few scoped -K templates, never the whole watermarks/ library. Marks
+    whose window would not fit a corner are tried full-frame only. Crop matches
+    are remapped to full-image coordinates.
+    """
+    if not templates:
+        logger.info("No template matched (tried 0)")
+        return None
+
+    h, w = image.shape[:2]
+    max_corner = CORNER_ELIGIBLE_FRACTION * min(h, w)
+    eligible: List[Tuple[WatermarkTemplate, int]] = []
+    for template in templates:
+        win = CORNER_WINDOW_MULTIPLE * _template_mark_size(template)
+        if 0 < win <= max_corner:
+            eligible.append((template, win))
+
+    def search_corner(region: str) -> Optional[Tuple[SiftMatchCandidate, int, int]]:
+        best: Optional[Tuple[SiftMatchCandidate, int, int]] = None
+        for template, win in eligible:
+            crop, r0, c0 = _corner_crop(image, region, win)
+            prepared = prepare_target_sift_features(crop)
+            if prepared is None:
+                continue
+            candidate = _candidate_for_template(crop, template, min_matches, dilation_pixels, prepared)
+            if candidate is None:
+                continue
+            if best is None or candidate.rank_key > best[0].rank_key:
+                best = (candidate, r0, c0)
+        return best
+
+    for region in order:
+        if region == "full":
+            prepared = prepare_target_sift_features(image)
+            if prepared is None:
+                continue
+            candidate = _best_candidate(image, templates, min_matches, dilation_pixels, prepared)
+            hit = (candidate, 0, 0) if candidate is not None else None
+        else:
+            hit = search_corner(region) if eligible else None
+        if hit is None:
+            continue
+        candidate, r0, c0 = hit
+        full_mask = np.zeros((h, w), dtype=np.uint8)
+        ch, cw = candidate.mask.shape[:2]
+        full_mask[r0:r0 + ch, c0:c0 + cw] = candidate.mask
+        bx, by, bw, bh = candidate.bbox
+        logger.info(
+            f"Corner cascade: {candidate.template_name} matched in {region} "
+            f"({candidate.inliers} inliers)"
+        )
+        return full_mask, (bx + c0, by + r0, bw, bh), candidate.template_name, candidate.inliers
+
+    logger.info(f"No template matched in corner cascade (tried {len(templates)})")
     return None

@@ -154,6 +154,9 @@ def main() -> None:
     # If templates came from auto-check of watermarks/, we try them first but fall
     # back to consensus detection, so we need detection models loaded too.
     explicit_known_mask = bool(args.known_mask) or bool(args.unknown_watermark)
+    # -K names specific watermark(s): push hard with the scoped corner cascade.
+    # The auto watermarks/ library stays full-frame (corner cost scales with count).
+    use_corner_cascade = bool(args.known_mask)
     model_init_start = time.time()
 
     if explicit_known_mask:
@@ -171,6 +174,10 @@ def main() -> None:
     model_init_time = time.time() - model_init_start
     logger.info(f"Models ready in {model_init_time:.1f} seconds")
     
+    # Track per-candidate match performance for an end-of-run summary.
+    template_wins: dict[str, list[int]] = {t.name: [] for t in watermark_templates}
+    template_images = 0
+
     # Process each image
     for i, image_path in enumerate(image_files, 1):
         logger.info(f"Processing image {i}/{len(image_files)}: {image_path.name}")
@@ -186,11 +193,18 @@ def main() -> None:
             if watermark_templates:
                 image = load_image(image_path)
                 if image is not None:
-                    cascade_result = sift_matcher.try_watermark_cascade(
-                        image, watermark_templates,
-                    )
+                    template_images += 1
+                    if use_corner_cascade:
+                        cascade_result = sift_matcher.cascade_corners(
+                            image, watermark_templates,
+                        )
+                    else:
+                        cascade_result = sift_matcher.try_watermark_cascade(
+                            image, watermark_templates,
+                        )
                     if cascade_result is not None:
                         mask, bbox, tmpl_name, sift_inliers = cascade_result
+                        template_wins.setdefault(tmpl_name, []).append(sift_inliers)
                         # Inpaint and save
                         from .inpaint import inpaint_image
 
@@ -273,6 +287,9 @@ def main() -> None:
     logger.info(f"Total elapsed time: {total_time:.1f} seconds")
     logger.info(f"Average time per image: {avg_time:.1f} seconds")
     logger.info(f"Images processed: {len(image_files)}")
+
+    if watermark_templates:
+        logger.info("\n" + reports.format_candidate_performance(template_wins, template_images))
     
     # Detailed timing report if requested
     if args.timing and detailed_timings:

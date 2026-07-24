@@ -7,6 +7,7 @@ from untextre.reports import (
     TimingReportConfig,
     _save_clean_timing_report,
     _save_discovered_watermark_candidates,
+    format_candidate_performance,
 )
 
 class TestSaveDiscoveredWatermarkCandidates:
@@ -30,6 +31,31 @@ class TestSaveDiscoveredWatermarkCandidates:
 
         saved = cv2.imread(str(tmp_path / "watermark_candidate.png"), cv2.IMREAD_UNCHANGED)
         np.testing.assert_array_equal(saved, bgra)
+
+
+class TestFormatCandidatePerformance:
+    def test_ranks_by_matches_then_median_then_max(self):
+        wins = {
+            "a.png": [7, 12, 5, 9, 8],  # 5 matches, median 8
+            "b.png": [6, 9],            # 2 matches, median 7.5
+            "c.png": [5],               # 1 match
+            "d.png": [],                # 0 matches -> last
+        }
+        lines = format_candidate_performance(wins, 33).splitlines()
+        assert lines[0].startswith("Candidate performance (best to worst) across 33")
+        assert [ln.split()[0] for ln in lines[1:]] == ["a.png", "b.png", "c.png", "d.png"]
+        assert "5/33" in lines[1] and "max  12i" in lines[1]
+        assert "median  7.5i" in lines[2]
+
+    def test_tiebreak_on_median_then_max(self):
+        # equal match counts -> higher median wins
+        wins = {"lo.png": [5, 5], "hi.png": [9, 9]}
+        lines = format_candidate_performance(wins, 10).splitlines()
+        assert [ln.split()[0] for ln in lines[1:]] == ["hi.png", "lo.png"]
+
+    def test_zero_match_candidate_marked(self):
+        out = format_candidate_performance({"x.png": []}, 5)
+        assert "(no matches)" in out
 
 
 def _make_timing(

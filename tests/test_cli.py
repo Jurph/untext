@@ -314,7 +314,7 @@ class TestMainIntegrationPaths:
         monkeypatch.setattr(inpaint_mod, "initialize_lama_model", lambda **kw: True)
 
         monkeypatch.setattr(sift_matcher_mod, "load_watermark_templates", lambda *_a, **_kw: [SimpleNamespace(name="template.png")])
-        monkeypatch.setattr(sift_matcher_mod, "try_watermark_cascade", lambda *a, **kw: None)
+        monkeypatch.setattr(sift_matcher_mod, "cascade_corners", lambda *a, **kw: None)
 
         # process_single_image should NOT be called (no fallback)
         def fail_if_called(**kw):
@@ -360,7 +360,7 @@ class TestMainIntegrationPaths:
         monkeypatch.setattr(sift_matcher_mod, "load_watermark_templates", lambda *_a, **_kw: [SimpleNamespace(name="template.png")])
         monkeypatch.setattr(
             sift_matcher_mod,
-            "try_watermark_cascade",
+            "cascade_corners",
             lambda *_a, **_kw: (
                 np.zeros((50, 50), dtype=np.uint8),
                 (5, 5, 20, 20),
