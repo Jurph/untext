@@ -6,6 +6,7 @@ import json
 import random
 import statistics
 from pathlib import Path
+from typing import cast
 
 import cv2
 import numpy as np
@@ -13,7 +14,7 @@ import pytest
 from skimage.metrics import structural_similarity as ssim
 
 from untextre.color_metrics import masked_delta_e
-from untextre.inpaint import initialize_lama_model
+from untextre.inpaint import InpaintMethod, initialize_lama_model
 from untextre.pipeline import MASK_MODE_CHOICES, initialize_consensus_models, mask_mode_options, process_image_array
 from untextre.synthetic_text_benchmark import (
     generate_synthetic_text_case,
@@ -53,7 +54,10 @@ def _best_bbox_iou(
 def _masked_ssim_score(before: np.ndarray, after: np.ndarray, mask: np.ndarray) -> float:
     before_gray = cv2.cvtColor(before, cv2.COLOR_BGR2GRAY)
     after_gray = cv2.cvtColor(after, cv2.COLOR_BGR2GRAY)
-    _score, ssim_map = ssim(before_gray, after_gray, data_range=255, full=True)
+    _score, ssim_map = cast(
+        tuple[float, np.ndarray],
+        ssim(before_gray, after_gray, data_range=255, full=True),
+    )
     return float(np.mean(ssim_map[mask.astype(bool)]))
 
 
@@ -102,7 +106,7 @@ def _row_summary(rows: list[dict]) -> str:
 
 
 @pytest.fixture(scope="module")
-def inpaint_method() -> str:
+def inpaint_method() -> InpaintMethod:
     if initialize_lama_model(device="cuda"):
         return "lama"
     if initialize_lama_model(device="cpu"):
@@ -113,17 +117,21 @@ def inpaint_method() -> str:
 def test_generated_text_monte_carlo_benchmark(
     request: pytest.FixtureRequest,
     test_images_dir: Path,
-    inpaint_method: str,
+    inpaint_method: InpaintMethod,
     save_images_dir: "Path | None",
 ) -> None:
     case_count = request.config.getoption("--generated-text-cases")
+    assert isinstance(case_count, int)
     if case_count <= 0:
         pytest.skip("--generated-text-cases must be positive")
 
     seed = request.config.getoption("--generated-text-seed")
-    color_sensitivities = parse_int_csv(
-        request.config.getoption("--generated-text-color-sensitivities")
+    assert isinstance(seed, int)
+    color_sensitivity_value = request.config.getoption(
+        "--generated-text-color-sensitivities"
     )
+    assert isinstance(color_sensitivity_value, str)
+    color_sensitivities = parse_int_csv(color_sensitivity_value)
     report_path_value = request.config.getoption("--generated-text-report")
     report_path = Path(report_path_value) if report_path_value else None
 

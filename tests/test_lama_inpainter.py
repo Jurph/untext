@@ -14,7 +14,7 @@ import cv2
 import numpy as np
 import pytest
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, cast
 from unittest.mock import MagicMock
 
 from untextre.telea_inpainter import TeleaInpainter
@@ -54,7 +54,7 @@ def create_test_image(size: Tuple[int, int] = (100, 100), text: str = "Test") ->
     mask = np.zeros(size, dtype=np.uint8)
     
     # Fill text region in mask
-    cv2.putText(mask, text, (x, y), font, font_scale, 255, thickness)
+    cv2.putText(mask, text, (x, y), font, font_scale, (255,), thickness)
     
     return image, mask
 
@@ -147,9 +147,9 @@ def test_inpaint_with_invalid_input() -> None:
         
         # Test with None
         with pytest.raises(ValueError):
-            inpainter.inpaint(None, mask)
+            inpainter.inpaint(cast(np.ndarray, None), mask)
         with pytest.raises(ValueError):
-            inpainter.inpaint(image, None)
+            inpainter.inpaint(image, cast(np.ndarray, None))
         
         # Test with wrong dimensions
         with pytest.raises(ValueError):

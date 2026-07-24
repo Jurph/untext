@@ -77,10 +77,23 @@ def build_template(svg_mask: np.ndarray, cand_bgra: np.ndarray, name: str, use_c
     cand_f = cv2.GaussianBlur(cand_alpha, (7, 7), 0).astype(np.float32) / 255
     warp = np.eye(2, 3, dtype=np.float32)
     try:
-        cc, warp = cv2.findTransformECC(cand_f, shape_f, warp, cv2.MOTION_AFFINE,
-                                        (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 500, 1e-7), None, 5)
-        shape = cv2.warpAffine(shape, warp, (w, h), flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
-                               borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+        cc, warp = cv2.findTransformECC(  # pyright: ignore[reportCallIssue]
+            cand_f,
+            shape_f,
+            warp,
+            cv2.MOTION_AFFINE,
+            (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 500, 1e-7),
+            None,  # pyright: ignore[reportArgumentType] -- valid OpenCV noArray sentinel
+            5,
+        )
+        shape = cv2.warpAffine(
+            shape,
+            warp,
+            (w, h),
+            flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=(0.0,),
+        )
         _, shape = cv2.threshold(shape, 96, 255, cv2.THRESH_BINARY)
         print(f"{name}: ECC {cc:.4f}")
     except cv2.error as e:

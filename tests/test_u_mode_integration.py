@@ -31,7 +31,7 @@ from __future__ import annotations
 import logging
 import statistics
 from pathlib import Path
-from typing import List
+from typing import List, cast
 
 import cv2
 import numpy as np
@@ -40,7 +40,7 @@ from skimage.metrics import structural_similarity as ssim
 
 from untextre import sift_matcher
 from untextre.discovery import discover_watermark_candidates
-from untextre.inpaint import inpaint_image, initialize_lama_model
+from untextre.inpaint import InpaintMethod, inpaint_image, initialize_lama_model
 from untextre.sift_matcher import WatermarkTemplate
 from untextre.reports import _save_discovered_watermark_candidates
 from untextre.utils import load_image
@@ -54,7 +54,7 @@ WM_MARGIN = 10
 
 
 @pytest.fixture(scope="module")
-def inpaint_method() -> str:
+def inpaint_method() -> InpaintMethod:
     """Prefer LaMa, but fall back to TELEA if no GPU-backed model is available."""
     if initialize_lama_model(device="cuda"):
         return "lama"
@@ -203,8 +203,8 @@ def iou(mask_a: np.ndarray, mask_b: np.ndarray) -> float:
 def _ssim_score(a: np.ndarray, b: np.ndarray) -> float:
     """Return SSIM for grayscale or 3-channel uint8 images."""
     if a.ndim == 2:
-        return float(ssim(a, b, data_range=255))
-    return float(ssim(a, b, data_range=255, channel_axis=2))
+        return float(cast(float, ssim(a, b, data_range=255)))
+    return float(cast(float, ssim(a, b, data_range=255, channel_axis=2)))
 
 
 def _masked_ssim_score(before: np.ndarray, after: np.ndarray, mask: np.ndarray) -> float:
@@ -216,7 +216,10 @@ def _masked_ssim_score(before: np.ndarray, after: np.ndarray, mask: np.ndarray) 
 
     before_gray = cv2.cvtColor(before, cv2.COLOR_BGR2GRAY) if before.ndim == 3 else before
     after_gray = cv2.cvtColor(after, cv2.COLOR_BGR2GRAY) if after.ndim == 3 else after
-    _score, ssim_map = ssim(before_gray, after_gray, data_range=255, full=True)
+    _score, ssim_map = cast(
+        tuple[float, np.ndarray],
+        ssim(before_gray, after_gray, data_range=255, full=True),
+    )
     return float(np.mean(ssim_map[mask.astype(bool)]))
 
 
@@ -301,7 +304,7 @@ def test_removal_metrics_across_corpus(
     discovered_templates: List[WatermarkTemplate],
     metrics_rows: List[dict],
     save_images_dir: "Path | None",
-    inpaint_method: str,
+    inpaint_method: InpaintMethod,
 ) -> None:
     """Collect SSIM and LAB-MAE deltas for every aligned corpus image."""
     aligned = 0
@@ -379,7 +382,7 @@ def test_novel_image_removal_with_discovered_template(
     discovered_templates: List[WatermarkTemplate],
     metrics_rows: List[dict],
     save_images_dir: "Path | None",
-    inpaint_method: str,
+    inpaint_method: InpaintMethod,
 ) -> None:
     """A never-seen image watermarked with the DPS mascot can be cleaned."""
     singleton_path = images_root / "archived" / "klimt_the_kiss.jpg"

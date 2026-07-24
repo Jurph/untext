@@ -33,7 +33,9 @@ def load_gray(path: Path) -> np.ndarray:
 
 def orb_affine(src: np.ndarray, ref: np.ndarray) -> np.ndarray | None:
     """Estimate 2x3 affine mapping src -> ref via ORB. None on failure."""
-    orb = cv2.ORB_create(nfeatures=4000, scaleFactor=1.15, nlevels=12)
+    orb = cv2.ORB_create(  # pyright: ignore[reportAttributeAccessIssue] -- runtime OpenCV API missing from stubs
+        nfeatures=4000, scaleFactor=1.15, nlevels=12
+    )
     # Blur slightly so ORB sees stroke shapes, not binarization speckle.
     src_b = cv2.GaussianBlur(src, (5, 5), 0)
     ref_b = cv2.GaussianBlur(ref, (5, 5), 0)
@@ -46,10 +48,13 @@ def orb_affine(src: np.ndarray, ref: np.ndarray) -> np.ndarray | None:
     good = [m for m, n in (p for p in knn if len(p) == 2) if m.distance < 0.75 * n.distance]
     if len(good) < 8:
         return None
-    pts1 = np.float32([kp1[m.queryIdx].pt for m in good])
-    pts2 = np.float32([kp2[m.trainIdx].pt for m in good])
-    M, inliers = cv2.estimateAffinePartial2D(
-        pts1, pts2, method=cv2.RANSAC, ransacReprojThreshold=3.0
+    pts1 = np.asarray([kp1[m.queryIdx].pt for m in good], dtype=np.float32).reshape(-1, 2)
+    pts2 = np.asarray([kp2[m.trainIdx].pt for m in good], dtype=np.float32).reshape(-1, 2)
+    M, inliers = cv2.estimateAffinePartial2D(  # pyright: ignore[reportCallIssue]
+        pts1,  # pyright: ignore[reportArgumentType] -- ndarray overload missing from stubs
+        pts2,  # pyright: ignore[reportArgumentType] -- ndarray overload missing from stubs
+        method=cv2.RANSAC,
+        ransacReprojThreshold=3.0,
     )
     if M is None or inliers is None or inliers.sum() < 6:
         return None
@@ -66,8 +71,14 @@ def ecc_refine(
     ref_f = cv2.GaussianBlur(ref, (9, 9), 0).astype(np.float32) / 255.0
     criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 500, 1e-7)
     try:
-        cc, warp = cv2.findTransformECC(
-            ref_f, src_f, warp, cv2.MOTION_AFFINE, criteria, None, 5
+        cc, warp = cv2.findTransformECC(  # pyright: ignore[reportCallIssue]
+            ref_f,
+            src_f,
+            warp,
+            cv2.MOTION_AFFINE,
+            criteria,
+            None,  # pyright: ignore[reportArgumentType] -- valid OpenCV noArray sentinel
+            5,
         )
         print(f"    ECC: correlation {cc:.4f}")
         return warp
@@ -108,7 +119,7 @@ def main() -> None:
                 (rw, rh),
                 flags=cv2.INTER_LINEAR | cv2.WARP_INVERSE_MAP,
                 borderMode=cv2.BORDER_CONSTANT,
-                borderValue=0,
+                borderValue=(0.0,),
             )
         aligned.append(warped.astype(np.float32) / 255.0)
 

@@ -3,13 +3,14 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import cast
 
 import cv2
 import numpy as np
 from skimage.metrics import structural_similarity
 
 from untextre.color_metrics import delta_e
-from untextre.inpaint import inpaint_image
+from untextre.inpaint import InpaintMethod, inpaint_image
 from untextre.mask_experiments import DEFAULT_MANIFEST, load_manifest_cases, truth_target_mask
 
 
@@ -29,11 +30,13 @@ def main() -> None:
         for cfg in configs:
             config_id = cfg.get("config_id", cfg.get("config", {}).get("config_id", "unknown"))
             for case in cases:
-                row = evaluate_case(case, config_id, args.method)
+                row = evaluate_case(
+                    case, config_id, cast(InpaintMethod, args.method)
+                )
                 handle.write(json.dumps(row, sort_keys=True) + "\n")
 
 
-def evaluate_case(case: dict, config_id: str, method: str) -> dict:
+def evaluate_case(case: dict, config_id: str, method: InpaintMethod) -> dict:
     watermarked = cv2.imread(str(case["image_path"]), cv2.IMREAD_COLOR)
     clean_path = case.get("clean_path")
     clean = cv2.imread(str(clean_path), cv2.IMREAD_COLOR) if clean_path else None
@@ -84,7 +87,12 @@ def _ssim(a: np.ndarray, b: np.ndarray) -> float:
     win_size = min(7, min_side if min_side % 2 == 1 else min_side - 1)
     if win_size < 3:
         return 1.0 if np.array_equal(a, b) else 0.0
-    return float(structural_similarity(a, b, channel_axis=2, win_size=win_size))
+    return float(
+        cast(
+            float,
+            structural_similarity(a, b, channel_axis=2, win_size=win_size),
+        )
+    )
 
 
 def _gain_ratio(gain: float, possible: float) -> float:

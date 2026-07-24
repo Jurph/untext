@@ -321,6 +321,7 @@ class TestCalculateBboxSuperset:
         ]
         image_shape = (200, 200)
         superset = calculate_bbox_superset(bboxes, image_shape=image_shape)
+        assert superset is not None
         
         # Should be clamped to image bounds
         assert superset[0] + superset[2] <= 200, "Should not exceed image width"

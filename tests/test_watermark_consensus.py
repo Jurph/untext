@@ -72,12 +72,13 @@ def make_record(
 
 def make_related_record(index: int) -> CandidateRecord:
     variants = [
-        dict(rect_h=46, rect_w=98, dx=0, dy=0),
-        dict(rect_h=42, rect_w=90, dx=7, dy=5),
-        dict(rect_h=40, rect_w=86, dx=12, dy=8),
+        (46, 98, 0, 0),
+        (42, 90, 7, 5),
+        (40, 86, 12, 8),
     ]
+    rect_h, rect_w, dx, dy = variants[index]
     return make_record(
-        make_rect_bgra(**variants[index]),
+        make_rect_bgra(rect_h=rect_h, rect_w=rect_w, dx=dx, dy=dy),
         family_key=(720 + index * 11, 540 + index * 7),
         candidate_index=index,
     )

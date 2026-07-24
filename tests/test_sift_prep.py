@@ -16,9 +16,16 @@ def _make_sift_ready_candidate(size: int = 128) -> np.ndarray:
     cv2.circle(bgr, center, size // 3, (220, 220, 220), 6, cv2.LINE_AA)
     cv2.circle(bgr, center, size // 7, (220, 220, 220), -1, cv2.LINE_AA)
     cv2.line(bgr, (size // 5, size // 2), (size - size // 5, size // 2), (220, 220, 220), 4, cv2.LINE_AA)
-    cv2.circle(alpha, center, size // 3, 255, 6, cv2.LINE_AA)
-    cv2.circle(alpha, center, size // 7, 255, -1, cv2.LINE_AA)
-    cv2.line(alpha, (size // 5, size // 2), (size - size // 5, size // 2), 255, 4, cv2.LINE_AA)
+    cv2.circle(alpha, center, size // 3, (255,), 6, cv2.LINE_AA)
+    cv2.circle(alpha, center, size // 7, (255,), -1, cv2.LINE_AA)
+    cv2.line(
+        alpha,
+        (size // 5, size // 2),
+        (size - size // 5, size // 2),
+        (255,),
+        4,
+        cv2.LINE_AA,
+    )
     for x, y in (
         (size // 4, size // 4),
         (size - size // 4 - corner_size, size // 4),
@@ -26,7 +33,7 @@ def _make_sift_ready_candidate(size: int = 128) -> np.ndarray:
         (size - size // 4 - corner_size, size - size // 4 - corner_size),
     ):
         cv2.rectangle(bgr, (x, y), (x + corner_size, y + corner_size), (220, 220, 220), -1)
-        cv2.rectangle(alpha, (x, y), (x + corner_size, y + corner_size), 255, -1)
+        cv2.rectangle(alpha, (x, y), (x + corner_size, y + corner_size), (255,), -1)
     return np.dstack([bgr, alpha])
 
 

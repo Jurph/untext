@@ -13,4 +13,4 @@
 set -e
 
 echo "pre-commit: running basedpyright..."
-uv run basedpyright untextre
+uv run basedpyright untextre tests scripts

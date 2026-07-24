@@ -94,6 +94,7 @@ class TestSpatialTfIdf:
         bbox = (50, 80, 100, 40)
         
         mask = find_mask_by_spatial_tf_idf(image, bbox, num_clusters=4, debug=False)
+        assert isinstance(mask, np.ndarray)
         
         assert mask.shape == (40, 100), "Mask should match bbox dimensions (h, w)"
         assert mask.dtype == np.uint8
@@ -112,6 +113,7 @@ class TestSpatialTfIdf:
         bbox = (15, 80, 170, 50)
         
         mask = find_mask_by_spatial_tf_idf(image, bbox, num_clusters=4, debug=False)
+        assert isinstance(mask, np.ndarray)
         
         assert mask.shape == (50, 170)
         assert np.sum(mask == 255) > 0, "Should detect gray watermark pixels"
@@ -149,6 +151,7 @@ class TestSpatialTfIdf:
         bbox = (83, 83, 15, 15)
         
         mask = find_mask_by_spatial_tf_idf(image, bbox, num_clusters=4, debug=False)
+        assert isinstance(mask, np.ndarray)
         
         assert mask.shape == (15, 15)
         assert mask.dtype == np.uint8
@@ -215,7 +218,11 @@ class TestImageLoading:
         icc_profile = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
         source_path = tmp_path / "source.jpg"
         output_path = tmp_path / "cleaned.jpg"
-        source = Image.new("RGB", (12, 10), (128, 64, 32))
+        source = Image.new(
+            "RGB",
+            (12, 10),
+            (128, 64, 32),  # pyright: ignore[reportArgumentType] -- Pillow mode overload is incomplete
+        )
         exif = Image.Exif()
         exif[305] = "Unit Test Camera Raw Editor"
         source.save(

@@ -74,13 +74,13 @@ def _make_sift_ready_candidate(size: int = 128) -> np.ndarray:
         4,
         cv2.LINE_AA,
     )
-    cv2.circle(alpha, center, size // 3, 255, 6, cv2.LINE_AA)
-    cv2.circle(alpha, center, size // 7, 255, -1, cv2.LINE_AA)
+    cv2.circle(alpha, center, size // 3, (255,), 6, cv2.LINE_AA)
+    cv2.circle(alpha, center, size // 7, (255,), -1, cv2.LINE_AA)
     cv2.line(
         alpha,
         (size // 5, size // 2),
         (size - size // 5, size // 2),
-        255,
+        (255,),
         4,
         cv2.LINE_AA,
     )
@@ -131,6 +131,7 @@ def test_crop_zone_to_bgra_shape_and_alpha():
     blob_mask[30:60, 40:70] = 255
 
     bgra = crop_zone_to_bgra(mean_img, blob_mask)
+    assert bgra is not None
 
     # Crop should be blob bounding box + CROP_BORDER_PX on each side
     from untextre.discovery import CROP_BORDER_PX
@@ -146,6 +147,7 @@ def test_crop_zone_to_bgra_alpha_channel():
     blob_mask[58:60, 40:60] = 255  # bottom edge row of blob bbox
 
     bgra = crop_zone_to_bgra(mean_img, blob_mask)
+    assert bgra is not None
     from untextre.discovery import CROP_BORDER_PX
     b = CROP_BORDER_PX
     # A pixel in the L — alpha=255
@@ -175,6 +177,7 @@ def test_crop_zone_to_bgra_channel_order():
     blob_mask[40:60, 40:60] = 255
 
     bgra = crop_zone_to_bgra(mean_img, blob_mask)
+    assert bgra is not None
     from untextre.discovery import CROP_BORDER_PX
     b = CROP_BORDER_PX
     # Channel 0 should be 255 (blue), channel 2 should be 0 (red) — BGRA order
@@ -216,6 +219,7 @@ def test_crop_zone_to_bgra_blob_at_edge_clamps_border():
     blob_mask[0:10, 0:10] = 255  # blob flush with top-left edge
 
     bgra = crop_zone_to_bgra(mean_img, blob_mask)
+    assert bgra is not None
 
     # Border is clamped: crop starts at (0,0), not at (-CROP_BORDER_PX, -CROP_BORDER_PX)
     from untextre.discovery import CROP_BORDER_PX
@@ -240,7 +244,11 @@ def test_cap_zone_candidates_keeps_strongest_by_sift_edges_area():
         (60, 60, 9), (50, 50, 8), (40, 40, 7), (30, 30, 6),
         (20, 20, 5), (200, 200, 5), (10, 10, 4), (5, 5, 3),
     ]
-    zone_valid = [(None, area, 10, 10, edge_px, 0.5, sift_kp) for area, edge_px, sift_kp in stats]
+    candidate = np.empty((0, 0, 4), dtype=np.uint8)
+    zone_valid = [
+        (candidate, area, 10, 10, edge_px, 0.5, sift_kp)
+        for area, edge_px, sift_kp in stats
+    ]
 
     capped = _cap_zone_candidates(zone_valid, zone_label="test-zone")
 
@@ -252,7 +260,8 @@ def test_cap_zone_candidates_keeps_strongest_by_sift_edges_area():
 def test_cap_zone_candidates_is_noop_under_limit():
     from untextre.discovery import _cap_zone_candidates
 
-    zone_valid = [(None, 10, 5, 5, 10, 0.5, 6) for _ in range(3)]
+    candidate = np.empty((0, 0, 4), dtype=np.uint8)
+    zone_valid = [(candidate, 10, 5, 5, 10, 0.5, 6) for _ in range(3)]
     capped = _cap_zone_candidates(zone_valid, max_per_zone=10, zone_label="test-zone")
     assert capped == zone_valid
 
@@ -340,9 +349,12 @@ def test_build_watermark_score_high_at_watermark_boundary(tmp_path):
         paths.append(p)
 
     stats = compute_stack_statistics(paths)
+    assert stats is not None
     var_gray = stats["var_gray"].astype(np.float64)
     log_var = np.log10(var_gray + 1e-8)
-    var_norm = cv2.normalize(log_var, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+    var_norm = cv2.normalize(
+        log_var, np.empty_like(log_var, dtype=np.uint8), 0, 255, cv2.NORM_MINMAX, cv2.CV_8U
+    )
     score = build_watermark_score(stats, var_norm)
 
     assert score.shape == (100, 150), f"Score shape mismatch: {score.shape}"
@@ -379,9 +391,12 @@ def test_build_watermark_score_detects_semi_transparent_watermark(tmp_path):
         paths.append(p)
 
     stats = compute_stack_statistics(paths)
+    assert stats is not None
     var_gray = stats["var_gray"].astype(np.float64)
     log_var = np.log10(var_gray + 1e-8)
-    var_norm = cv2.normalize(log_var, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+    var_norm = cv2.normalize(
+        log_var, np.empty_like(log_var, dtype=np.uint8), 0, 255, cv2.NORM_MINMAX, cv2.CV_8U
+    )
     score = build_watermark_score(stats, var_norm)
 
     # Watermark boundary row (transition from background → overlay)
@@ -420,9 +435,12 @@ def test_build_watermark_score_unstable_region_scores_zero(tmp_path):
         paths.append(p)
 
     stats = compute_stack_statistics(paths)
+    assert stats is not None
     var_gray = stats["var_gray"].astype(np.float64)
     log_var = np.log10(var_gray + 1e-8)
-    var_norm = cv2.normalize(log_var, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+    var_norm = cv2.normalize(
+        log_var, np.empty_like(log_var, dtype=np.uint8), 0, 255, cv2.NORM_MINMAX, cv2.CV_8U
+    )
     score = build_watermark_score(stats, var_norm)
 
     # Watermark boundary must score above zero (it is stable AND has structure)
@@ -524,9 +542,12 @@ def test_build_watermark_score_boosted_by_median_gradient(tmp_path):
         paths.append(p)
 
     stats = compute_stack_statistics(paths)
+    assert stats is not None
     var_gray = stats["var_gray"].astype(np.float64)
     log_var = np.log10(var_gray + 1e-8)
-    var_norm = cv2.normalize(log_var, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
+    var_norm = cv2.normalize(
+        log_var, np.empty_like(log_var, dtype=np.uint8), 0, 255, cv2.NORM_MINMAX, cv2.CV_8U
+    )
     med_grad = compute_median_gradient(paths)
 
     score_without = build_watermark_score(stats, var_norm, median_grad=None)
@@ -756,6 +777,7 @@ def test_extract_watermark_colors_reduces_background_bleed(tmp_path):
         paths.append(p)
 
     stats = compute_stack_statistics(paths)
+    assert stats is not None
     mean_bgr = stats["mean_bgr"]
     var_gray = stats["var_gray"]
 
@@ -799,6 +821,7 @@ def test_extract_watermark_colors_opaque_watermark_unchanged(tmp_path):
         paths.append(p)
 
     stats = compute_stack_statistics(paths)
+    assert stats is not None
     mean_bgr = stats["mean_bgr"]
     var_gray = stats["var_gray"]
 
@@ -1065,6 +1088,8 @@ def test_cross_sub_sample_per_half_thresholds_differ_with_noise(tmp_path):
 
     stats_low = compute_stack_statistics(low_noise_paths)
     stats_high = compute_stack_statistics(high_noise_paths)
+    assert stats_low is not None
+    assert stats_high is not None
 
     log_var_low = np.log10(stats_low["var_gray"].astype(np.float64) + 1e-8)
     log_var_high = np.log10(stats_high["var_gray"].astype(np.float64) + 1e-8)

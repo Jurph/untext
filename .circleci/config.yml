@@ -34,7 +34,7 @@ jobs:
       - run:
           name: Run basedpyright
           command: |
-            uv run basedpyright untextre
+            uv run basedpyright untextre tests scripts
 
       - run:
           name: Run tests with coverage

@@ -36,8 +36,12 @@ def test_find_combo_matches_threshold_triplet() -> None:
         {"east_threshold": 0.3, "yolo11x_threshold": 0.1, "easyocr_threshold": 0.05, "recall": 0.5},
         {"east_threshold": 0.025, "yolo11x_threshold": 0.025, "easyocr_threshold": 0.025, "recall": 0.6},
     ]
-    assert find_combo(rows, 0.025, 0.025, 0.025)["recall"] == 0.6
-    assert find_combo(rows, 0.3, 0.1, 0.05)["recall"] == 0.5
+    low_combo = find_combo(rows, 0.025, 0.025, 0.025)
+    high_combo = find_combo(rows, 0.3, 0.1, 0.05)
+    assert low_combo is not None
+    assert high_combo is not None
+    assert low_combo["recall"] == 0.6
+    assert high_combo["recall"] == 0.5
 
 
 def test_load_exact_image_handles_unicode_path_and_missing_file(tmp_path) -> None:
@@ -56,6 +60,7 @@ def test_load_exact_image_handles_unicode_path_and_missing_file(tmp_path) -> Non
         }
     )
     assert reason is None
+    assert loaded is not None
     np.testing.assert_array_equal(loaded, expected)
 
     missing, reason = load_exact_image(

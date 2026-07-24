@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import numpy as np
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -292,7 +293,11 @@ def _draw_case(case: FixtureCase) -> dict:
     bbox = probe_draw.textbbox((0, 0), case.text, font=font)
     x, y = _text_position(case, image.size, bbox)
 
-    overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+    overlay = Image.new(
+        "RGBA",
+        image.size,
+        (0, 0, 0, 0),  # pyright: ignore[reportArgumentType] -- Pillow mode overload is incomplete
+    )
     mask = Image.new("L", image.size, 0)
     overlay_draw = ImageDraw.Draw(overlay)
     mask_draw = ImageDraw.Draw(mask)
@@ -336,7 +341,7 @@ def _draw_case(case: FixtureCase) -> dict:
             mask_bbox[2] - mask_bbox[0],
             mask_bbox[3] - mask_bbox[1],
         ],
-        "mask_coverage": sum(1 for value in mask.getdata() if value) / (image.width * image.height),
+        "mask_coverage": float(np.count_nonzero(np.asarray(mask))) / (image.width * image.height),
     }
 
 

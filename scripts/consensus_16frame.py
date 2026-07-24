@@ -31,7 +31,15 @@ def register_to_ref(src: np.ndarray, ref: np.ndarray) -> tuple[np.ndarray, float
     src_f = cv2.GaussianBlur(src_s, (9, 9), 0).astype(np.float32) / 255.0
     ref_f = cv2.GaussianBlur(ref, (9, 9), 0).astype(np.float32) / 255.0
     criteria = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 500, 1e-7)
-    cc, warp = cv2.findTransformECC(ref_f, src_f, warp, cv2.MOTION_AFFINE, criteria, None, 5)
+    cc, warp = cv2.findTransformECC(  # pyright: ignore[reportCallIssue]
+        ref_f,
+        src_f,
+        warp,
+        cv2.MOTION_AFFINE,
+        criteria,
+        None,  # pyright: ignore[reportArgumentType] -- valid OpenCV noArray sentinel
+        5,
+    )
     print(f"ECC correlation {cc:.4f}")
     return warp, scale
 
@@ -55,8 +63,12 @@ def main() -> None:
 
     sh, sw = c16_gray.shape
     warped_mask = cv2.warpAffine(
-        alpha, comp_from_padded.astype(np.float32), (sw, sh),
-        flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0,
+        alpha,
+        comp_from_padded.astype(np.float32),
+        (sw, sh),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=(0.0,),
     )
     _, warped_mask = cv2.threshold(warped_mask, 127, 255, cv2.THRESH_BINARY)
 

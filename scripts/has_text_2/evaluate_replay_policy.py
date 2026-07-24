@@ -6,6 +6,7 @@ import itertools
 import json
 import warnings
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 
@@ -225,7 +226,16 @@ def evaluate_combo(
                     "expanded": list(expanded),
                     "width_fraction": expanded[2] / width if width else 0.0,
                     "height_fraction": expanded[3] / height if height else 0.0,
-                    "growth_ratio": bbox_area(tuple(expanded)) / max(bbox_area(tuple(box["raw_union"])), 1),
+                    "growth_ratio": bbox_area(expanded)
+                    / max(
+                        bbox_area(
+                            cast(
+                                tuple[int, int, int, int],
+                                tuple(box["raw_union"]),
+                            )
+                        ),
+                        1,
+                    ),
                 }
             )
 

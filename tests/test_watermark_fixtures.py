@@ -18,7 +18,7 @@ Consensus detection pipeline:
 
 import tempfile
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, cast
 
 import cv2
 import numpy as np
@@ -27,7 +27,7 @@ from skimage.metrics import structural_similarity as ssim
 
 from untextre.sift_matcher import find_known_mask_in_image
 from untextre.pipeline import process_single_image
-from untextre.inpaint import inpaint_image
+from untextre.inpaint import InpaintMethod, inpaint_image
 from untextre.utils import load_image
 
 
@@ -35,9 +35,9 @@ def _ssim_score(original: np.ndarray, cleaned: np.ndarray) -> float:
     """SSIM(original, cleaned); supports current and older skimage."""
     assert cleaned.shape == original.shape
     try:
-        return float(ssim(original, cleaned, data_range=255, channel_axis=2))
+        return float(cast(float, ssim(original, cleaned, data_range=255, channel_axis=2)))
     except TypeError:
-        return float(ssim(original, cleaned, data_range=255, multichannel=True))
+        return float(cast(float, ssim(original, cleaned, data_range=255, multichannel=True)))
 
 
 def _tests_images_dir() -> Path:
@@ -141,16 +141,19 @@ class TestWatermarkCompositedPipeline:
         original: np.ndarray,
         watermark_rgba: np.ndarray,
         min_ssim: float = 0.92,
-        method: str = "telea",
+        method: InpaintMethod = "telea",
     ) -> float:
         """Run SIFT detection, inpaint, return SSIM(cleaned, original)."""
         result = find_known_mask_in_image(
             composited, watermark_rgba, dilation_pixels=7
         )
         assert result is not None, "Known-mask detection should find the watermark"
-        mask, bbox, _inliers = result
         cleaned = inpaint_image(
-            composited, mask, bbox=bbox, method=method, auto_retry=False
+            composited,
+            result.mask,
+            bbox=result.bbox,
+            method=method,
+            auto_retry=False,
         )
         score = _ssim_score(original, cleaned)
         assert score >= min_ssim, (

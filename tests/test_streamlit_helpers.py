@@ -50,6 +50,8 @@ class FakeUploadedFile:
 def test_make_image_state_id_includes_content_hash():
     same_name_a = make_image_state_id("photo.png", b"first")
     same_name_b = make_image_state_id("photo.png", b"second")
+    assert same_name_a is not None
+    assert same_name_b is not None
 
     assert same_name_a.startswith("photo_")
     assert same_name_b.startswith("photo_")
@@ -57,7 +59,9 @@ def test_make_image_state_id_includes_content_hash():
 
 
 def test_make_image_state_id_handles_missing_name():
-    assert make_image_state_id(None, b"bytes").startswith("image_")
+    state_id = make_image_state_id(None, b"bytes")
+    assert state_id is not None
+    assert state_id.startswith("image_")
 
 
 def test_make_image_state_id_none_without_bytes():
@@ -376,6 +380,7 @@ class TestFabricRectToBbox:
         """Rect extending past image edges gets clamped."""
         rect = self._make_rect(left=180, top=180, width=100, height=100)
         result = fabric_rect_to_bbox(rect, 1.0, 1.0, 200, 200)
+        assert result is not None
         x, y, w, h = result
         assert x >= 0 and y >= 0
         assert x + w <= 200 and y + h <= 200
@@ -384,6 +389,7 @@ class TestFabricRectToBbox:
         """Even a zero-area rect should produce w=1, h=1."""
         rect = self._make_rect(left=50, top=50, width=0, height=0)
         result = fabric_rect_to_bbox(rect, 1.0, 1.0, 200, 200)
+        assert result is not None
         _, _, w, h = result
         assert w >= 1 and h >= 1
 
@@ -427,7 +433,11 @@ class TestEncodeResultForDownload:
     @pytest.fixture
     def small_image(self):
         """A 10×10 red image — tiny, encodes fast."""
-        return Image.new("RGB", (10, 10), color=(255, 0, 0))
+        return Image.new(
+            "RGB",
+            (10, 10),
+            color=(255, 0, 0),  # pyright: ignore[reportArgumentType] -- Pillow mode overload is incomplete
+        )
 
     def test_png_default(self, small_image):
         buf_bytes, name, mime = encode_result_for_download(small_image, "photo.png")

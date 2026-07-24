@@ -8,6 +8,7 @@ These tests exercise the current public API:
     - LaMa status helpers (``is_lama_available``, ``is_lama_initialized``, etc.)
     - Comparative inpainting quality (TELEA vs LaMa on same synthetic image)
 """
+from typing import cast
 
 import cv2
 import numpy as np
@@ -16,6 +17,7 @@ from skimage.metrics import structural_similarity as ssim
 
 from untextre import inpaint as inpaint_mod
 from untextre.inpaint import (
+    InpaintMethod,
     inpaint_image,
     is_lama_available,
     is_lama_initialized,
@@ -41,7 +43,7 @@ def text_image_and_mask():
 
     font = cv2.FONT_HERSHEY_SIMPLEX
     cv2.putText(image, "TEST", (40, 120), font, 1.5, (0, 0, 0), 3)
-    cv2.putText(mask, "TEST", (40, 120), font, 1.5, 255, 3)
+    cv2.putText(mask, "TEST", (40, 120), font, 1.5, (255,), 3)
 
     return image, mask
 
@@ -81,7 +83,11 @@ class TestInpaintImage:
 
     def test_invalid_method_raises(self, white_200, small_centered_mask):
         with pytest.raises(ValueError, match="Invalid inpainting method"):
-            inpaint_image(white_200, small_centered_mask, method="magic")
+            inpaint_image(
+                white_200,
+                small_centered_mask,
+                method=cast(InpaintMethod, "magic"),
+            )
 
     def test_empty_mask_returns_copy(self, white_200, empty_mask):
         """Empty mask should return an unchanged copy of the original."""
@@ -166,7 +172,7 @@ def _stamp_letter(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
     font = cv2.FONT_HERSHEY_SIMPLEX
     # Place a thick "A" in the center-ish area
     cv2.putText(stamped, "A", (185, 310), font, 4.0, (255, 255, 255), 8)
-    cv2.putText(mask, "A", (185, 310), font, 4.0, 255, 8)
+    cv2.putText(mask, "A", (185, 310), font, 4.0, (255,), 8)
     return stamped
 
 
@@ -219,7 +225,7 @@ class TestComparativeInpainting:
         # SSIM against the clean original (grayscale comparison)
         clean_gray = cv2.cvtColor(clean, cv2.COLOR_BGR2GRAY)
         result_gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-        score = ssim(clean_gray, result_gray, data_range=255)
+        score = cast(float, ssim(clean_gray, result_gray, data_range=255))
 
         # TELEA on a small region with natural texture should do reasonably well
         assert score > 0.80, f"TELEA SSIM {score:.4f} too low (expected > 0.80)"
@@ -239,7 +245,7 @@ class TestComparativeInpainting:
 
         clean_gray = cv2.cvtColor(clean, cv2.COLOR_BGR2GRAY)
         result_gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-        score = ssim(clean_gray, result_gray, data_range=255)
+        score = cast(float, ssim(clean_gray, result_gray, data_range=255))
 
         assert score > 0.80, f"LaMa SSIM {score:.4f} too low (expected > 0.80)"
 

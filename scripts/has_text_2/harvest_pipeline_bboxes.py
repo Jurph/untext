@@ -101,7 +101,9 @@ def run_one(image_path: Path, input_dir: Path, confidence: float, color_sensitiv
         preprocessed = image
 
     stages = []
-    normal_stage = run_detection_stage("normal", preprocessed, image.shape[:2], confidence)
+    normal_stage = run_detection_stage(
+        "normal", preprocessed, (image.shape[0], image.shape[1]), confidence
+    )
     stages.append(normal_stage)
     consensus_boxes = [tuple(box["mod4_bbox"]) for box in normal_stage["boxes"]]
     failover_type = "none" if consensus_boxes else "unresolved"
@@ -109,7 +111,12 @@ def run_one(image_path: Path, input_dir: Path, confidence: float, color_sensitiv
     if not consensus_boxes:
         h, w = preprocessed.shape[:2]
         rotated_image = cv2.rotate(preprocessed, cv2.ROTATE_90_CLOCKWISE)
-        rotated_stage = run_detection_stage("rotation", rotated_image, rotated_image.shape[:2], confidence)
+        rotated_stage = run_detection_stage(
+            "rotation",
+            rotated_image,
+            (rotated_image.shape[0], rotated_image.shape[1]),
+            confidence,
+        )
         stages.append(rotated_stage)
         rotated_boxes = [tuple(box["mod4_bbox"]) for box in rotated_stage["boxes"]]
         if rotated_boxes:

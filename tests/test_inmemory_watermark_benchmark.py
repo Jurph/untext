@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from collections import Counter
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 
@@ -16,6 +15,7 @@ from untextre.synthetic_text_benchmark import (
 )
 from untextre.mask_experiments import truth_target_mask
 from untextre.inmemory_watermark_analysis import build_factor_splits
+from untextre.pipeline import PipelineResult
 
 
 def test_build_even_visit_plan_is_deterministic_and_balanced():
@@ -80,7 +80,8 @@ def test_run_in_memory_watermark_benchmark_keeps_generation_in_memory(tmp_path):
     def fake_process(image, **kwargs):
         assert image.shape == clean.shape
         assert kwargs["forced_bbox"] == synthetic.truth_bbox
-        return SimpleNamespace(
+        return PipelineResult(
+            image=clean.copy(),
             mask=truth_target_mask(truth_mask, dilation_px=2),
             timings={"total_time": 0.123},
             consensus_boxes=[synthetic.truth_bbox],
@@ -132,7 +133,8 @@ def test_run_in_memory_watermark_benchmark_appends_progress_rows(tmp_path):
         return synthetic
 
     def fake_process(image, **kwargs):
-        return SimpleNamespace(
+        return PipelineResult(
+            image=clean.copy(),
             mask=truth_target_mask(truth_mask, dilation_px=2),
             timings={"total_time": 0.123},
             consensus_boxes=[synthetic.truth_bbox],

@@ -52,7 +52,7 @@ def main() -> None:
     bin_ = (combined > 127).astype(np.uint8)
 
     # Despeckle: drop anything smaller than the dot (115 px), except keep the dot.
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(bin_, 8)
+    n, labels, stats, _ = cv2.connectedComponentsWithStats(bin_, connectivity=8)
     removed = 0
     for i in range(1, n):
         if stats[i, cv2.CC_STAT_AREA] < 60:

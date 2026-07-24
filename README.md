@@ -73,9 +73,9 @@ isn't tracked, so this must be pointed at the repo's tracked hook explicitly):
 git config core.hooksPath .githooks
 ```
 
-This runs `uv run basedpyright untextre` (the same check CI runs) before each
-commit, so a type error is caught locally instead of showing up as a CI
-surprise. Bypass for an intentional WIP commit with `git commit --no-verify`.
+This runs `uv run basedpyright untextre tests scripts`—the same check CI
+runs—before each commit, so type errors are caught locally. Bypass the hook
+for an intentional WIP commit with `git commit --no-verify`.
 
 ### Alternative: install with pip
 
